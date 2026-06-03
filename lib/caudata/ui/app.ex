@@ -240,7 +240,20 @@ defmodule Caudata.UI.App do
   @impl true
   def terminate(_reason, state) do
     if Map.get(state, :terminal, false) do
-      System.stop(0)
+      self_pid = self()
+
+      spawn(fn ->
+        ref = Process.monitor(self_pid)
+
+        receive do
+          {:DOWN, ^ref, :process, ^self_pid, _reason} ->
+            Process.sleep(50)
+            System.halt(0)
+        after
+          2000 ->
+            System.halt(0)
+        end
+      end)
     end
 
     :ok

@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
@@ -19,13 +19,13 @@ jobs:
       - name: Set up Elixir
         uses: erlef/setup-beam@v1
         with:
-          elixir-version: '1.19.5'
-          otp-version: '28.0'
+          elixir-version: "1.19.5"
+          otp-version: "28.0"
 
       - name: Set up Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
-          version: '0.13.0' # Burrito currently supports zig 0.13.0 / 0.14.0/ 0.15.0 stable.
+          version: "0.15.2" # Match Zig version required by Burrito 1.5.0
 
       - name: Install dependencies
         run: |

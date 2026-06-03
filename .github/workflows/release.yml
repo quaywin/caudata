@@ -1,0 +1,58 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Release Caudata Binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.19.5'
+          otp-version: '28.0'
+
+      - name: Set up Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: '0.13.0' # Burrito currently supports zig 0.13.0 / 0.14.0/ 0.15.0 stable.
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils p7zip-full
+          mix local.rebar --force
+          mix local.hex --force
+          mix deps.get
+
+      - name: Build releases
+        env:
+          MIX_ENV: prod
+        run: |
+          mix release
+
+      - name: List outputs
+        run: |
+          ls -la burrito_out/ || true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            burrito_out/caudata_macos_x86_64
+            burrito_out/caudata_macos_aarch64
+            burrito_out/caudata_linux_x86_64
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

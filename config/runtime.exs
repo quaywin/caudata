@@ -6,8 +6,10 @@ import Config
 # and secrets from environment variables or elsewhere. Do not define
 # any compile-time configuration here, only runtime.
 
-if System.get_env("PHX_SERVER") || config_env() == :prod do
+if System.get_env("PHX_SERVER") in ["true", "1"] || config_env() in [:dev, :test] do
   config :caudata, Caudata.Web.Endpoint, server: true
+else
+  config :caudata, Caudata.Web.Endpoint, server: false
 end
 
 # Resolve port

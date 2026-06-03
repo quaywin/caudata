@@ -71,7 +71,8 @@ defmodule Caudata.UI.App do
       active_field: nil,
       mode: :browsing,
       width: width,
-      height: height
+      height: height,
+      terminal: Keyword.get(opts, :terminal, false)
     }
 
     {:ok, state}
@@ -237,7 +238,11 @@ defmodule Caudata.UI.App do
   end
 
   @impl true
-  def terminate(_reason, _state) do
+  def terminate(_reason, state) do
+    if Map.get(state, :terminal, false) do
+      System.stop(0)
+    end
+
     :ok
   end
 

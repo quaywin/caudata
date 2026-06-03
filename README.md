@@ -1,20 +1,24 @@
 # Caudata 🌯
 
+[![Build and Release](https://github.com/quaywin/caudata/actions/workflows/release.yml/badge.svg)](https://github.com/quaywin/caudata/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 **Caudata** is a collaborative, zero-config multi-server log streamer built with **Elixir/OTP**, **Ratatui (TUI)**, and **Phoenix LiveView**. 
 
-It aggregates and streams real-time logs from multiple remote Linux servers securely over SSH config profiles, without installing any agents on remote hosts. The system utilizes supervised OTP processes, bounded per-source ring buffers, and renders a single interactive application across multiple targets (CLI/TUI, Web Browser, and Collaborative SSH terminal multiplexing).
+It aggregates and streams real-time logs from multiple remote Linux servers securely over SSH config profiles, without installing any agents on remote hosts. The system utilizes supervised OTP processes, bounded per-source ring buffers, and renders a single interactive application across multiple targets (CLI/TUI and Web Browser).
 
 ---
 
 ## 🚀 Features
 
+- **Docker Container Auto-Discovery**: Automatically runs `docker ps` upon connection to discover running Docker containers on the remote host and displays them in a tree structure.
+- **Granular Log Streaming**: Stream logs from specific Docker containers (using `docker logs --follow`), or fallback to the system log command (e.g. `tail -F /var/log/messages`) if Docker is not available.
 - **Multi-Server Aggregation**: Automatically discovers SSH connections in `~/.ssh/config` and streams logs using Erlang's native `:ssh` and `:ssh_connection` (no external `ssh` binary required).
 - **Multiple Rendering Targets**:
   - **Local Terminal UI (TUI)**: Fully interactive TUI in your command line.
-  - **Web Mirror (Phoenix LiveView)**: Mirrors the interactive terminal directly to your web browser with a bounded DOM viewport.
-  - **Collaborative SSH Server**: Connect to Caudata over SSH using terminal multiplexing.
+  - **Web Mirror (Phoenix LiveView)**: Mirrors the interactive terminal directly to your web browser with a bounded DOM viewport using `PhoenixExRatatui`.
+- **Resilient & Safe**: Bounded ring buffers (1000 lines per source by default) with drop accounting and process-isolated workers. Invalid filter regexes are safely caught without crashing.
 - **Single-Binary Packaging**: Self-extracting executables containing the entire application and the Erlang runtime (no dependency on Elixir/Erlang on the host machine).
-- **Resilient & Safe**: Bounded ring buffers (1000 lines per source) with drop accounting and process-isolated workers. Invalid filter regexes are safely caught without crashing.
 
 ---
 
@@ -59,64 +63,22 @@ Once started:
 
 ---
 
-## 🛠️ Usage & Commands
+## 🛠️ Keybindings (TUI Control)
 
-### Running the Installed Binary
+When running Caudata's Terminal UI, use the following keybindings to interact with the application:
 
-Once installed via `curl | sh`, you can run it anywhere:
+### Sidebar Navigation
+- `↑` / `↓`: Move selection between remote servers and their discovered Docker containers.
+- `Enter` (when selecting a server): Force-refresh the Docker container list on that remote host.
+- `a` / `A`: Open the connection popup to discover servers from `~/.ssh/config` or type manual settings.
 
-```bash
-# Start Caudata TUI and Web Mirror
-caudata
-```
-
-### Self-Extracting Binary Maintenance (Burrito-specific)
-
-Since Caudata is packaged as a Burrito binary, you have access to built-in maintenance commands:
-
-```bash
-# Get binary metadata (versions of OTP, Elixir, App)
-caudata maintenance meta
-
-# Print the folder where Caudata's runtime payload was extracted
-caudata maintenance directory
-
-# Uninstall/Clean up the extracted payload from your system
-caudata maintenance uninstall
-```
-
----
-
-## 🤝 Collaborative SSH TUI Server
-
-Caudata includes a built-in SSH server allowing multiple users to connect to the active Caudata terminal interface securely and collaborate.
-
-### 1. Configure the SSH Server
-
-You can manage the SSH server via the config file (`~/.caudata/config.toml`) or environment variables:
-
-| Environment Variable | Description | Default |
-| --- | --- | --- |
-| `CAUDATA_SSH_ENABLED` | Set to `true` to enable the collaborative SSH server | `false` |
-| `CAUDATA_SSH_IP` | Bind address. `127.0.0.1` by default; set to `any` or `0.0.0.0` for public | `127.0.0.1` |
-| `CAUDATA_SSH_PORT` | Port to listen on | `2222` |
-| `CAUDATA_SSH_KEYS_DIR` | Directory where SSH host keys are generated and persisted | `~/.caudata/ssh_keys` |
-
-### 2. Booting the SSH Server
-
-To start Caudata with the collaborative SSH server enabled:
-
-```bash
-CAUDATA_SSH_ENABLED=true CAUDATA_SSH_PORT=2222 caudata
-```
-
-### 3. Connecting to the Shared Session
-
-Any authorized terminal user can securely attach to the live Caudata session from their terminal:
-
-```bash
-ssh localhost -p 2222
-```
+### Logs Pane
+- `j`: Scroll logs down by 3 lines.
+- `k`: Scroll logs up by 3 lines (scrolling to the top automatically fetches older logs from the history buffer; it will restart SSH streaming with a larger tail limit up to 5000 lines if necessary).
+- `/`: Enter search mode to filter logs in real-time using regular expressions (Regex).
+- `Enter` (in search mode): Keep the active filter and return to normal mode.
+- `Esc` / `Escape`: Clear active regex filter or exit popup modals.
+- `q` / `Q`: Exit Caudata.
 
 ---
 
@@ -133,18 +95,11 @@ Here is an example `config.toml` structure:
 # Bounded queue capacity for logs (default: 1000 lines per server)
 capacity = 1000
 
-# Default command to run on remote servers to stream logs
+# Default command to run on remote servers to stream logs (used as fallback)
 log_command = "tail -F /var/log/messages"
 
 # Whether to auto-discover connection profiles from ~/.ssh/config (default: true)
 discover_ssh_config = true
-
-[ssh_server]
-# Enable the collaborative SSH UI server (default: false)
-enabled = false
-ip = "127.0.0.1"
-port = 2222
-host_keys_dir = "~/.caudata/ssh_keys"
 
 # Manually define remote server connection profiles (optional)
 [[profiles]]
@@ -165,11 +120,19 @@ identity_file = "~/.ssh/id_ed25519"
 
 ### Environment Variables
 
-In addition to the SSH configurations, you can configure the HTTP Web interface:
+You can configure the HTTP Web interface:
 
 - `PORT`: HTTP port for Phoenix Web mirror (default: `4000` in prod/dev, `4002` in test).
 - `CAUDATA_IP`: Bind address for the Web server (default: `127.0.0.1`, set to `any` or `0.0.0.0` to allow external connections).
 - `SECRET_KEY_BASE`: Phoenix Session security key (optional, automatically generated if not supplied).
+
+---
+
+## 🗺️ Roadmap / Planned Features
+
+- **Collaborative SSH UI Server**: Connect to Caudata securely over SSH to participate in a shared multiplexed terminal session.
+- **Log Archiving**: Export stream buffers to local files or remote S3-compatible object storage.
+- **Advanced Alerts**: Trigger webhooks or notifications when specific log patterns are matched.
 
 ---
 
@@ -201,3 +164,11 @@ Run the full Elixir unit test suite:
 ```bash
 mise exec -- mix test
 ```
+
+## 🤝 Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to get started and our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

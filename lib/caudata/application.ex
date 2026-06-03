@@ -1,6 +1,9 @@
 defmodule Caudata.Application do
   @moduledoc false
   use Application
+  require Logger
+
+  @env Mix.env()
 
   @impl true
   def start(_type, _args) do
@@ -8,6 +11,12 @@ defmodule Caudata.Application do
     {:ok, config} = Caudata.Config.load()
     capacity = Caudata.Config.global_capacity(config)
     _ssh_settings = Caudata.Config.ssh_server_settings(config)
+
+    # Disable console logging if starting TUI to prevent corrupting the terminal render
+    if start_tui?() do
+      Logger.configure(backends: [])
+      :logger.set_primary_config(:level, :none)
+    end
 
     children = [
       # Event bus for status and log updates
@@ -23,13 +32,54 @@ defmodule Caudata.Application do
       {Registry, keys: :unique, name: Caudata.ServerRegistry},
 
       # Server DynamicSupervisor for dynamically spawned server workers
-      Caudata.ServerSupervisor,
-
-      # Phoenix Endpoint
-      Caudata.Web.Endpoint
+      Caudata.ServerSupervisor
     ]
+
+    # Define children based on environment and TUI startup decision
+    children =
+      cond do
+        @env != :prod and start_tui?() ->
+          children ++ [Caudata.Web.Endpoint, {Caudata.UI.App, [terminal: true]}]
+
+        @env != :prod ->
+          children ++ [Caudata.Web.Endpoint]
+
+        start_tui?() ->
+          children ++ [{Caudata.UI.App, [terminal: true]}]
+
+        true ->
+          children
+      end
 
     opts = [strategy: :one_for_one, name: Caudata.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp start_tui? do
+    cond do
+      System.get_env("CAUDATA_TUI") == "false" ->
+        false
+
+      System.get_env("CAUDATA_TUI") == "true" ->
+        true
+
+      @env == :test ->
+        false
+
+      @env == :dev ->
+        false
+
+      Code.ensure_loaded?(IEx) && IEx.started?() ->
+        false
+
+      System.get_env("TERM") not in [nil, "", "dumb"] ->
+        true
+
+      match?({:ok, _}, :io.columns()) ->
+        true
+
+      true ->
+        false
+    end
   end
 end

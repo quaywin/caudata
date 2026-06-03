@@ -13,6 +13,7 @@ defmodule Caudata.LogSanitizer do
   - Truncates extremely long lines
   """
   def sanitize(nil), do: ""
+
   def sanitize(line) when is_binary(line) do
     line
     |> make_valid_utf8()
@@ -26,8 +27,10 @@ defmodule Caudata.LogSanitizer do
     case :unicode.characters_to_binary(binary, :utf8, :utf8) do
       valid when is_binary(valid) ->
         valid
+
       {:incomplete, valid, _} ->
         valid <> ""
+
       {:error, _valid, _} ->
         # If it's a completely invalid binary, handle character by character
         binary

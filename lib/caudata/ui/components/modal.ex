@@ -7,6 +7,7 @@ defmodule Caudata.UI.Components.Modal do
   alias ExRatatui.Text.Span
   alias ExRatatui.Widgets.Block
   alias ExRatatui.Widgets.Paragraph
+  alias ExRatatui.Widgets.Popup
 
   alias Caudata.UI.ViewHelper
 
@@ -63,16 +64,20 @@ defmodule Caudata.UI.Components.Modal do
             []
           end
 
-        widget = %Paragraph{
-          text: header_lines ++ option_lines ++ error_lines,
+        popup_widget = %Popup{
+          content: %Paragraph{
+            text: header_lines ++ option_lines ++ error_lines
+          },
           block: %Block{
             title: " Add SSH Connection ",
             borders: [:all],
             border_type: :rounded
-          }
+          },
+          percent_width: 70,
+          percent_height: 60
         }
 
-        [widget]
+        [popup_widget]
 
       :manual_input ->
         fields_config = [
@@ -134,16 +139,20 @@ defmodule Caudata.UI.Components.Modal do
             []
           end
 
-        widget = %Paragraph{
-          text: header_lines ++ form_lines ++ [Line.new([]), buttons_line] ++ error_lines,
+        popup_widget = %Popup{
+          content: %Paragraph{
+            text: header_lines ++ form_lines ++ [Line.new([]), buttons_line] ++ error_lines
+          },
           block: %Block{
             title: " Add Manual Connection ",
             borders: [:all],
             border_type: :rounded
-          }
+          },
+          percent_width: 80,
+          percent_height: 90
         }
 
-        [widget]
+        [popup_widget]
     end
   end
 

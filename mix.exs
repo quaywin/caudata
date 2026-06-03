@@ -4,9 +4,14 @@ defmodule Caudata.MixProject do
   def project do
     [
       app: :caudata,
-      version: "0.1.0",
+      version: "0.1.5",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
+      description:
+        "A collaborative, zero-config multi-server log streamer built with Elixir/OTP, Ratatui (TUI), and Phoenix LiveView.",
+      package: package(),
+      homepage_url: "https://github.com/quaywin/caudata",
+      source_url: "https://github.com/quaywin/caudata",
       deps: deps(),
       releases: releases()
     ]
@@ -32,6 +37,14 @@ defmodule Caudata.MixProject do
           ]
         ]
       ]
+    ]
+  end
+
+  defp package do
+    [
+      licenses: ["MIT"],
+      links: %{"GitHub" => "https://github.com/quaywin/caudata"},
+      maintainers: ["quaywin"]
     ]
   end
 

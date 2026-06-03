@@ -33,3 +33,7 @@ caudata-*.tar
 
 /.playwright-mcp
 /docs
+
+# OS specific files
+.DS_Store
+Thumbs.db

@@ -20,7 +20,7 @@ jobs:
         uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.19.5"
-          otp-version: "28.0"
+          otp-version: "27.3"
 
       - name: Set up Zig
         uses: goto-bus-stop/setup-zig@v2

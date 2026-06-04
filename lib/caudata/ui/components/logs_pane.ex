@@ -18,9 +18,35 @@ defmodule Caudata.UI.Components.LogsPane do
     selected_profile = Enum.find(state.profiles, fn p -> p.id == state.selected_profile_id end)
 
     cond do
+      selected_profile && not Map.get(selected_profile, :enabled, true) ->
+        outer = %Block{
+          title: " Logs: #{selected_profile.id} (disabled) ",
+          borders: [:all],
+          border_type: :rounded
+        }
+
+        inner_area = ViewHelper.inner_rect(logs_area)
+
+        logs_widget = %Paragraph{
+          text: [
+            Line.new([Span.new("This server is currently disabled.")]),
+            Line.new([Span.new("Enable it in Settings [s] to connect and view logs.")])
+          ],
+          alignment: :center
+        }
+
+        {outer, [{logs_widget, inner_area}]}
+
       selected_profile ->
+        inner_width = max(0, state.width - 27)
         displayed_logs = ViewHelper.get_displayed_logs(state)
-        log_lines = Enum.map(displayed_logs, fn line -> Line.new([Span.new(line)]) end)
+
+        wrapped_logs =
+          Enum.flat_map(displayed_logs, fn line ->
+            ViewHelper.wrap_text(line, inner_width)
+          end)
+
+        log_lines = Enum.map(wrapped_logs, fn line -> Line.new([Span.new(line)]) end)
 
         title =
           if state.selected_container_id do
@@ -89,8 +115,7 @@ defmodule Caudata.UI.Components.LogsPane do
               style: %Style{fg: :dark_gray}
             }
 
-            inner_width = max(0, state.width - 27)
-            wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
+            wrapped_lines_count = length(wrapped_logs)
             max_scroll = max(0, wrapped_lines_count - logs_content_rect.height)
 
             scroll_y =
@@ -101,8 +126,7 @@ defmodule Caudata.UI.Components.LogsPane do
 
             logs_widget = %Paragraph{
               text: log_lines,
-              scroll: {scroll_y, 0},
-              wrap: true
+              scroll: {scroll_y, 0}
             }
 
             [
@@ -111,8 +135,7 @@ defmodule Caudata.UI.Components.LogsPane do
               {filter_widget, logs_filter_rect}
             ]
           else
-            inner_width = max(0, state.width - 27)
-            wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
+            wrapped_lines_count = length(wrapped_logs)
             max_scroll = max(0, wrapped_lines_count - inner_area.height)
 
             scroll_y =
@@ -123,8 +146,7 @@ defmodule Caudata.UI.Components.LogsPane do
 
             logs_widget = %Paragraph{
               text: log_lines,
-              scroll: {scroll_y, 0},
-              wrap: true
+              scroll: {scroll_y, 0}
             }
 
             [{logs_widget, inner_area}]
@@ -238,16 +260,6 @@ defmodule Caudata.UI.Components.LogsPane do
 
       "k" ->
         if model.selected_profile_id do
-          source_id =
-            if model.selected_container_id do
-              "#{model.selected_profile_id}/#{model.selected_container_id}"
-            else
-              model.selected_profile_id
-            end
-
-          stats = Caudata.LogStore.get_stats(source_id)
-          current_len = length(model.logs)
-
           displayed_logs = ViewHelper.get_displayed_logs(model)
           logs_height = ViewHelper.get_logs_pane_height(model)
           inner_width = max(0, model.width - 27)
@@ -260,71 +272,14 @@ defmodule Caudata.UI.Components.LogsPane do
               val when is_integer(val) -> val
             end
 
-          if effective_scroll == 0 do
-            if current_len < stats.size do
-              # More logs exist in LogStore, fetch them directly
-              new_limit = model.logs_fetch_limit + 1000
-              new_logs = Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, new_limit)
+          new_scroll = max(0, effective_scroll - 3)
 
-              new_model = %{model | logs: new_logs}
-              new_displayed_logs = ViewHelper.get_displayed_logs(new_model)
-              new_visual_len = ViewHelper.count_wrapped_lines(new_displayed_logs, inner_width)
-              m_visual = new_visual_len - current_visual_len
+          new_scroll =
+            if model.logs_scroll_y == :bottom and new_scroll == max_scroll,
+              do: :bottom,
+              else: new_scroll
 
-              new_max_scroll = max(0, new_visual_len - logs_height)
-              new_scroll = min(new_max_scroll, max(0, m_visual - 3))
-
-              {%{
-                 model
-                 | logs: new_logs,
-                   logs_fetch_limit: new_limit,
-                   logs_scroll_y: new_scroll
-               }, []}
-            else
-              # LogStore fully loaded, query remote server/container for more history
-              if model.logs_fetch_limit < 5000 do
-                new_limit = model.logs_fetch_limit + 1000
-
-                worker_res =
-                  if model.selected_container_id do
-                    lookup_container_worker(
-                      model.selected_profile_id,
-                      model.selected_container_id
-                    )
-                  else
-                    Caudata.ServerSupervisor.lookup_worker(model.selected_profile_id)
-                  end
-
-                case worker_res do
-                  {:ok, pid} ->
-                    Caudata.LogStore.set_capacity(Caudata.LogStore, new_limit)
-                    GenServer.cast(pid, {:restart_with_tail_limit, new_limit})
-
-                    {%{
-                       model
-                       | logs_fetch_limit: new_limit,
-                         loading_history: true,
-                         loading_history_ticks: 0,
-                         logs_len_before_history_load: current_len
-                     }, []}
-
-                  _ ->
-                    {model, []}
-                end
-              else
-                {model, []}
-              end
-            end
-          else
-            new_scroll =
-              case model.logs_scroll_y do
-                :bottom -> max_scroll - 3
-                val when is_integer(val) -> val - 3
-              end
-
-            new_scroll = max(0, new_scroll)
-            {%{model | logs_scroll_y: new_scroll}, []}
-          end
+          {%{model | logs_scroll_y: new_scroll}, []}
         else
           {model, []}
         end
@@ -334,13 +289,6 @@ defmodule Caudata.UI.Components.LogsPane do
 
       _ ->
         {model, []}
-    end
-  end
-
-  defp lookup_container_worker(profile_id, container_id) do
-    case Registry.lookup(Caudata.ServerRegistry, {:container, profile_id, container_id}) do
-      [{pid, _value}] -> {:ok, pid}
-      _ -> {:error, :not_found}
     end
   end
 end

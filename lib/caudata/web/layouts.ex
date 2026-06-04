@@ -275,7 +275,17 @@ defmodule Caudata.Web.Layouts do
               if (!rowCells) return;
               const cell = rowCells[col];
               if (!cell) return;
-              if (skip) return;
+              if (skip) {
+                if (cell.textContent !== "") {
+                  cell.textContent = "";
+                  cell._sym = "";
+                }
+                const built = buildStyle(fg, bg, modifiers);
+                if (cell.style.cssText !== built.css) {
+                  cell.style.cssText = built.css;
+                }
+                return;
+              }
 
               const modsKey = modifiers.length ? modifiers.join(",") : "";
               const built = buildStyle(fg, bg, modifiers);

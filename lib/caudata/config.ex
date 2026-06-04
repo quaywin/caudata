@@ -1,11 +1,11 @@
 defmodule Caudata.Config do
   @moduledoc """
-  Manages loading, parsing, and persisting settings from ~/.caudata/config.toml.
+  Manages loading, parsing, and persisting settings using a binary ETS file at ~/.caudata/config.db.
   """
   require Logger
 
   @default_dir "~/.caudata"
-  @default_file "config.toml"
+  @default_file "config.db"
 
   @doc """
   Returns the path to the configuration file.
@@ -17,57 +17,59 @@ defmodule Caudata.Config do
   end
 
   @doc """
+  Returns the path to the ETS file.
+  """
+  def ets_path do
+    config_path()
+  end
+
+  @doc """
   Loads the configuration. If the file doesn't exist, it creates a default one.
   """
   def load do
     path = config_path()
-    ensure_config_exists(path)
+    char_path = String.to_charlist(path)
 
-    case Toml.decode_file(path) do
-      {:ok, config} ->
-        {:ok, config}
+    case :ets.file2tab(char_path) do
+      {:ok, tab} ->
+        config_map = ets_to_map(tab)
+        :ets.delete(tab)
+        {:ok, config_map}
 
-      {:error, reason} ->
-        Logger.error(
-          "Failed to parse TOML config at #{path}: #{inspect(reason)}. Using default settings."
-        )
-
-        {:ok, default_config()}
+      {:error, _reason} ->
+        default = default_config_map()
+        ensure_config_exists(path, default)
+        {:ok, default}
     end
   end
 
   @doc """
-  Appends a manual connection profile to the config.toml file for persistence.
+  Appends a manual connection profile to the ETS config file for persistence.
   """
   def append_profile(profile_attrs) do
     path = config_path()
-    ensure_config_exists(path)
+    char_path = String.to_charlist(path)
 
-    id = profile_attrs[:id] || profile_attrs["id"]
-    host_name = profile_attrs[:host_name] || profile_attrs["host_name"] || id
-    user = profile_attrs[:user] || profile_attrs["user"]
-    port = profile_attrs[:port] || profile_attrs["port"] || 22
-    identity_file = profile_attrs[:identity_file] || profile_attrs["identity_file"]
-    log_command = profile_attrs[:log_command] || profile_attrs["log_command"]
+    tab =
+      case :ets.file2tab(char_path) do
+        {:ok, t} -> t
+        {:error, _} -> :ets.new(:caudata_config_file, [:set, :public])
+      end
 
-    lines = [
-      "",
-      "[[profiles]]",
-      "id = #{inspect(id)}",
-      "host_name = #{inspect(host_name)}",
-      "port = #{port}"
-    ]
+    profile =
+      case profile_attrs do
+        %Caudata.Profile{} -> profile_attrs
+        _ -> Caudata.Profile.new(profile_attrs)
+      end
 
-    lines = if user, do: lines ++ ["user = #{inspect(user)}"], else: lines
+    # Ensure enabled defaults to true
+    profile = Map.put(profile, :enabled, Map.get(profile, :enabled, true))
 
-    lines =
-      if identity_file, do: lines ++ ["identity_file = #{inspect(identity_file)}"], else: lines
+    :ets.insert(tab, {{:profile, profile.id}, profile})
+    res = :ets.tab2file(tab, char_path)
+    :ets.delete(tab)
 
-    lines = if log_command, do: lines ++ ["log_command = #{inspect(log_command)}"], else: lines
-
-    entry = Enum.join(lines, "\n") <> "\n"
-
-    case File.write(path, entry, [:append]) do
+    case res do
       :ok -> :ok
       {:error, reason} -> {:error, reason}
     end
@@ -100,66 +102,117 @@ defmodule Caudata.Config do
   end
 
   def custom_profiles(config) do
-    case Map.get(config, "profiles") do
-      profiles when is_list(profiles) ->
-        Enum.map(profiles, fn p ->
-          id = Map.get(p, "id")
-          host_name = Map.get(p, "host_name") || id
+    Map.get(config, "profiles") || []
+  end
 
-          %{
-            id: id,
-            host_pattern: host_name,
-            host_name: host_name,
-            user: Map.get(p, "user"),
-            port: Map.get(p, "port") || 22,
-            identity_file: maybe_expand_path(Map.get(p, "identity_file")),
-            log_command: Map.get(p, "log_command") || global_log_command(config)
-          }
-        end)
+  @doc """
+  Saves the list of profiles back to the configuration file, updating existing ones.
+  """
+  def save_profiles(profiles) do
+    path = config_path()
+    char_path = String.to_charlist(path)
 
-      _ ->
-        []
+    tab =
+      case :ets.file2tab(char_path) do
+        {:ok, t} -> t
+        {:error, _} -> :ets.new(:caudata_config_file, [:set, :public])
+      end
+
+    # Delete existing profile records
+    existing = :ets.match_object(tab, {{:profile, :_}, :_})
+    Enum.each(existing, fn {key, _} -> :ets.delete(tab, key) end)
+
+    # Insert new ones
+    Enum.each(profiles, fn p ->
+      profile_struct =
+        case p do
+          %Caudata.Profile{} -> p
+          _ -> Caudata.Profile.new(p)
+        end
+
+      # Ensure enabled defaults to true
+      profile_struct = Map.put(profile_struct, :enabled, Map.get(profile_struct, :enabled, true))
+      :ets.insert(tab, {{:profile, profile_struct.id}, profile_struct})
+    end)
+
+    res = :ets.tab2file(tab, char_path)
+    :ets.delete(tab)
+
+    case res do
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  defp maybe_expand_path(nil), do: nil
-  defp maybe_expand_path(path), do: Path.expand(path)
+  # Helper functions to serialize/deserialize between ETS and Map
 
-  # Private helpers
+  defp ets_to_map(tab) do
+    global_capacity =
+      case :ets.lookup(tab, {:global, :capacity}) do
+        [{_, val}] -> val
+        _ -> 1000
+      end
 
-  defp ensure_config_exists(path) do
-    unless File.exists?(path) do
-      dir = Path.dirname(path)
-      File.mkdir_p!(dir)
+    global_log_command =
+      case :ets.lookup(tab, {:global, :log_command}) do
+        [{_, val}] -> val
+        _ -> "tail -F /var/log/messages"
+      end
 
-      default_toml = """
-      # Caudata Configuration File
-      # Located at ~/.caudata/config.toml
+    discover_ssh_config =
+      case :ets.lookup(tab, {:global, :discover_ssh_config}) do
+        [{_, val}] -> val
+        _ -> true
+      end
 
-      [global]
-      # Bounded queue capacity for logs (default: 1000)
-      capacity = 1000
+    ssh_enabled =
+      case :ets.lookup(tab, {:ssh_server, :enabled}) do
+        [{_, val}] -> val
+        _ -> false
+      end
 
-      # Default command to run on remote servers to stream logs
-      log_command = "tail -F /var/log/messages"
+    ssh_ip =
+      case :ets.lookup(tab, {:ssh_server, :ip}) do
+        [{_, val}] -> val
+        _ -> "127.0.0.1"
+      end
 
-      # Whether to auto-discover connection profiles from ~/.ssh/config (default: true)
-      discover_ssh_config = true
+    ssh_port =
+      case :ets.lookup(tab, {:ssh_server, :port}) do
+        [{_, val}] -> val
+        _ -> 2222
+      end
 
-      [ssh_server]
-      # Enable the collaborative SSH UI server (default: false)
-      enabled = false
-      ip = "127.0.0.1"
-      port = 2222
-      host_keys_dir = "~/.caudata/ssh_keys"
-      """
+    ssh_keys_dir =
+      case :ets.lookup(tab, {:ssh_server, :host_keys_dir}) do
+        [{_, val}] -> val
+        _ -> "~/.caudata/ssh_keys"
+      end
 
-      File.write!(path, default_toml)
-      Logger.info("Created default configuration file at #{path}")
-    end
+    profiles =
+      :ets.match_object(tab, {{:profile, :_}, :_})
+      |> Enum.map(fn {_, profile} ->
+        # Ensure enabled defaults to true
+        Map.put(profile, :enabled, Map.get(profile, :enabled, true))
+      end)
+
+    %{
+      "global" => %{
+        "capacity" => global_capacity,
+        "log_command" => global_log_command,
+        "discover_ssh_config" => discover_ssh_config
+      },
+      "ssh_server" => %{
+        "enabled" => ssh_enabled,
+        "ip" => ssh_ip,
+        "port" => ssh_port,
+        "host_keys_dir" => ssh_keys_dir
+      },
+      "profiles" => profiles
+    }
   end
 
-  defp default_config do
+  defp default_config_map do
     %{
       "global" => %{
         "capacity" => 1000,
@@ -174,5 +227,51 @@ defmodule Caudata.Config do
       },
       "profiles" => []
     }
+  end
+
+  defp map_to_ets(tab, map) do
+    :ets.insert(tab, {{:global, :capacity}, get_in(map, ["global", "capacity"])})
+    :ets.insert(tab, {{:global, :log_command}, get_in(map, ["global", "log_command"])})
+
+    :ets.insert(
+      tab,
+      {{:global, :discover_ssh_config}, get_in(map, ["global", "discover_ssh_config"])}
+    )
+
+    :ets.insert(tab, {{:ssh_server, :enabled}, get_in(map, ["ssh_server", "enabled"])})
+    :ets.insert(tab, {{:ssh_server, :ip}, get_in(map, ["ssh_server", "ip"])})
+    :ets.insert(tab, {{:ssh_server, :port}, get_in(map, ["ssh_server", "port"])})
+
+    :ets.insert(
+      tab,
+      {{:ssh_server, :host_keys_dir}, get_in(map, ["ssh_server", "host_keys_dir"])}
+    )
+
+    profiles = Map.get(map, "profiles") || []
+
+    Enum.each(profiles, fn p ->
+      profile_struct =
+        case p do
+          %Caudata.Profile{} -> p
+          _ -> Caudata.Profile.new(p)
+        end
+
+      profile_struct = Map.put(profile_struct, :enabled, Map.get(profile_struct, :enabled, true))
+      :ets.insert(tab, {{:profile, profile_struct.id}, profile_struct})
+    end)
+  end
+
+  defp ensure_config_exists(path, default_map) do
+    unless File.exists?(path) do
+      dir = Path.dirname(path)
+      File.mkdir_p!(dir)
+
+      # Write default map as an ETS file
+      tab = :ets.new(:caudata_config_file, [:set, :public])
+      map_to_ets(tab, default_map)
+      :ok = :ets.tab2file(tab, String.to_charlist(path))
+      :ets.delete(tab)
+      Logger.info("Created default configuration file at #{path}")
+    end
   end
 end

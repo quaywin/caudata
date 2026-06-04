@@ -1,6 +1,7 @@
-defmodule Caudata.UI.Components.Modal do
+defmodule Caudata.UI.Components.AddServerModal do
   @moduledoc """
-  Renders modal overlays for managing connections and handles their keyboard event flows.
+  Renders modal overlays for adding and configuring new server connections,
+  and handles their keyboard event flows.
   """
   alias ExRatatui.Style
   alias ExRatatui.Text.Line

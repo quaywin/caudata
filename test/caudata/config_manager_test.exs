@@ -1,5 +1,5 @@
 defmodule Caudata.ConfigManagerTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
   alias Caudata.ConfigManager
 
   test "parse_ssh_config parses supported directives correctly" do
@@ -56,8 +56,21 @@ defmodule Caudata.ConfigManagerTest do
     temp_path = "test/caudata_temp_boot_config"
     File.write!(temp_path, content)
 
+    # Use a unique ETS config path for this test
+    old_path = System.get_env("CAUDATA_CONFIG_PATH")
+    temp_config = "test/fixtures/config_manager_boot_test.db"
+    System.put_env("CAUDATA_CONFIG_PATH", temp_config)
+
     on_exit(fn ->
       File.rm(temp_path)
+
+      if old_path do
+        System.put_env("CAUDATA_CONFIG_PATH", old_path)
+      else
+        System.delete_env("CAUDATA_CONFIG_PATH")
+      end
+
+      File.rm_rf(temp_config)
     end)
 
     # Start a uniquely named ConfigManager for testing to avoid name conflict with global one
@@ -133,5 +146,99 @@ defmodule Caudata.ConfigManagerTest do
     assert "main-server" in ids
     assert "included-server" in ids
     refute "*" in ids
+  end
+
+  test "ConfigManager updates profile settings and persists them" do
+    old_path = System.get_env("CAUDATA_CONFIG_PATH")
+    temp_config = "test/fixtures/config_manager_update_test.db"
+    System.put_env("CAUDATA_CONFIG_PATH", temp_config)
+
+    on_exit(fn ->
+      if old_path do
+        System.put_env("CAUDATA_CONFIG_PATH", old_path)
+      else
+        System.delete_env("CAUDATA_CONFIG_PATH")
+      end
+
+      File.rm_rf(temp_config)
+    end)
+
+    # Start a uniquely named ConfigManager
+    {:ok, _pid} =
+      start_supervised(
+        {ConfigManager, name: UpdateTestConfigManager, ssh_config_path: "nonexistent"}
+      )
+
+    # Add a profile first
+    assert {:ok, _added} =
+             ConfigManager.add_manual_profile(UpdateTestConfigManager, %{
+               host_pattern: "update-server",
+               host_name: "10.0.0.10",
+               user: "root",
+               port: 22
+             })
+
+    # Update profile settings
+    assert {:ok, updated} =
+             ConfigManager.update_profile(UpdateTestConfigManager, "update-server", %{
+               disabled_containers: ["container1"],
+               custom_logs: ["/var/log/syslog"]
+             })
+
+    assert updated.disabled_containers == ["container1"]
+    assert updated.custom_logs == ["/var/log/syslog"]
+
+    # Verify lists reflect the update
+    profiles = ConfigManager.list_profiles(UpdateTestConfigManager)
+    updated_profile = Enum.find(profiles, &(&1.id == "update-server"))
+    assert updated_profile.disabled_containers == ["container1"]
+    assert updated_profile.custom_logs == ["/var/log/syslog"]
+
+    # Load from file to verify persistence
+    assert {:ok, loaded_config} = Caudata.Config.load()
+    assert [p] = Caudata.Config.custom_profiles(loaded_config)
+    assert p.id == "update-server"
+    assert p.disabled_containers == ["container1"]
+    assert p.custom_logs == ["/var/log/syslog"]
+  end
+
+  test "ConfigManager deletes a profile and terminates worker" do
+    old_path = System.get_env("CAUDATA_CONFIG_PATH")
+    temp_config = "test/fixtures/config_manager_delete_test.db"
+    System.put_env("CAUDATA_CONFIG_PATH", temp_config)
+
+    on_exit(fn ->
+      if old_path do
+        System.put_env("CAUDATA_CONFIG_PATH", old_path)
+      else
+        System.delete_env("CAUDATA_CONFIG_PATH")
+      end
+
+      File.rm_rf(temp_config)
+    end)
+
+    # Start a uniquely named ConfigManager
+    {:ok, _pid} =
+      start_supervised(
+        {ConfigManager, name: DeleteTestConfigManager, ssh_config_path: "nonexistent"}
+      )
+
+    # Add profile
+    assert {:ok, _added} =
+             ConfigManager.add_manual_profile(DeleteTestConfigManager, %{
+               host_pattern: "delete-server",
+               host_name: "10.0.0.20",
+               port: 22
+             })
+
+    assert length(ConfigManager.list_profiles(DeleteTestConfigManager)) == 1
+
+    # Delete profile
+    assert :ok = ConfigManager.delete_profile(DeleteTestConfigManager, "delete-server")
+    assert length(ConfigManager.list_profiles(DeleteTestConfigManager)) == 0
+
+    # Load from file to verify persistence (should be empty)
+    assert {:ok, loaded_config} = Caudata.Config.load()
+    assert Caudata.Config.custom_profiles(loaded_config) == []
   end
 end

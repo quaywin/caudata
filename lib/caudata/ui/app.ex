@@ -72,7 +72,14 @@ defmodule Caudata.UI.App do
       mode: :browsing,
       width: width,
       height: height,
-      terminal: Keyword.get(opts, :terminal, false)
+      terminal: Keyword.get(opts, :terminal, false),
+      settings_selected_profile_idx: 0,
+      settings_focus: :servers,
+      settings_container_idx: 0,
+      settings_custom_log_idx: 0,
+      settings_input_active: false,
+      settings_input_value: "",
+      settings_status_msg: nil
     }
 
     {:ok, state}
@@ -93,6 +100,9 @@ defmodule Caudata.UI.App do
           case code do
             "up" -> :up
             "down" -> :down
+            "left" -> :left
+            "right" -> :right
+            "tab" -> :tab
             "enter" -> :enter
             "esc" -> :escape
             "escape" -> :escape
@@ -139,12 +149,71 @@ defmodule Caudata.UI.App do
             end
           end)
 
+        # If the currently selected container is disabled, reset selection
+        selected_container_id =
+          case Enum.find(profiles, &(&1.id == state.selected_profile_id)) do
+            nil ->
+              state.selected_container_id
+
+            profile ->
+              if state.selected_container_id &&
+                   (state.selected_container_id in profile.disabled_containers or
+                      (case Enum.find(
+                              Map.get(containers, profile.id, []),
+                              &(&1.id == state.selected_container_id)
+                            ) do
+                         nil -> false
+                         c -> c.name in profile.disabled_containers
+                       end)) do
+                nil
+              else
+                state.selected_container_id
+              end
+          end
+
+        # Get the enabled containers for the selected profile
+        enabled_conts_for_profile =
+          case Enum.find(profiles, &(&1.id == state.selected_profile_id)) do
+            nil ->
+              []
+
+            profile ->
+              Map.get(containers, profile.id, [])
+              |> Enum.filter(fn c ->
+                c.id not in profile.disabled_containers and
+                  c.name not in profile.disabled_containers
+              end)
+          end
+
+        # Auto-select first container of selected profile if none selected
+        {selected_container_id, logs_scroll_y} =
+          if is_nil(selected_container_id) and state.selected_profile_id do
+            case enabled_conts_for_profile do
+              [first_container | _] ->
+                case Caudata.ServerSupervisor.lookup_worker(state.selected_profile_id) do
+                  {:ok, pid} ->
+                    _ = GenServer.call(pid, {:stream_container_logs, first_container.id})
+                    :ok
+
+                  _ ->
+                    :ok
+                end
+
+                {first_container.id, :bottom}
+
+              _ ->
+                {selected_container_id, state.logs_scroll_y}
+            end
+          else
+            {selected_container_id, state.logs_scroll_y}
+          end
+
         # Get statistics for all profiles/containers
         {sizes, drops} =
           Enum.reduce(profiles, {%{}, %{}}, fn p, {sz_acc, dr_acc} ->
             source_id =
-              if state.selected_profile_id == p.id and state.selected_container_id do
-                "#{p.id}/#{state.selected_container_id}"
+              if state.selected_profile_id == p.id and selected_container_id do
+                "#{p.id}/#{selected_container_id}"
               else
                 p.id
               end
@@ -157,8 +226,8 @@ defmodule Caudata.UI.App do
         new_logs =
           if state.selected_profile_id && not state.freeze do
             source_id =
-              if state.selected_container_id do
-                "#{state.selected_profile_id}/#{state.selected_container_id}"
+              if selected_container_id do
+                "#{state.selected_profile_id}/#{selected_container_id}"
               else
                 state.selected_profile_id
               end
@@ -176,7 +245,14 @@ defmodule Caudata.UI.App do
             cond do
               length(new_logs) > state.logs_len_before_history_load ->
                 m = length(new_logs) - state.logs_len_before_history_load
-                displayed_logs = ViewHelper.get_displayed_logs(%{state | logs: new_logs})
+
+                displayed_logs =
+                  ViewHelper.get_displayed_logs(%{
+                    state
+                    | logs: new_logs,
+                      selected_container_id: selected_container_id
+                  })
+
                 logs_height = ViewHelper.get_logs_pane_height(state)
                 new_max_scroll = max(0, length(displayed_logs) - logs_height)
                 new_scroll = min(new_max_scroll, max(0, m - 1))
@@ -184,14 +260,29 @@ defmodule Caudata.UI.App do
 
               loading_ticks >= 8 ->
                 # Timeout: fallback to currently displayed logs
-                {state.logs, false, state.logs_scroll_y}
+                {state.logs, false, logs_scroll_y}
 
               true ->
                 # Still loading: keep showing old logs to prevent flashing
-                {state.logs, true, state.logs_scroll_y}
+                {state.logs, true, logs_scroll_y}
             end
           else
-            {new_logs, false, state.logs_scroll_y}
+            drop_diff =
+              if state.selected_profile_id do
+                old_drop = Map.get(state.drop_counts, state.selected_profile_id, 0)
+                new_drop = Map.get(drops, state.selected_profile_id, 0)
+                max(0, new_drop - old_drop)
+              else
+                0
+              end
+
+            adjusted_scroll =
+              case logs_scroll_y do
+                :bottom -> :bottom
+                val when is_integer(val) -> max(0, val - drop_diff)
+              end
+
+            {new_logs, false, adjusted_scroll}
           end
 
         new_state = %{
@@ -200,6 +291,7 @@ defmodule Caudata.UI.App do
             statuses: statuses,
             containers: containers,
             logs: logs,
+            selected_container_id: selected_container_id,
             logs_scroll_y: scroll_y,
             loading_history: loading_history,
             loading_history_ticks: loading_ticks,
@@ -212,6 +304,71 @@ defmodule Caudata.UI.App do
       {:select_profile, profile_id} ->
         {new_state, []} = KeyHandler.select_item({:server, profile_id}, state)
         {:noreply, new_state}
+
+      {:validation_result, server_id, path, result} ->
+        profile = Enum.find(state.profiles, &(&1.id == server_id))
+
+        if profile do
+          case result do
+            :ok ->
+              custom_logs = profile.custom_logs || []
+              new_custom_logs = custom_logs ++ [path]
+
+              case Caudata.ConfigManager.update_profile(server_id, %{custom_logs: new_custom_logs}) do
+                {:ok, updated_profile} ->
+                  new_profiles =
+                    Enum.map(state.profiles, fn p ->
+                      if p.id == server_id, do: updated_profile, else: p
+                    end)
+
+                  {:noreply,
+                   %{
+                     state
+                     | profiles: new_profiles,
+                       settings_status_msg: "Added path: #{path}"
+                   }}
+
+                {:error, reason} ->
+                  {:noreply,
+                   %{state | settings_status_msg: "Error: Failed to save: #{inspect(reason)}"}}
+              end
+
+            {:error, reason} when reason in [:not_connected, :closed, :timeout] ->
+              custom_logs = profile.custom_logs || []
+              new_custom_logs = custom_logs ++ [path]
+
+              case Caudata.ConfigManager.update_profile(server_id, %{custom_logs: new_custom_logs}) do
+                {:ok, updated_profile} ->
+                  new_profiles =
+                    Enum.map(state.profiles, fn p ->
+                      if p.id == server_id, do: updated_profile, else: p
+                    end)
+
+                  {:noreply,
+                   %{
+                     state
+                     | profiles: new_profiles,
+                       settings_status_msg:
+                         "Added path (unvalidated: server is not connected or timed out)"
+                   }}
+
+                {:error, save_reason} ->
+                  {:noreply,
+                   %{
+                     state
+                     | settings_status_msg: "Error: Failed to save: #{inspect(save_reason)}"
+                   }}
+              end
+
+            {:error, :not_readable_or_not_found} ->
+              {:noreply, %{state | settings_status_msg: "Error: File not found or not readable"}}
+
+            {:error, reason} ->
+              {:noreply, %{state | settings_status_msg: "Error: #{inspect(reason)}"}}
+          end
+        else
+          {:noreply, state}
+        end
 
       {:select_container, server_id, container_id} ->
         {new_state, []} =

@@ -12,8 +12,11 @@ It aggregates and streams real-time logs from multiple remote Linux servers secu
 ## 🚀 Features
 
 - **Docker Container Auto-Discovery**: Automatically runs `docker ps` upon connection to discover running Docker containers on the remote host and displays them in a tree structure.
-- **Granular Log Streaming**: Stream logs from specific Docker containers (using `docker logs --follow`), or fallback to the system log command (e.g. `tail -F /var/log/messages`) if Docker is not available.
+- **Granular Log Streaming**: Stream logs from specific Docker containers (using `docker logs --follow`) or custom file paths (marked with `📄` next to the whale `🐳` icon) using native tail commands.
+- **Custom File Log Streaming**: Register arbitrary remote log files (e.g., `/var/log/nginx/error.log`) with built-in remote readability checks `[ -r path ]` executed via SSH.
 - **Multi-Server Aggregation**: Automatically discovers SSH connections in `~/.ssh/config` and streams logs using Erlang's native `:ssh` and `:ssh_connection` (no external `ssh` binary required).
+- **Tabbed Settings Modal**: Manage server states (enable, disable, or delete profiles), selectively toggle container logging visibility, and add/remove custom log paths.
+- **Reactive UI & Configuration Store**: Configuration is backed by a zero-latency concurrent ETS table storage. Changes to connection profiles, enabled/disabled servers, or filters instantly hot-swap their corresponding supervisor worker processes.
 - **Multiple Rendering Targets**:
   - **Local Terminal UI (TUI)**: Fully interactive TUI in your command line.
   - **Web Mirror (Phoenix LiveView)**: Mirrors the interactive terminal directly to your web browser with a bounded DOM viewport using `PhoenixExRatatui`.
@@ -67,56 +70,47 @@ Once started:
 
 When running Caudata's Terminal UI, use the following keybindings to interact with the application:
 
-### Sidebar Navigation
-- `↑` / `↓`: Move selection between remote servers and their discovered Docker containers.
-- `Enter` (when selecting a server): Force-refresh the Docker container list on that remote host.
-- `a` / `A`: Open the connection popup to discover servers from `~/.ssh/config` or type manual settings.
-
-### Logs Pane
-- `j`: Scroll logs down by 3 lines.
-- `k`: Scroll logs up by 3 lines (scrolling to the top automatically fetches older logs from the history buffer; it will restart SSH streaming with a larger tail limit up to 5000 lines if necessary).
+### Normal Mode (Sidebar & Logs Navigation)
+- `↑` / `↓` or `k` / `j`: Move selection in the sidebar directly between active containers (`🐳`) and custom logs (`📄`) (automatically skips server header titles).
+- `Enter` (in sidebar): Connect to the selected target and start streaming its logs.
+- `a` / `A` / `+`: Open the **Add SSH Connection** modal.
+- `s` / `S`: Open the **Global Settings** modal.
 - `/`: Enter search mode to filter logs in real-time using regular expressions (Regex).
-- `Enter` (in search mode): Keep the active filter and return to normal mode.
-- `Esc` / `Escape`: Clear active regex filter or exit popup modals.
+- `Enter` (in search mode): Apply the active filter and return to navigation mode.
+- `Esc` / `Escape`: Clear active search filter or close open modals.
 - `q` / `Q`: Exit Caudata.
+
+### Add SSH Connection Modal
+- **SSH Config List Selection**:
+  - `↑` / `↓` or `k` / `j`: Navigate through discovered SSH profiles.
+  - `Enter`: Select profile or choose manual configuration.
+- **Manual Input Form**:
+  - `↑` / `↓`: Cycle focus through form fields (Connection Name, Host, Port, User, SSH Key, custom Log Command) and action buttons (Save, Cancel).
+  - `Enter`: Confirm action / submit form.
+  - `Esc`: Return to profile list selection.
+
+### Settings Modal
+- **Tab Switching**: Press `Tab` or `←` / `→` or `h` / `l` to cycle through tabs:
+  - **Servers**: Configure active profiles, view connection status (`● connected`, `◌ connecting`, `○ disconnected`, or `⊘ disabled`), or toggle/delete servers.
+  - **Docker Containers**: Toggle visibility of individual discovered Docker containers.
+  - **Custom Logs**: Register, toggle, or delete arbitrary log paths.
+- **Navigation & Selection**:
+  - `↑` / `↓` or `k` / `j`: Scroll through the list items in the active tab.
+  - `Space`: Toggle the selected item (Enable/disable server, show/hide container, enable/disable custom log).
+  - `a` / `A` (in *Custom Logs* tab): Open a path input box to add a custom log file (automatically runs an SSH remote readability test `[ -r path ]` before saving).
+  - `d` / `D` or `Backspace` (in *Servers* or *Custom Logs* tabs): Delete the selected server connection or custom log path.
+  - `Esc`: Close settings modal.
 
 ---
 
 ## ⚙️ Configuration
 
-Caudata looks for a configuration file at `~/.caudata/config.toml`. If it doesn't exist, a default config will be created automatically on the first boot.
+Caudata automatically manages your configuration inside `~/.caudata/config.db`. This binary database uses Erlang Term Storage (ETS) to ensure zero-latency reads while executing asynchronously saved updates.
 
-### Config File Format
+Instead of manually editing configuration files, you can manage your connections and options directly inside the application using the **Add SSH Connection** (`a`) and **Settings** (`s`) modals.
 
-Here is an example `config.toml` structure:
-
-```toml
-[global]
-# Bounded queue capacity for logs (default: 1000 lines per server)
-capacity = 1000
-
-# Default command to run on remote servers to stream logs (used as fallback)
-log_command = "tail -F /var/log/messages"
-
-# Whether to auto-discover connection profiles from ~/.ssh/config (default: true)
-discover_ssh_config = true
-
-# Manually define remote server connection profiles (optional)
-[[profiles]]
-id = "web-prod-1"
-host_name = "192.168.1.50"
-port = 22
-user = "deploy"
-identity_file = "~/.ssh/id_rsa"
-log_command = "tail -F /var/log/nginx/access.log"
-
-[[profiles]]
-id = "database-replica"
-host_name = "db-replica.internal"
-port = 2222
-user = "postgres"
-identity_file = "~/.ssh/id_ed25519"
-```
+### Custom Log Tail Limit
+The log view is backed by bounded ring buffers. By default, it stores the last `1000` lines per stream source to prevent high memory consumption.
 
 ### Environment Variables
 

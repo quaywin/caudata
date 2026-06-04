@@ -83,17 +83,21 @@ defmodule Caudata.ContainerWorker do
 
   @impl true
   def handle_call({:start_streaming, conn_ref}, _from, state) do
-    state = close_log_channel(state)
-
-    if is_nil(conn_ref) do
-      {:reply, {:error, :not_connected}, state}
+    if state.channel_id && state.conn_ref == conn_ref do
+      {:reply, :ok, state}
     else
-      case start_log_streaming(state, conn_ref) do
-        {:ok, new_state} ->
-          {:reply, :ok, new_state}
+      state = close_log_channel(state)
 
-        {:error, reason} ->
-          {:reply, {:error, reason}, state}
+      if is_nil(conn_ref) do
+        {:reply, {:error, :not_connected}, state}
+      else
+        case start_log_streaming(state, conn_ref) do
+          {:ok, new_state} ->
+            {:reply, :ok, new_state}
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
       end
     end
   end
@@ -168,7 +172,7 @@ defmodule Caudata.ContainerWorker do
   @impl true
   def handle_info({:ssh_cm, conn_ref, {:eof, channel_id}}, state) do
     if conn_ref == state.conn_ref && channel_id == state.channel_id do
-      Logger.warning("Received EOF from log stream for container #{state.container_id}")
+      Logger.debug("Received EOF from log stream for container #{state.container_id}")
       new_state = handle_disconnect(state, "EOF received")
       {:noreply, new_state}
     else
@@ -179,7 +183,7 @@ defmodule Caudata.ContainerWorker do
   @impl true
   def handle_info({:ssh_cm, conn_ref, {:exit_status, channel_id, status}}, state) do
     if conn_ref == state.conn_ref && channel_id == state.channel_id do
-      Logger.warning("Remote command for #{state.container_id} exited with status #{status}")
+      Logger.debug("Remote command for #{state.container_id} exited with status #{status}")
       new_state = handle_disconnect(state, "Command exited with status #{status}")
       {:noreply, new_state}
     else
@@ -190,7 +194,7 @@ defmodule Caudata.ContainerWorker do
   @impl true
   def handle_info({:ssh_cm, conn_ref, {:closed, channel_id}}, state) do
     if conn_ref == state.conn_ref && channel_id == state.channel_id do
-      Logger.warning("SSH Channel closed for container #{state.container_id}")
+      Logger.debug("SSH Channel closed for container #{state.container_id}")
       new_state = handle_disconnect(state, "Channel closed")
       {:noreply, new_state}
     else
@@ -245,11 +249,17 @@ defmodule Caudata.ContainerWorker do
   end
 
   defp start_log_streaming(state, conn_ref) do
-    Logger.info("Streaming logs for container #{state.container_id} on #{state.profile_id}...")
+    Logger.debug("Streaming logs for #{state.container_id} on #{state.profile_id}...")
 
     case state.ssh_client.open_channel(conn_ref) do
       {:ok, channel_id} ->
-        log_cmd = "docker logs --follow --tail #{state.tail_limit || 1000} #{state.container_id}"
+        log_cmd =
+          if String.starts_with?(state.container_id, "file:") do
+            "file:" <> path = state.container_id
+            "tail -n #{state.tail_limit || 100} -F \"#{path}\""
+          else
+            "docker logs --follow --tail #{state.tail_limit || 1000} #{state.container_id}"
+          end
 
         case state.ssh_client.exec(conn_ref, channel_id, log_cmd) do
           :ok ->
@@ -262,7 +272,7 @@ defmodule Caudata.ContainerWorker do
              }}
 
           {:error, reason} ->
-            Logger.error(
+            Logger.debug(
               "Failed to execute docker logs for #{state.container_id}: #{inspect(reason)}"
             )
 
@@ -270,7 +280,7 @@ defmodule Caudata.ContainerWorker do
         end
 
       {:error, reason} ->
-        Logger.error("Failed to open channel for container logs: #{inspect(reason)}")
+        Logger.debug("Failed to open channel for container logs: #{inspect(reason)}")
         {:error, reason}
     end
   end

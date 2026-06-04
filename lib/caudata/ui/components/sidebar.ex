@@ -17,35 +17,43 @@ defmodule Caudata.UI.Components.Sidebar do
     # Sidebar items
     sidebar_lines =
       Enum.flat_map(state.profiles, fn profile ->
-        status = Map.get(state.statuses, profile.id, :disconnected)
+        status =
+          if Map.get(profile, :enabled, true) do
+            Map.get(state.statuses, profile.id, :disconnected)
+          else
+            :disabled
+          end
+
         status_color = ViewHelper.status_color(status)
 
         status_icon =
           case status do
             :connected -> "● "
             :connecting -> "◌ "
+            :disabled -> "⊘ "
             _ -> "○ "
           end
 
-        server_selected =
-          state.selected_profile_id == profile.id && is_nil(state.selected_container_id)
-
-        prefix = if server_selected, do: "> ", else: "  "
-        server_color = if server_selected, do: :green, else: :white
-
         server_row =
           Line.new([
-            Span.new(prefix),
+            Span.new("  "),
             Span.new(status_icon, style: %Style{fg: status_color}),
-            Span.new(profile.id, style: %Style{fg: server_color})
+            Span.new(profile.id,
+              style: %Style{fg: if(status == :disabled, do: :dark_gray, else: :white)}
+            )
           ])
 
         containers = Map.get(state.containers, profile.id, [])
 
+        enabled_containers =
+          Enum.filter(containers, fn c ->
+            c.id not in profile.disabled_containers and c.name not in profile.disabled_containers
+          end)
+
         container_rows =
-          Enum.with_index(containers)
+          Enum.with_index(enabled_containers)
           |> Enum.map(fn {container, idx} ->
-            is_last = idx == length(containers) - 1
+            is_last = idx == length(enabled_containers) - 1
             branch = if is_last, do: "└── ", else: "├── "
 
             container_selected =
@@ -55,9 +63,15 @@ defmodule Caudata.UI.Components.Sidebar do
             c_prefix = if container_selected, do: "> ", else: "  "
             c_color = if container_selected, do: :green, else: :white
 
+            is_file = container.image == "file" or String.starts_with?(container.id, "file:")
+            icon = if is_file, do: "📄 ", else: "🐳 "
+            icon_color = if is_file, do: :yellow, else: :cyan
+
             Line.new([
               Span.new(c_prefix),
-              Span.new("  " <> branch <> container.name, style: %Style{fg: c_color})
+              Span.new("  " <> branch, style: %Style{fg: c_color}),
+              Span.new(icon, style: %Style{fg: icon_color}),
+              Span.new(container.name, style: %Style{fg: c_color})
             ])
           end)
 
@@ -86,7 +100,7 @@ defmodule Caudata.UI.Components.Sidebar do
         select_next_item(model)
 
       :enter ->
-        if is_nil(model.selected_container_id) and model.selected_profile_id do
+        if model.selected_profile_id do
           case Enum.find(model.profiles, &(&1.id == model.selected_profile_id)) do
             nil ->
               {model, []}
@@ -116,10 +130,14 @@ defmodule Caudata.UI.Components.Sidebar do
   """
   def list_visible_items(model) do
     Enum.flat_map(model.profiles, fn profile ->
-      server_item = {:server, profile.id}
       containers = Map.get(model.containers, profile.id, [])
-      container_items = Enum.map(containers, fn c -> {:container, profile.id, c.id, c.name} end)
-      [server_item | container_items]
+
+      enabled_containers =
+        Enum.filter(containers, fn c ->
+          c.id not in profile.disabled_containers and c.name not in profile.disabled_containers
+        end)
+
+      Enum.map(enabled_containers, fn c -> {:container, profile.id, c.id, c.name} end)
     end)
   end
 
@@ -129,22 +147,11 @@ defmodule Caudata.UI.Components.Sidebar do
   def select_item(item, model) do
     case item do
       {:server, server_id} ->
-        case Caudata.ServerSupervisor.lookup_worker(server_id) do
-          {:ok, pid} ->
-            _ = GenServer.call(pid, :stream_server_logs)
-            :ok
-
-          _ ->
-            :ok
-        end
-
-        logs = Caudata.LogStore.get_snapshot(Caudata.LogStore, server_id, 1000)
-
         {%{
            model
            | selected_profile_id: server_id,
              selected_container_id: nil,
-             logs: logs,
+             logs: [],
              logs_scroll_y: :bottom,
              logs_fetch_limit: 1000,
              loading_history: false,
@@ -191,12 +198,9 @@ defmodule Caudata.UI.Components.Sidebar do
           Enum.find(items, fn
             {:container, s_id, c_id, _name} ->
               s_id == model.selected_profile_id and c_id == model.selected_container_id
-
-            _ ->
-              false
           end)
         else
-          {:server, model.selected_profile_id}
+          nil
         end
 
       index = Enum.find_index(items, &(&1 == current_item))
@@ -223,12 +227,9 @@ defmodule Caudata.UI.Components.Sidebar do
           Enum.find(items, fn
             {:container, s_id, c_id, _name} ->
               s_id == model.selected_profile_id and c_id == model.selected_container_id
-
-            _ ->
-              false
           end)
         else
-          {:server, model.selected_profile_id}
+          nil
         end
 
       index = Enum.find_index(items, &(&1 == current_item))

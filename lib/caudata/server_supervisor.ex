@@ -80,8 +80,14 @@ defmodule Caudata.ServerSupervisor do
   def stop_worker(source_id) do
     case lookup_worker(source_id) do
       {:ok, pid} ->
-        DynamicSupervisor.terminate_child(__MODULE__, pid)
-        Logger.info("Stopped ServerWorker for #{source_id} successfully")
+        _ =
+          Task.start(fn ->
+            start_time = System.monotonic_time(:millisecond)
+            DynamicSupervisor.terminate_child(__MODULE__, pid)
+            duration = System.monotonic_time(:millisecond) - start_time
+            Logger.info("Stopped ServerWorker for #{source_id} successfully in #{duration}ms")
+          end)
+
         :ok
 
       {:error, :not_found} ->

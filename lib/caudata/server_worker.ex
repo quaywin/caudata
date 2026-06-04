@@ -21,7 +21,8 @@ defmodule Caudata.ServerWorker do
     :list_buffer,
     :active_container_id,
     :conn_task_pid,
-    :tail_limit
+    :tail_limit,
+    validation_channels: %{}
   ]
 
   # Client API
@@ -36,14 +37,22 @@ defmodule Caudata.ServerWorker do
   Gets the status of the server worker.
   """
   def get_status(pid) do
-    GenServer.call(pid, :get_status)
+    try do
+      GenServer.call(pid, :get_status, 100)
+    catch
+      :exit, _ -> :disconnected
+    end
   end
 
   @doc """
   Gets the list of discovered containers.
   """
   def get_containers(pid) do
-    GenServer.call(pid, :get_containers)
+    try do
+      GenServer.call(pid, :get_containers, 100)
+    catch
+      :exit, _ -> []
+    end
   end
 
   # GenServer Callbacks
@@ -72,7 +81,8 @@ defmodule Caudata.ServerWorker do
       list_buffer: "",
       active_container_id: nil,
       conn_task_pid: nil,
-      tail_limit: nil
+      tail_limit: nil,
+      validation_channels: %{}
     }
 
     # Broadcast initial connecting status
@@ -95,13 +105,32 @@ defmodule Caudata.ServerWorker do
   end
 
   @impl true
+  def handle_call({:validate_path, path}, from, state) do
+    if is_nil(state.conn_ref) do
+      {:reply, {:error, :not_connected}, state}
+    else
+      case state.ssh_client.open_channel(state.conn_ref) do
+        {:ok, channel_id} ->
+          escaped_path = String.replace(path, "\"", "\\\"")
+          cmd = "if [ -r \"#{escaped_path}\" ]; then echo \"valid\"; else echo \"invalid\"; fi"
+
+          case state.ssh_client.exec(state.conn_ref, channel_id, cmd) do
+            :ok ->
+              new_validations = Map.put(state.validation_channels, channel_id, {from, ""})
+              {:noreply, %{state | validation_channels: new_validations}}
+
+            {:error, reason} ->
+              {:reply, {:error, reason}, state}
+          end
+
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+      end
+    end
+  end
+
+  @impl true
   def handle_call({:stream_container_logs, container_id}, _from, state) do
-    # Close server log channel if any
-    state = close_ssh_log_channel(state)
-
-    # Stop any other active container stream
-    state = stop_active_container_stream(state)
-
     if is_nil(state.conn_ref) do
       {:reply, {:error, :not_connected}, %{state | active_container_id: container_id}}
     else
@@ -123,20 +152,44 @@ defmodule Caudata.ServerWorker do
 
   @impl true
   def handle_call(:stream_server_logs, _from, state) do
-    state = close_ssh_log_channel(state)
-    state = stop_active_container_stream(state)
-
     if is_nil(state.conn_ref) do
       {:reply, {:error, :not_connected}, %{state | active_container_id: nil}}
     else
-      case start_server_log_streaming(state) do
-        {:ok, new_state} ->
-          {:reply, :ok, new_state}
+      if state.channel_id do
+        {:reply, :ok, %{state | active_container_id: nil}}
+      else
+        case start_server_log_streaming(state) do
+          {:ok, new_state} ->
+            {:reply, :ok, new_state}
 
-        {:error, reason, new_state} ->
-          {:reply, {:error, reason}, new_state}
+          {:error, reason, new_state} ->
+            {:reply, {:error, reason}, new_state}
+        end
       end
     end
+  end
+
+  @impl true
+  def handle_cast({:update_profile, updated_profile}, state) do
+    old_profile = state.profile
+    new_state = %{state | profile: updated_profile}
+
+    # Only refresh containers when connection-relevant fields change.
+    # Toggling disabled_containers is just a UI filter and should not
+    # trigger a full SSH refresh that causes status flicker.
+    needs_refresh =
+      old_profile.custom_logs != updated_profile.custom_logs or
+        old_profile.host_name != updated_profile.host_name or
+        old_profile.port != updated_profile.port or
+        old_profile.user != updated_profile.user or
+        old_profile.log_command != updated_profile.log_command or
+        old_profile.identity_file != updated_profile.identity_file
+
+    if needs_refresh and state.conn_ref do
+      GenServer.cast(self(), :refresh_containers)
+    end
+
+    {:noreply, new_state}
   end
 
   @impl true
@@ -159,7 +212,7 @@ defmodule Caudata.ServerWorker do
     if state.conn_ref do
       state = close_list_channel(state)
 
-      Logger.info("Refreshing containers list for #{state.profile.id}...")
+      Logger.debug("Refreshing containers list for #{state.profile.id}...")
 
       case state.ssh_client.open_channel(state.conn_ref) do
         {:ok, list_channel_id} ->
@@ -177,12 +230,12 @@ defmodule Caudata.ServerWorker do
                }}
 
             {:error, reason} ->
-              Logger.error("Failed to exec docker ps on refresh: #{inspect(reason)}")
+              Logger.debug("Failed to exec docker ps on refresh: #{inspect(reason)}")
               {:noreply, state}
           end
 
         {:error, reason} ->
-          Logger.error("Failed to open channel on refresh: #{inspect(reason)}")
+          Logger.debug("Failed to open channel on refresh: #{inspect(reason)}")
           {:noreply, state}
       end
     else
@@ -196,7 +249,7 @@ defmodule Caudata.ServerWorker do
     # Cancel any active reconnect timer
     state = cancel_reconnect_timer(state)
 
-    Logger.info(
+    Logger.debug(
       "Connecting to server #{state.profile.id} (#{state.profile.host_name}:#{state.profile.port})"
     )
 
@@ -237,7 +290,7 @@ defmodule Caudata.ServerWorker do
 
   @impl true
   def handle_info({:ssh_connected, conn_ref, task_pid}, state) do
-    Logger.info("SSH connection established to #{state.profile.id}, discovering containers...")
+    Logger.debug("SSH connection established to #{state.profile.id}, discovering containers...")
 
     # Stop any existing task just in case
     if state.conn_task_pid && state.conn_task_pid != task_pid do
@@ -258,7 +311,7 @@ defmodule Caudata.ServerWorker do
              }}
 
           {:error, reason} ->
-            Logger.info(
+            Logger.debug(
               "Docker ps execution failed or not available on #{state.profile.id}: #{inspect(reason)}. Falling back to server log command."
             )
 
@@ -290,7 +343,7 @@ defmodule Caudata.ServerWorker do
         end
 
       {:error, reason} ->
-        Logger.info(
+        Logger.debug(
           "Failed to open channel for container list on #{state.profile.id}: #{inspect(reason)}. Falling back to server log command."
         )
 
@@ -322,7 +375,7 @@ defmodule Caudata.ServerWorker do
 
   @impl true
   def handle_info({:ssh_connect_failed, reason}, state) do
-    Logger.error("Failed to establish SSH connection to #{state.profile.id}: #{inspect(reason)}")
+    Logger.debug("Failed to establish SSH connection to #{state.profile.id}: #{inspect(reason)}")
     handle_disconnect(state, "Connection failed: #{inspect(reason)}")
   end
 
@@ -333,6 +386,12 @@ defmodule Caudata.ServerWorker do
         state
       ) do
     cond do
+      conn_ref == state.conn_ref && Map.has_key?(state.validation_channels, channel_id) ->
+        {from, buffer} = Map.get(state.validation_channels, channel_id)
+        new_buffer = buffer <> to_string(chunk)
+        new_validations = Map.put(state.validation_channels, channel_id, {from, new_buffer})
+        {:noreply, %{state | validation_channels: new_validations}}
+
       conn_ref == state.conn_ref && channel_id == state.list_channel_id ->
         new_buffer = state.list_buffer <> to_string(chunk)
         {:noreply, %{state | list_buffer: new_buffer}}
@@ -372,7 +431,7 @@ defmodule Caudata.ServerWorker do
         {:noreply, state}
 
       conn_ref == state.conn_ref && channel_id == state.channel_id ->
-        Logger.warning("Received EOF from server log stream")
+        Logger.debug("Received EOF from server log stream")
         handle_disconnect(state, "EOF received")
 
       true ->
@@ -390,7 +449,7 @@ defmodule Caudata.ServerWorker do
         {:noreply, state}
 
       conn_ref == state.conn_ref && channel_id == state.channel_id ->
-        Logger.warning("Remote server log command exited with status #{status}")
+        Logger.debug("Remote server log command exited with status #{status}")
 
         handle_disconnect(state, "Command exited with status #{status}")
 
@@ -405,9 +464,22 @@ defmodule Caudata.ServerWorker do
         state
       ) do
     cond do
+      conn_ref == state.conn_ref && Map.has_key?(state.validation_channels, channel_id) ->
+        {{from, buffer}, remaining_validations} = Map.pop(state.validation_channels, channel_id)
+
+        result =
+          if String.trim(buffer) == "valid" do
+            :ok
+          else
+            {:error, :not_readable_or_not_found}
+          end
+
+        GenServer.reply(from, result)
+        {:noreply, %{state | validation_channels: remaining_validations}}
+
       conn_ref == state.conn_ref && channel_id == state.list_channel_id ->
         containers = parse_docker_ps_output(state.list_buffer)
-        Logger.info("Discovered #{length(containers)} docker containers for #{state.profile.id}")
+        Logger.debug("Discovered #{length(containers)} docker containers for #{state.profile.id}")
 
         broadcast_status(state.profile.id, :connected)
 
@@ -418,11 +490,23 @@ defmodule Caudata.ServerWorker do
             status: :connected
         }
 
-        state = sync_container_workers(state, containers)
+        custom_containers =
+          Enum.map(state.profile.custom_logs || [], fn path ->
+            %{
+              id: "file:#{path}",
+              name: path,
+              image: "file",
+              status: "active",
+              state: "running"
+            }
+          end)
+
+        all_containers = containers ++ custom_containers
+        state = sync_container_workers(state, all_containers)
 
         state =
           if state.active_container_id do
-            if Enum.any?(containers, &(&1.id == state.active_container_id)) do
+            if Enum.any?(all_containers, &(&1.id == state.active_container_id)) do
               case Map.fetch(state.container_pids, state.active_container_id) do
                 {:ok, pid} ->
                   case Caudata.ContainerWorker.start_streaming(pid, state.conn_ref) do
@@ -453,11 +537,11 @@ defmodule Caudata.ServerWorker do
         {:noreply, state}
 
       conn_ref == state.conn_ref && channel_id == state.channel_id ->
-        Logger.warning("SSH Channel closed for server logs")
+        Logger.debug("SSH Channel closed for server logs")
         handle_disconnect(state, "Channel closed")
 
-      conn_ref == state.conn_ref ->
-        Logger.warning("SSH Connection closed for #{state.profile.id}")
+      conn_ref == state.conn_ref && channel_id == conn_ref ->
+        Logger.debug("SSH Connection closed for #{state.profile.id}")
         handle_disconnect(state, "Connection closed")
 
       true ->
@@ -485,29 +569,49 @@ defmodule Caudata.ServerWorker do
 
   @impl true
   def terminate(_reason, state) do
+    # Unregister immediately from Registry to prevent UI / callers from making blocking calls
+    _ = Registry.unregister(Caudata.ServerRegistry, state.profile.id)
+
     # Cancel reconnect timer
     state = cancel_reconnect_timer(state)
 
-    # Stop connection task
-    if state.conn_task_pid do
-      send(state.conn_task_pid, :stop)
-    end
+    # 1. Stop all container workers in parallel while SSH connection is still active
+    # This allows container workers to close their channels cleanly.
+    start_time = System.monotonic_time(:millisecond)
+
+    state.container_pids
+    |> Enum.map(fn {_id, pid} ->
+      Task.async(fn ->
+        if Process.alive?(pid) do
+          _ = Caudata.ServerSupervisor.stop_container_worker(pid)
+        end
+      end)
+    end)
+    |> Task.await_many(:infinity)
+
+    duration = System.monotonic_time(:millisecond) - start_time
+    Logger.info("Stopped all container workers for #{state.profile.id} in #{duration}ms")
 
     # Ensure any remaining buffer is flushed as a log line
     if state.buffer != "" do
       LogStore.append_logs(state.profile.id, [state.buffer])
     end
 
-    # Clean close SSH connection
-    state = close_log_channel(state)
+    # 2. Close parent worker's SSH channels cleanly
+    state = close_ssh_log_channel(state)
     state = close_list_channel(state)
 
-    # Stop all container workers
-    Enum.each(state.container_pids, fn {_id, pid} ->
-      if Process.alive?(pid) do
-        _ = Caudata.ServerSupervisor.stop_container_worker(pid)
+    # 3. Stop SSH connection task and await its termination (closes the actual SSH connection)
+    if state.conn_task_pid do
+      ref = Process.monitor(state.conn_task_pid)
+      send(state.conn_task_pid, :stop)
+
+      receive do
+        {:DOWN, ^ref, :process, _, _} -> :ok
+      after
+        1000 -> :ok
       end
-    end)
+    end
 
     broadcast_status(state.profile.id, :disconnected)
     :ok
@@ -529,6 +633,11 @@ defmodule Caudata.ServerWorker do
   end
 
   defp handle_disconnect(state, reason) do
+    # Reply to any pending validation channels
+    Enum.each(state.validation_channels || %{}, fn {_ch, {from, _buf}} ->
+      GenServer.reply(from, {:error, :disconnected})
+    end)
+
     # If there is remaining text in the buffer, flush it
     if state.buffer != "" do
       LogStore.append_logs(state.profile.id, [state.buffer])
@@ -543,8 +652,10 @@ defmodule Caudata.ServerWorker do
     state = close_ssh_log_channel(state)
     state = close_list_channel(state)
 
-    # Stop active container stream
-    state = stop_active_container_stream(state)
+    # Stop all container streams
+    Enum.each(state.container_pids, fn {_id, pid} ->
+      if Process.alive?(pid), do: Caudata.ContainerWorker.stop_streaming(pid)
+    end)
 
     broadcast_status(state.profile.id, :connecting)
 
@@ -552,7 +663,7 @@ defmodule Caudata.ServerWorker do
     delay = state.reconnect_delay
     next_delay = min(delay * 2, @max_reconnect_delay)
 
-    Logger.info("Reconnecting to #{state.profile.id} in #{delay}ms (reason: #{reason})")
+    Logger.debug("Reconnecting to #{state.profile.id} in #{delay}ms (reason: #{reason})")
     timer = Process.send_after(self(), :reconnect, delay)
 
     {:noreply,
@@ -562,14 +673,15 @@ defmodule Caudata.ServerWorker do
          conn_ref: nil,
          reconnect_delay: next_delay,
          reconnect_timer: timer,
-         conn_task_pid: nil
+         conn_task_pid: nil,
+         validation_channels: %{}
      }}
   end
 
   defp start_server_log_streaming(state) do
     base_cmd = state.profile.log_command || "tail -F /var/log/messages"
     log_cmd = build_log_command(base_cmd, state.tail_limit)
-    Logger.info("Streaming server logs via: #{log_cmd} on #{state.profile.id}...")
+    Logger.debug("Streaming server logs via: #{log_cmd} on #{state.profile.id}...")
 
     case state.ssh_client.open_channel(state.conn_ref) do
       {:ok, channel_id} ->
@@ -584,22 +696,14 @@ defmodule Caudata.ServerWorker do
              }}
 
           {:error, reason} ->
-            Logger.error("Failed to execute server log command: #{inspect(reason)}")
+            Logger.debug("Failed to execute server log command: #{inspect(reason)}")
             {:error, reason, %{state | active_container_id: nil}}
         end
 
       {:error, reason} ->
-        Logger.error("Failed to open channel for server logs: #{inspect(reason)}")
+        Logger.debug("Failed to open channel for server logs: #{inspect(reason)}")
         {:error, reason, %{state | active_container_id: nil}}
     end
-  end
-
-  defp close_log_channel(state) do
-    if state.channel_id && state.conn_ref do
-      state.ssh_client.close_channel(state.conn_ref, state.channel_id)
-    end
-
-    %{state | channel_id: nil, conn_ref: nil}
   end
 
   defp build_log_command(base_cmd, nil), do: base_cmd
@@ -725,21 +829,5 @@ defmodule Caudata.ServerWorker do
       end)
 
     %{state | containers: new_containers, container_pids: updated_pids}
-  end
-
-  defp stop_active_container_stream(state) do
-    if state.active_container_id do
-      case Map.fetch(state.container_pids, state.active_container_id) do
-        {:ok, pid} ->
-          if Process.alive?(pid) do
-            _ = Caudata.ContainerWorker.stop_streaming(pid)
-          end
-
-        :error ->
-          :ok
-      end
-    end
-
-    state
   end
 end

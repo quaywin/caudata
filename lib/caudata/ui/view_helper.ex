@@ -33,10 +33,15 @@ defmodule Caudata.UI.ViewHelper do
         model.logs
       end
 
-    if filtered_logs == [] do
-      ["No logs captured yet. Press [Enter] to connect to this server."]
-    else
-      filtered_logs
+    cond do
+      is_nil(model.selected_container_id) ->
+        ["No container selected. Select a container in the sidebar to view logs."]
+
+      filtered_logs == [] ->
+        ["No logs captured yet."]
+
+      true ->
+        filtered_logs
     end
   end
 
@@ -59,6 +64,7 @@ defmodule Caudata.UI.ViewHelper do
   def status_color(:connected), do: :green
   def status_color(:connecting), do: :yellow
   def status_color(:disconnected), do: :red
+  def status_color(:disabled), do: :dark_gray
   def status_color(_), do: :white
 
   @doc """
@@ -80,19 +86,39 @@ defmodule Caudata.UI.ViewHelper do
   end
 
   @doc """
+  Pre-wraps a single string line into multiple lines of a given maximum width.
+  """
+  def wrap_text(line, width) do
+    w = max(1, width)
+    do_wrap_text(line, w, [])
+  end
+
+  defp do_wrap_text("", _width, []), do: [""]
+  defp do_wrap_text("", _width, acc), do: Enum.reverse(acc)
+
+  defp do_wrap_text(line, width, acc) do
+    {chunk, rest} = String.split_at(line, width)
+    do_wrap_text(rest, width, [chunk | acc])
+  end
+
+  @doc """
   Starts a server worker for a profile if one is not already running.
   """
   def start_worker_if_needed(profile) do
     if Code.ensure_loaded?(Mix) and Mix.env() == :test do
       :ok
     else
-      case Caudata.ServerSupervisor.lookup_worker(profile.id) do
-        {:error, :not_found} ->
-          _ = Caudata.ServerSupervisor.start_worker(profile)
-          :ok
+      if Map.get(profile, :enabled, true) do
+        case Caudata.ServerSupervisor.lookup_worker(profile.id) do
+          {:error, :not_found} ->
+            _ = Caudata.ServerSupervisor.start_worker(profile)
+            :ok
 
-        _ ->
-          :ok
+          _ ->
+            :ok
+        end
+      else
+        :ok
       end
     end
   end

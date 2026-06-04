@@ -24,6 +24,18 @@ defmodule Caudata.Web.LogLiveTest do
       LocalForward 2222 127.0.0.1:22
     """)
 
+    config_path = System.get_env("CAUDATA_CONFIG_PATH") || "test/fixtures/test_suite_config.db"
+    File.mkdir_p!(Path.dirname(config_path))
+    File.rm_rf(config_path)
+
+    :ok =
+      Caudata.Config.append_profile(%{
+        id: "aws-contrypt-api",
+        host_pattern: "aws-contrypt-api",
+        host_name: "ec2-18-162-211-161.ap-east-1.compute.amazonaws.com",
+        port: 22
+      })
+
     # Start a test-supervised ConfigManager with the mock config
     {:ok, _pid} =
       start_supervised(
@@ -32,6 +44,7 @@ defmodule Caudata.Web.LogLiveTest do
 
     # Restart the global ConfigManager on exit
     on_exit(fn ->
+      File.rm_rf(config_path)
       _ = Supervisor.restart_child(Caudata.Supervisor, Caudata.ConfigManager)
     end)
 
@@ -69,7 +82,7 @@ defmodule Caudata.Web.LogLiveTest do
         :ok
     end
 
-    assert grid_text =~ "No logs captured yet"
+    assert grid_text =~ "No container selected"
   end
 
   test "renders 404 for invalid routes without crashing", %{conn: conn} do

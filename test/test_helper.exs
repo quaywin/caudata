@@ -1,6 +1,6 @@
 # Set a sandboxed config path for the entire test suite to avoid reading/writing to the user's home directory.
 test_config_dir = "test/fixtures"
-test_config_path = Path.join(test_config_dir, "test_suite_config.toml")
+test_config_path = Path.join(test_config_dir, "test_suite_config.db")
 File.mkdir_p!(test_config_dir)
 # Start with a clean/empty configuration for the suite
 File.rm_rf!(test_config_path)

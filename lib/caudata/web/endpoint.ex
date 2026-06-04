@@ -18,6 +18,8 @@ defmodule Caudata.Web.Endpoint do
 
   # Code reloading can be enabled in development
   if code_reloading? do
+    socket("/phoenix/live_reload/socket", Phoenix.LiveReloader.Socket)
+    plug(Phoenix.LiveReloader)
     plug(Phoenix.CodeReloader)
   end
 

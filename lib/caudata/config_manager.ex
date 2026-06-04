@@ -13,17 +13,17 @@ defmodule Caudata.ConfigManager do
   end
 
   @doc """
-  Lists all loaded and manual profiles.
+  Lists all loaded and manual profiles directly from the ConfigStore (non-blocking).
   """
   def list_profiles(server \\ __MODULE__) do
-    GenServer.call(server, :list_profiles)
+    Caudata.ConfigStore.list_profiles(get_store_name(server))
   end
 
   @doc """
-  Gets a specific profile by its ID.
+  Gets a specific profile by its ID directly from the ConfigStore (non-blocking).
   """
   def get_profile(server \\ __MODULE__, id) do
-    GenServer.call(server, {:get_profile, id})
+    Caudata.ConfigStore.get_profile(get_store_name(server), id)
   end
 
   @doc """
@@ -34,36 +34,64 @@ defmodule Caudata.ConfigManager do
   end
 
   @doc """
+  Updates a profile's settings.
+  """
+  def update_profile(server \\ __MODULE__, id, updates) do
+    GenServer.call(server, {:update_profile, id, updates})
+  end
+
+  @doc """
+  Deletes a profile by its ID.
+  """
+  def delete_profile(server \\ __MODULE__, id) do
+    GenServer.call(server, {:delete_profile, id})
+  end
+
+  @doc """
   Discovers profiles from the configured SSH config path.
   """
   def discover_ssh_profiles(server \\ __MODULE__) do
     GenServer.call(server, :discover_ssh_profiles)
   end
 
+  # Helper to resolve isolated ConfigStore name
+  defp get_store_name(server) do
+    if server == __MODULE__ do
+      Caudata.ConfigStore
+    else
+      Module.concat(server, Store)
+    end
+  end
+
   # GenServer Callbacks
 
   @impl true
   def init(opts) do
-    {:ok, config} = Caudata.Config.load()
-    custom_profiles = Caudata.Config.custom_profiles(config)
+    name = Keyword.get(opts, :name, __MODULE__)
+    store_name = get_store_name(name)
+
+    # Start the linked ConfigStore to handle ETS and I/O
+    config_path = Keyword.get(opts, :config_path) || Caudata.Config.config_path()
+    {:ok, _store_pid} = Caudata.ConfigStore.start_link(name: store_name, config_path: config_path)
 
     ssh_config_path =
       Keyword.get(opts, :ssh_config_path) || System.get_env("CAUDATA_SSH_CONFIG_PATH") ||
         @default_config_path
 
-    {:ok, %{profiles: custom_profiles, manual_profiles: [], ssh_config_path: ssh_config_path}}
+    {:ok, %{store: store_name, ssh_config_path: ssh_config_path}}
   end
 
   @impl true
   def handle_call(:list_profiles, _from, state) do
-    all_profiles = state.profiles ++ state.manual_profiles
-    {:reply, all_profiles, state}
+    # For backward compatibility in any GenServer.call, though direct list_profiles/1 bypasses this call
+    profiles = Caudata.ConfigStore.list_profiles(state.store)
+    {:reply, profiles, state}
   end
 
   @impl true
   def handle_call({:get_profile, id}, _from, state) do
-    all_profiles = state.profiles ++ state.manual_profiles
-    profile = Enum.find(all_profiles, fn p -> p.id == id end)
+    # For backward compatibility in any GenServer.call, though direct get_profile/2 bypasses this call
+    profile = Caudata.ConfigStore.get_profile(state.store, id)
     {:reply, profile, state}
   end
 
@@ -75,15 +103,18 @@ defmodule Caudata.ConfigManager do
       if File.exists?(expanded_path) do
         case parse_ssh_config(expanded_path) do
           {:ok, list} ->
-            Logger.info("Discovered #{length(list)} profiles from SSH config at #{expanded_path}")
+            Logger.debug(
+              "Discovered #{length(list)} profiles from SSH config at #{expanded_path}"
+            )
+
             list
 
           {:error, reason} ->
-            Logger.warning("Failed to parse SSH config at #{expanded_path}: #{inspect(reason)}")
+            Logger.debug("Failed to parse SSH config at #{expanded_path}: #{inspect(reason)}")
             []
         end
       else
-        Logger.info("No SSH config file found at #{expanded_path}")
+        Logger.debug("No SSH config file found at #{expanded_path}")
         []
       end
 
@@ -94,25 +125,117 @@ defmodule Caudata.ConfigManager do
   def handle_call({:add_manual_profile, attrs}, _from, state) do
     try do
       profile = Profile.new(attrs)
-      profile_map = Map.from_struct(profile)
+      profile = Map.put(profile, :enabled, Map.get(profile, :enabled, true))
 
-      # Persist manual profile to config.toml
-      :ok = Caudata.Config.append_profile(profile_map)
+      :ok = Caudata.ConfigStore.add_profile(state.store, profile)
 
-      new_manual = [profile | state.manual_profiles]
+      all_profiles = Caudata.ConfigStore.list_profiles(state.store)
 
-      # Broadcast profiles update (if PubSub is available)
+      # Broadcast profiles update
       Phoenix.PubSub.broadcast(
         Caudata.PubSub,
         "config:profiles",
-        {:profiles_updated, state.profiles ++ new_manual}
+        {:profiles_updated, all_profiles}
       )
 
-      {:reply, {:ok, profile}, %{state | manual_profiles: new_manual}}
+      {:reply, {:ok, profile}, state}
     rescue
       e ->
         {:reply, {:error, e}, state}
     end
+  end
+
+  @impl true
+  def handle_call({:update_profile, id, updates}, _from, state) do
+    old_profile = Caudata.ConfigStore.get_profile(state.store, id)
+
+    case Caudata.ConfigStore.update_profile(state.store, id, updates) do
+      {:ok, updated_profile} ->
+        # Handle worker lifecycle based on enabled flag transitions
+        was_enabled = old_profile && Map.get(old_profile, :enabled, true)
+        is_enabled = updated_profile.enabled
+
+        cond do
+          # Transition from disabled -> enabled: clean start/restart
+          not was_enabled and is_enabled ->
+            _ =
+              Task.start(fn ->
+                start_time = System.monotonic_time(:millisecond)
+
+                case Caudata.ServerSupervisor.lookup_worker(id) do
+                  {:ok, pid} ->
+                    ref = Process.monitor(pid)
+                    _ = Caudata.ServerSupervisor.stop_worker(id)
+
+                    # Await the actual process termination to avoid registry collisions
+                    receive do
+                      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+                    after
+                      5000 -> :ok
+                    end
+
+                    _ = Caudata.UI.ViewHelper.start_worker_if_needed(updated_profile)
+                    duration = System.monotonic_time(:millisecond) - start_time
+
+                    Logger.info(
+                      "Restarted ServerWorker for #{id} in #{duration}ms (including stop wait)"
+                    )
+
+                  {:error, :not_found} ->
+                    _ = Caudata.UI.ViewHelper.start_worker_if_needed(updated_profile)
+                    duration = System.monotonic_time(:millisecond) - start_time
+                    Logger.info("Started ServerWorker for #{id} in #{duration}ms")
+                end
+              end)
+
+          # If it was already enabled and stays enabled: cast update
+          was_enabled and is_enabled ->
+            case Caudata.ServerSupervisor.lookup_worker(id) do
+              {:ok, pid} -> GenServer.cast(pid, {:update_profile, updated_profile})
+              _ -> :ok
+            end
+
+          # If it transitioned from enabled -> disabled: stop worker
+          was_enabled and not is_enabled ->
+            _ = Task.start(fn -> Caudata.ServerSupervisor.stop_worker(id) end)
+
+          true ->
+            :ok
+        end
+
+        all_profiles = Caudata.ConfigStore.list_profiles(state.store)
+
+        # Broadcast profiles update
+        Phoenix.PubSub.broadcast(
+          Caudata.PubSub,
+          "config:profiles",
+          {:profiles_updated, all_profiles}
+        )
+
+        {:reply, {:ok, updated_profile}, state}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:delete_profile, id}, _from, state) do
+    # Stop worker asynchronously to avoid blocking GenServer calls
+    _ = Task.start(fn -> Caudata.ServerSupervisor.stop_worker(id) end)
+
+    :ok = Caudata.ConfigStore.delete_profile(state.store, id)
+
+    all_profiles = Caudata.ConfigStore.list_profiles(state.store)
+
+    # Broadcast profiles update
+    Phoenix.PubSub.broadcast(
+      Caudata.PubSub,
+      "config:profiles",
+      {:profiles_updated, all_profiles}
+    )
+
+    {:reply, :ok, state}
   end
 
   # Parsing Logic

@@ -2,7 +2,7 @@ defmodule Caudata.ConfigTest do
   # async: false because it modifies the config file path env var
   use ExUnit.Case, async: false
 
-  @temp_config_path "test/fixtures/temp_config.toml"
+  @temp_config_path "test/fixtures/temp_config.db"
 
   setup do
     old_path = System.get_env("CAUDATA_CONFIG_PATH")
@@ -42,29 +42,32 @@ defmodule Caudata.ConfigTest do
   end
 
   test "load/0 loads existing config from file" do
-    content = """
-    [global]
-    capacity = 5000
-    log_command = "journalctl -f"
-    discover_ssh_config = false
+    # Create an ETS table and write it
+    tab = :ets.new(:caudata_config, [:set, :public])
+    :ets.insert(tab, {{:global, :capacity}, 5000})
+    :ets.insert(tab, {{:global, :log_command}, "journalctl -f"})
+    :ets.insert(tab, {{:global, :discover_ssh_config}, false})
+    :ets.insert(tab, {{:ssh_server, :enabled}, true})
+    :ets.insert(tab, {{:ssh_server, :ip}, "0.0.0.0"})
+    :ets.insert(tab, {{:ssh_server, :port}, 2223})
+    :ets.insert(tab, {{:ssh_server, :host_keys_dir}, "/tmp/keys"})
 
-    [ssh_server]
-    enabled = true
-    ip = "0.0.0.0"
-    port = 2223
-    host_keys_dir = "/tmp/keys"
+    profile =
+      Caudata.Profile.new(%{
+        id: "custom-server",
+        host_pattern: "10.0.0.5",
+        host_name: "10.0.0.5",
+        user: "deploy",
+        port: 2222,
+        identity_file: "/tmp/id_rsa",
+        log_command: "tail -f log"
+      })
 
-    [[profiles]]
-    id = "custom-server"
-    host_name = "10.0.0.5"
-    user = "deploy"
-    port = 2222
-    identity_file = "/tmp/id_rsa"
-    log_command = "tail -f log"
-    """
+    :ets.insert(tab, {{:profile, "custom-server"}, profile})
 
     File.mkdir_p!(Path.dirname(@temp_config_path))
-    File.write!(@temp_config_path, content)
+    :ok = :ets.tab2file(tab, String.to_charlist(@temp_config_path))
+    :ets.delete(tab)
 
     assert {:ok, config} = Caudata.Config.load()
 
@@ -79,13 +82,13 @@ defmodule Caudata.ConfigTest do
              host_keys_dir: "/tmp/keys"
            }
 
-    assert [profile] = Caudata.Config.custom_profiles(config)
-    assert profile.id == "custom-server"
-    assert profile.host_name == "10.0.0.5"
-    assert profile.user == "deploy"
-    assert profile.port == 2222
-    assert profile.identity_file == "/tmp/id_rsa"
-    assert profile.log_command == "tail -f log"
+    assert [profile_loaded] = Caudata.Config.custom_profiles(config)
+    assert profile_loaded.id == "custom-server"
+    assert profile_loaded.host_name == "10.0.0.5"
+    assert profile_loaded.user == "deploy"
+    assert profile_loaded.port == 2222
+    assert profile_loaded.identity_file == "/tmp/id_rsa"
+    assert profile_loaded.log_command == "tail -f log"
   end
 
   test "append_profile/1 persists a profile to the config file" do
@@ -93,6 +96,7 @@ defmodule Caudata.ConfigTest do
 
     profile_attrs = %{
       id: "appended-server",
+      host_pattern: "10.0.0.6",
       host_name: "10.0.0.6",
       user: "admin",
       port: 22,
@@ -117,6 +121,7 @@ defmodule Caudata.ConfigTest do
 
     profile_attrs = %{
       id: "minimal-server",
+      host_pattern: "10.0.0.7",
       host_name: "10.0.0.7",
       port: 22,
       user: nil,

@@ -5,7 +5,7 @@ defmodule Caudata.UI.KeyHandler do
   """
   require Logger
 
-  alias Caudata.UI.Components.{Sidebar, LogsPane, Modal}
+  alias Caudata.UI.Components.{Sidebar, LogsPane, AddServerModal, SettingsModal}
 
   @doc """
   Main dispatch function for key events.
@@ -20,7 +20,11 @@ defmodule Caudata.UI.KeyHandler do
     cond do
       # 1. Active modal intercepts all keys
       model.modal_visible ->
-        Modal.handle_key(key, key_data, model)
+        if model.modal_type == :settings do
+          SettingsModal.handle_key(key, key_data, model)
+        else
+          AddServerModal.handle_key(key, key_data, model)
+        end
 
       # 2. Escape key in search mode returns to browsing
       key in [:escape, :esc] ->
@@ -65,6 +69,28 @@ defmodule Caudata.UI.KeyHandler do
              modal_selected_index: 0,
              modal_error: nil
          }, []}
+
+      # Global Settings Modal
+      k when k in ["s", "S"] ->
+        if length(model.profiles) > 0 do
+          selected_idx =
+            Enum.find_index(model.profiles, &(&1.id == model.selected_profile_id)) || 0
+
+          {%{
+             model
+             | modal_visible: true,
+               modal_type: :settings,
+               settings_selected_profile_idx: selected_idx,
+               settings_focus: :servers,
+               settings_container_idx: 0,
+               settings_custom_log_idx: 0,
+               settings_input_active: false,
+               settings_input_value: "",
+               settings_status_msg: nil
+           }, []}
+        else
+          {model, []}
+        end
 
       # Global Quit commands
       k when k in ["q", "Q"] ->

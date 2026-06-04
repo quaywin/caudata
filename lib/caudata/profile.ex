@@ -11,7 +11,10 @@ defmodule Caudata.Profile do
     :user,
     :identity_file,
     port: 22,
-    log_command: "tail -F /var/log/messages"
+    log_command: "tail -F /var/log/messages",
+    disabled_containers: [],
+    custom_logs: [],
+    enabled: true
   ]
 
   @type t :: %__MODULE__{
@@ -21,7 +24,10 @@ defmodule Caudata.Profile do
           user: String.t() | nil,
           port: integer(),
           identity_file: String.t() | nil,
-          log_command: String.t()
+          log_command: String.t(),
+          disabled_containers: [String.t()],
+          custom_logs: [String.t()],
+          enabled: boolean()
         }
 
   @doc """
@@ -35,6 +41,12 @@ defmodule Caudata.Profile do
       raise ArgumentError, "host_pattern is required"
     end
 
+    # Reject nil values from attrs to let defaults show through
+    clean_attrs =
+      Map.new(attrs, fn {k, v} -> {to_existing_atom(k), v} end)
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
     struct!(
       __MODULE__,
       Map.merge(
@@ -42,9 +54,12 @@ defmodule Caudata.Profile do
           id: id,
           host_name: host_pattern,
           port: 22,
-          log_command: "tail -F /var/log/messages"
+          log_command: "tail -F /var/log/messages",
+          disabled_containers: [],
+          custom_logs: [],
+          enabled: true
         },
-        Map.new(attrs, fn {k, v} -> {to_existing_atom(k), v} end)
+        clean_attrs
       )
     )
   end

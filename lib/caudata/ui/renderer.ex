@@ -8,7 +8,7 @@ defmodule Caudata.UI.Renderer do
   alias ExRatatui.Style
   alias ExRatatui.Widgets.Paragraph
 
-  alias Caudata.UI.Components.{Sidebar, LogsPane, Footer, Modal}
+  alias Caudata.UI.Components.{Sidebar, LogsPane, Footer, AddServerModal, SettingsModal}
 
   @doc """
   Splits the main window vertically and coordinates rendering of all components.
@@ -57,7 +57,15 @@ defmodule Caudata.UI.Renderer do
     # If modal is visible, draw the modal popup on top of the main content area
     main_widgets =
       if state.modal_visible do
-        [modal_widget] = Modal.render(state)
+        modal_widget =
+          if state.modal_type == :settings do
+            [widget] = SettingsModal.render(state)
+            widget
+          else
+            [widget] = AddServerModal.render(state)
+            widget
+          end
+
         base_widgets ++ [{modal_widget, main_content_area}]
       else
         base_widgets

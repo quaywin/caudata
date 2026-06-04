@@ -4,7 +4,7 @@ defmodule Caudata.MixProject do
   def project do
     [
       app: :caudata,
-      version: "0.1.5",
+      version: "0.1.6",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
@@ -13,7 +13,8 @@ defmodule Caudata.MixProject do
       homepage_url: "https://github.com/quaywin/caudata",
       source_url: "https://github.com/quaywin/caudata",
       deps: deps(),
-      releases: releases()
+      releases: releases(),
+      listeners: [Phoenix.CodeReloader]
     ]
   end
 
@@ -54,7 +55,6 @@ defmodule Caudata.MixProject do
       {:burrito, "~> 1.0"},
       {:ex_ratatui, "~> 0.10"},
       {:phoenix_ex_ratatui, "~> 0.1"},
-      {:toml, "~> 0.7"},
       {:plug_cowboy, "~> 2.7"},
       {:phoenix, "~> 1.7"},
       {:phoenix_live_view, "~> 0.20 or ~> 1.0"},
@@ -64,6 +64,7 @@ defmodule Caudata.MixProject do
       {:nimble_options, "~> 1.1"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.1"},
+      {:phoenix_live_reload, "~> 1.5", only: :dev},
       {:mox, "~> 1.1", only: :test},
       {:stream_data, "~> 1.1", only: :test},
       {:floki, ">= 0.30.0", only: :test},

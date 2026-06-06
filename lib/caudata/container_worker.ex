@@ -14,7 +14,8 @@ defmodule Caudata.ContainerWorker do
     :channel_id,
     :buffer,
     :ssh_client,
-    :tail_limit
+    :tail_limit,
+    :channel_opened_at
   ]
 
   # Client API
@@ -35,6 +36,14 @@ defmodule Caudata.ContainerWorker do
 
   def stop_streaming(pid) do
     GenServer.call(pid, :stop_streaming)
+  end
+
+  def get_streaming_status(pid) do
+    try do
+      GenServer.call(pid, :get_streaming_status, 100)
+    catch
+      :exit, _ -> %{streaming?: false, opened_at: nil}
+    end
   end
 
   def update_container_info(pid, container) do
@@ -62,7 +71,8 @@ defmodule Caudata.ContainerWorker do
       channel_id: nil,
       buffer: "",
       ssh_client: ssh_client,
-      tail_limit: 100
+      tail_limit: 100,
+      channel_opened_at: nil
     }
 
     {:ok, state}
@@ -76,6 +86,16 @@ defmodule Caudata.ContainerWorker do
       image: state.image,
       status: state.status,
       state: state.state
+    }
+
+    {:reply, info, state}
+  end
+
+  @impl true
+  def handle_call(:get_streaming_status, _from, state) do
+    info = %{
+      streaming?: not is_nil(state.channel_id),
+      opened_at: state.channel_opened_at
     }
 
     {:reply, info, state}
@@ -172,7 +192,7 @@ defmodule Caudata.ContainerWorker do
   @impl true
   def handle_info({:ssh_cm, conn_ref, {:eof, channel_id}}, state) do
     if conn_ref == state.conn_ref && channel_id == state.channel_id do
-      Logger.debug("Received EOF from log stream for container #{state.container_id}")
+      Logger.info("Received EOF from log stream for container #{state.container_id}")
       new_state = handle_disconnect(state, "EOF received")
       {:noreply, new_state}
     else
@@ -183,7 +203,7 @@ defmodule Caudata.ContainerWorker do
   @impl true
   def handle_info({:ssh_cm, conn_ref, {:exit_status, channel_id, status}}, state) do
     if conn_ref == state.conn_ref && channel_id == state.channel_id do
-      Logger.debug("Remote command for #{state.container_id} exited with status #{status}")
+      Logger.info("Remote command for #{state.container_id} exited with status #{status}")
       new_state = handle_disconnect(state, "Command exited with status #{status}")
       {:noreply, new_state}
     else
@@ -194,7 +214,7 @@ defmodule Caudata.ContainerWorker do
   @impl true
   def handle_info({:ssh_cm, conn_ref, {:closed, channel_id}}, state) do
     if conn_ref == state.conn_ref && channel_id == state.channel_id do
-      Logger.debug("SSH Channel closed for container #{state.container_id}")
+      Logger.info("SSH Channel closed for container #{state.container_id}")
       new_state = handle_disconnect(state, "Channel closed")
       {:noreply, new_state}
     else
@@ -249,7 +269,7 @@ defmodule Caudata.ContainerWorker do
   end
 
   defp start_log_streaming(state, conn_ref) do
-    Logger.debug("Streaming logs for #{state.container_id} on #{state.profile_id}...")
+    Logger.info("Streaming logs for #{state.container_id} on #{state.profile_id}...")
 
     case state.ssh_client.open_channel(conn_ref) do
       {:ok, channel_id} ->
@@ -272,11 +292,12 @@ defmodule Caudata.ContainerWorker do
                state
                | conn_ref: conn_ref,
                  channel_id: channel_id,
-                 buffer: ""
+                 buffer: "",
+                 channel_opened_at: System.monotonic_time()
              }}
 
           {:error, reason} ->
-            Logger.debug(
+            Logger.info(
               "Failed to execute docker logs for #{state.container_id}: #{inspect(reason)}"
             )
 
@@ -284,16 +305,17 @@ defmodule Caudata.ContainerWorker do
         end
 
       {:error, reason} ->
-        Logger.debug("Failed to open channel for container logs: #{inspect(reason)}")
+        Logger.info("Failed to open channel for container logs: #{inspect(reason)}")
         {:error, reason}
     end
   end
 
   defp close_log_channel(state) do
     if state.channel_id && state.conn_ref do
+      Logger.info("Closing log channel #{state.channel_id} for container #{state.container_id}")
       state.ssh_client.close_channel(state.conn_ref, state.channel_id)
     end
 
-    %{state | channel_id: nil, conn_ref: nil}
+    %{state | channel_id: nil, conn_ref: nil, channel_opened_at: nil}
   end
 end

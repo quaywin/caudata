@@ -103,18 +103,16 @@ defmodule Caudata.ConfigManager do
       if File.exists?(expanded_path) do
         case parse_ssh_config(expanded_path) do
           {:ok, list} ->
-            Logger.debug(
-              "Discovered #{length(list)} profiles from SSH config at #{expanded_path}"
-            )
+            Logger.info("Discovered #{length(list)} profiles from SSH config at #{expanded_path}")
 
             list
 
           {:error, reason} ->
-            Logger.debug("Failed to parse SSH config at #{expanded_path}: #{inspect(reason)}")
+            Logger.info("Failed to parse SSH config at #{expanded_path}: #{inspect(reason)}")
             []
         end
       else
-        Logger.debug("No SSH config file found at #{expanded_path}")
+        Logger.info("No SSH config file found at #{expanded_path}")
         []
       end
 

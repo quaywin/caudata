@@ -12,7 +12,7 @@ defmodule Caudata.UI.KeyHandler do
   Routes events based on modal visibility, active mode, and key type.
   """
   def handle_key_event(key_data, model) do
-    Logger.debug("Received key event: #{inspect(key_data)}")
+    Logger.info("Received key event: #{inspect(key_data)}")
     key = Map.get(key_data, :key)
     modifiers = Map.get(key_data, :modifiers, [])
     _ctrl = Map.get(key_data, :ctrl, false) or :ctrl in modifiers

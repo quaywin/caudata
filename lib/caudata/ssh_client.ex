@@ -145,7 +145,7 @@ defmodule Caudata.SSHClient.KeyCallback do
 
   @impl true
   def user_key(algorithm, options) do
-    Logger.debug(
+    Logger.info(
       "SSH KeyCallback: user_key requested for algorithm #{inspect(algorithm)} with options: #{inspect(options)}"
     )
 
@@ -156,7 +156,7 @@ defmodule Caudata.SSHClient.KeyCallback do
         decode_private_key(identity_file)
 
       _ ->
-        Logger.debug("SSH KeyCallback: No identity file specified in options")
+        Logger.info("SSH KeyCallback: No identity file specified in options")
         {:error, "No identity file specified"}
     end
   end
@@ -179,7 +179,7 @@ defmodule Caudata.SSHClient.KeyCallback do
           decode_pem(pem_binary, identity_file)
         rescue
           e ->
-            Logger.debug(
+            Logger.info(
               "SSH KeyCallback: Failed to decode key in #{identity_file}: #{inspect(e)}"
             )
 
@@ -187,7 +187,7 @@ defmodule Caudata.SSHClient.KeyCallback do
         end
 
       {:error, reason} ->
-        Logger.debug(
+        Logger.info(
           "SSH KeyCallback: Failed to read identity file #{identity_file}: #{inspect(reason)}"
         )
 
@@ -198,12 +198,12 @@ defmodule Caudata.SSHClient.KeyCallback do
   defp decode_pem(pem_binary, identity_file) do
     case :public_key.pem_decode(pem_binary) do
       [entry | _] = entries ->
-        Logger.debug("SSH KeyCallback: found #{length(entries)} PEM entries in #{identity_file}")
+        Logger.info("SSH KeyCallback: found #{length(entries)} PEM entries in #{identity_file}")
 
         decode_entry(entry, pem_binary)
 
       _ ->
-        Logger.debug("SSH KeyCallback: No PEM entries found in #{identity_file}")
+        Logger.info("SSH KeyCallback: No PEM entries found in #{identity_file}")
         {:error, "No PEM entries found"}
     end
   end
@@ -212,12 +212,12 @@ defmodule Caudata.SSHClient.KeyCallback do
   defp decode_entry({{:no_asn1, _}, _data, _cipher}, pem_binary) do
     case :ssh_file.decode(pem_binary, :public_key) do
       [{private_key, _attributes} | _rest] ->
-        Logger.debug("SSH KeyCallback: successfully decoded private key using :ssh_file.decode/2")
+        Logger.info("SSH KeyCallback: successfully decoded private key using :ssh_file.decode/2")
 
         {:ok, private_key}
 
       other ->
-        Logger.debug("SSH KeyCallback: failed to decode OpenSSH key: #{inspect(other)}")
+        Logger.info("SSH KeyCallback: failed to decode OpenSSH key: #{inspect(other)}")
         {:error, "Failed to decode OpenSSH key"}
     end
   end
@@ -226,7 +226,7 @@ defmodule Caudata.SSHClient.KeyCallback do
   defp decode_entry(entry, _pem_binary) do
     private_key = :public_key.pem_entry_decode(entry)
 
-    Logger.debug(
+    Logger.info(
       "SSH KeyCallback: successfully decoded private key of type #{inspect(elem(private_key, 0))}"
     )
 

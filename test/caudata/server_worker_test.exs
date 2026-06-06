@@ -511,4 +511,96 @@ defmodule Caudata.ServerWorkerTest do
 
     stop_supervised(ServerWorker)
   end
+
+  test "closes oldest channel when opening more than 8 channels" do
+    profile =
+      Profile.new(%{
+        host_pattern: "limit-test-server",
+        host_name: "10.0.0.9",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    # Stub connect
+    Mock
+    |> expect(:connect, fn "10.0.0.9", 22, _ -> {:ok, :dummy_conn} end)
+    # 1. list channel
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_list_channel)
+      {:ok, :dummy_list_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
+      :ok
+    end)
+    # 2. server log channel
+    |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_server_log_channel} end)
+    |> expect(:exec, fn :dummy_conn, :dummy_server_log_channel, _cmd -> :ok end)
+
+    # 3. Expect 8 container log channels to be opened in order
+    Enum.each(1..8, fn i ->
+      ch_id = :"dummy_log_channel_#{i}"
+
+      Mock
+      |> expect(:open_channel, fn :dummy_conn -> {:ok, ch_id} end)
+      |> expect(:exec, fn :dummy_conn, ^ch_id, _cmd -> :ok end)
+    end)
+
+    # 4. Expect closing of the oldest channel (dummy_log_channel_1) when container 9 starts streaming
+    Mock
+    |> expect(:close_channel, fn :dummy_conn, :dummy_log_channel_1 ->
+      send(test_pid, :closed_container_1)
+      :ok
+    end)
+    # Then opening channel for container 9
+    |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_log_channel_9} end)
+    |> expect(:exec, fn :dummy_conn, :dummy_log_channel_9, _cmd -> :ok end)
+
+    # General stub for other close_channel calls during termination
+    Mock
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    {:ok, worker_pid} = start_supervised({ServerWorker, {profile, ssh_client: Mock}})
+
+    # Complete initial connection and container discovery
+    assert_receive :opened_list_channel, 1000
+
+    containers_json =
+      1..9
+      |> Enum.map(fn i ->
+        "{\"ID\":\"container#{i}\",\"Names\":\"test-container-#{i}\",\"Image\":\"nginx\",\"Status\":\"Up\"}"
+      end)
+      |> Enum.join("\n")
+      |> Kernel.<>("\n")
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_list_channel, 0, containers_json}})
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_list_channel}})
+
+    # Wait for status to become connected
+    Process.sleep(100)
+
+    # Start streaming logs for first 8 containers
+    # Wait a bit between calls to guarantee monotonic time difference
+    Enum.each(1..8, fn i ->
+      assert :ok = GenServer.call(worker_pid, {:stream_container_logs, "container#{i}"})
+      Process.sleep(10)
+    end)
+
+    # Verify container 1 is currently streaming
+    {:ok, pid1} =
+      Caudata.ServerSupervisor.lookup_container_worker("limit-test-server", "container1")
+
+    assert %{streaming?: true} = Caudata.ContainerWorker.get_streaming_status(pid1)
+
+    # Start streaming logs for container 9 - this should trigger closing container 1 logs
+    assert :ok = GenServer.call(worker_pid, {:stream_container_logs, "container9"})
+
+    # Check if container 1 logs were closed
+    assert_receive :closed_container_1, 1000
+    assert %{streaming?: false} = Caudata.ContainerWorker.get_streaming_status(pid1)
+
+    stop_supervised(ServerWorker)
+  end
 end

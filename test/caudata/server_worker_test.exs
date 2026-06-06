@@ -27,7 +27,6 @@ defmodule Caudata.ServerWorkerTest do
 
     test_pid = self()
 
-    # Set up expectations on the SSH Client Mock
     Mock
     |> expect(:connect, fn "127.0.0.1", 2222, [user: "test-user", identity_file: nil] ->
       {:ok, :dummy_conn}
@@ -42,7 +41,9 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:open_channel, fn :dummy_conn ->
       {:ok, :dummy_server_log_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_server_log_channel, "tail -F /var/log/test" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_server_log_channel,
+                        "sh -c 'tail -F /var/log/test & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:open_channel, fn :dummy_conn ->
@@ -50,7 +51,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel,
-                        "docker logs --follow --tail 100 container1" ->
+                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_log_channel ->
@@ -151,7 +152,9 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:open_channel, fn :dummy_conn ->
       {:ok, :dummy_server_log_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_server_log_channel, "tail -F /var/log/messages" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_server_log_channel,
+                        "sh -c 'tail -F /var/log/messages & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_server_log_channel ->
@@ -161,7 +164,7 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_log_channel} end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel,
-                        "docker logs --follow --tail 100 container1" ->
+                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Reconnect attempt starts:
@@ -177,7 +180,9 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:open_channel, fn :dummy_conn2 ->
       {:ok, :dummy_server_log_channel2}
     end)
-    |> expect(:exec, fn :dummy_conn2, :dummy_server_log_channel2, "tail -F /var/log/messages" ->
+    |> expect(:exec, fn :dummy_conn2,
+                        :dummy_server_log_channel2,
+                        "sh -c 'tail -F /var/log/messages & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Cleanup calls
@@ -251,7 +256,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_server_log_channel)
       {:ok, :dummy_server_log_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_server_log_channel, "tail -F /var/log/messages" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_server_log_channel,
+                        "sh -c 'tail -F /var/log/messages & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Refresh 1:
@@ -347,7 +354,9 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:open_channel, fn :dummy_conn ->
       {:ok, :dummy_server_log_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_server_log_channel, "tail -F /var/log/messages" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_server_log_channel,
+                        "sh -c 'tail -F /var/log/messages & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_server_log_channel ->
@@ -357,7 +366,7 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_log_channel} end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel,
-                        "docker logs --follow --tail 100 container1" ->
+                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Reconnect attempt starts:
@@ -376,7 +385,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn2,
                         :dummy_log_channel2,
-                        "docker logs --follow --tail 100 container1" ->
+                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Cleanup calls
@@ -456,7 +465,9 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:open_channel, fn :dummy_conn ->
       {:ok, :dummy_server_log_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_server_log_channel, "tail -F /var/log/messages" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_server_log_channel,
+                        "sh -c 'tail -F /var/log/messages & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Validation channel expectations

@@ -681,11 +681,13 @@ defmodule Caudata.ServerWorker do
   defp start_server_log_streaming(state) do
     base_cmd = state.profile.log_command || "tail -F /var/log/messages"
     log_cmd = build_log_command(base_cmd, state.tail_limit)
-    Logger.debug("Streaming server logs via: #{log_cmd} on #{state.profile.id}...")
+    escaped_log_cmd = String.replace(log_cmd, "'", "'\\''")
+    wrapped_log_cmd = "sh -c '#{escaped_log_cmd} & pid=$!; read -r _; kill $pid 2>/dev/null'"
+    Logger.debug("Streaming server logs via: #{wrapped_log_cmd} on #{state.profile.id}...")
 
     case state.ssh_client.open_channel(state.conn_ref) do
       {:ok, channel_id} ->
-        case state.ssh_client.exec(state.conn_ref, channel_id, log_cmd) do
+        case state.ssh_client.exec(state.conn_ref, channel_id, wrapped_log_cmd) do
           :ok ->
             {:ok,
              %{

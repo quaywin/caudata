@@ -43,7 +43,7 @@ defmodule Caudata.SSHClient.KeyCallbackTest do
   test "returns error when options are invalid or missing" do
     assert {:error, "No identity file specified"} = KeyCallback.user_key(:"ssh-rsa", [])
 
-    assert {:error, "identity_file is not a binary"} =
+    assert {:error, "No identity file specified"} =
              KeyCallback.user_key(:"ssh-rsa", key_cb_private: [key_cb_private: 123])
   end
 end

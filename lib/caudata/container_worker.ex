@@ -256,9 +256,13 @@ defmodule Caudata.ContainerWorker do
         log_cmd =
           if String.starts_with?(state.container_id, "file:") do
             "file:" <> path = state.container_id
-            "tail -n #{state.tail_limit || 100} -F \"#{path}\""
+            escaped_path = String.replace(path, "'", "'\\''")
+
+            "sh -c 'tail -n #{state.tail_limit || 100} -F \"#{escaped_path}\" & pid=$!; read -r _; kill $pid 2>/dev/null'"
           else
-            "docker logs --follow --tail #{state.tail_limit || 1000} #{state.container_id}"
+            escaped_container_id = String.replace(state.container_id, "'", "'\\''")
+
+            "sh -c 'docker logs --follow --tail #{state.tail_limit || 1000} #{escaped_container_id} & pid=$!; read -r _; kill $pid 2>/dev/null'"
           end
 
         case state.ssh_client.exec(conn_ref, channel_id, log_cmd) do

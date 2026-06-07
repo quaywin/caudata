@@ -201,7 +201,10 @@ defmodule Caudata.UI.App do
               [first_container | _] ->
                 case Caudata.ServerSupervisor.lookup_worker(state.selected_profile_id) do
                   {:ok, pid} ->
-                    _ = GenServer.call(pid, {:stream_container_logs, first_container.id})
+                    Task.start(fn ->
+                      GenServer.call(pid, {:stream_container_logs, first_container.id})
+                    end)
+
                     :ok
 
                   _ ->

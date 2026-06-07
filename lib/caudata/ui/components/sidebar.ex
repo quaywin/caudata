@@ -162,7 +162,10 @@ defmodule Caudata.UI.Components.Sidebar do
       {:container, server_id, container_id, _name} ->
         case Caudata.ServerSupervisor.lookup_worker(server_id) do
           {:ok, pid} ->
-            _ = GenServer.call(pid, {:stream_container_logs, container_id})
+            Task.start(fn ->
+              GenServer.call(pid, {:stream_container_logs, container_id})
+            end)
+
             :ok
 
           _ ->

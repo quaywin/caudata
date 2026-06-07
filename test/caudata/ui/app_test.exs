@@ -269,45 +269,30 @@ defmodule Caudata.UI.AppTest do
     assert updated_state.logs_scroll_y == :bottom
   end
 
-  test "handle_info/2 tick adjusts logs_scroll_y by drop count difference when scrolled up" do
+  test "handle_info/2 logs_updated adjusts logs_scroll_y by drop count difference when scrolled up" do
     profile_id = "drop-test-server"
-    _ = Caudata.ConfigManager.add_manual_profile(%{id: profile_id, host_pattern: profile_id})
-
-    on_exit(fn ->
-      _ = Caudata.ConfigManager.delete_profile(profile_id)
-    end)
-
-    Caudata.LogStore.clear_logs(profile_id)
-
-    # Append 1000 logs (matching capacity 1000)
-    Caudata.LogStore.append_logs(profile_id, Enum.map(1..1000, &"line #{&1}"))
-    # Let the cast settle
-    Process.sleep(50)
 
     {:ok, state} = App.mount([])
 
-    # Let's transition app state to select this profile
-    assert {:noreply, state} = App.handle_info({:select_profile, profile_id}, state)
-
-    # We now mock state.logs_scroll_y to be an integer (e.g. 5)
-    # and drop_counts to reflect 0 drops initially (which matches LogStore stats at this point)
+    # Mock the state to have a selected profile, scroll position, and initial drop counts
     state = %{
       state
-      | logs_scroll_y: 5,
+      | selected_profile_id: profile_id,
+        selected_container_id: nil,
+        logs_scroll_y: 5,
         drop_counts: %{profile_id => 0}
     }
 
-    # Now, append 3 more logs. Since capacity is 1000, the oldest 3 will be dropped.
-    # New drop_count will be 3.
-    Caudata.LogStore.append_logs(profile_id, ["line 1001", "line 1002", "line 1003"])
-    Process.sleep(50)
-
-    # Trigger a :tick
-    assert {:noreply, updated_state} = App.handle_info(:tick, state)
+    # Simulate receiving logs_updated PubSub event
+    msg = {:logs_updated, profile_id, %{size: 1000, drop_count: 3}}
+    assert {:noreply, updated_state} = App.handle_info(msg, state)
 
     # The drop difference is 3 - 0 = 3.
     # The scroll position should be adjusted: 5 - 3 = 2.
     assert updated_state.logs_scroll_y == 2
+    assert updated_state.drop_counts[profile_id] == 3
+    assert updated_state.buffer_sizes[profile_id] == 1000
+    assert updated_state.logs_dirty == true
   end
 
   test "handle_event/2 handles loading older logs when scrolling up with k" do

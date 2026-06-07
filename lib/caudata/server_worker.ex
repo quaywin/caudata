@@ -5,6 +5,7 @@ defmodule Caudata.ServerWorker do
 
   @max_reconnect_delay 30_000
   @initial_reconnect_delay 1000
+  @max_active_streams 8
 
   defstruct [
     :profile,
@@ -20,8 +21,12 @@ defmodule Caudata.ServerWorker do
     :list_channel_id,
     :list_buffer,
     :active_container_id,
+    :active_container_name,
     :conn_task_pid,
     :tail_limit,
+    :events_channel_id,
+    :enable_events,
+    events_buffer: "",
     validation_channels: %{}
   ]
 
@@ -80,8 +85,12 @@ defmodule Caudata.ServerWorker do
       list_channel_id: nil,
       list_buffer: "",
       active_container_id: nil,
+      active_container_name: nil,
       conn_task_pid: nil,
       tail_limit: nil,
+      events_channel_id: nil,
+      enable_events: Keyword.get(opts, :enable_events, Mix.env() != :test),
+      events_buffer: "",
       validation_channels: %{}
     }
 
@@ -131,8 +140,15 @@ defmodule Caudata.ServerWorker do
 
   @impl true
   def handle_call({:stream_container_logs, container_id}, _from, state) do
+    active_container_name =
+      case Enum.find(state.containers, &(&1.id == container_id)) do
+        nil -> nil
+        c -> c.name
+      end
+
     if is_nil(state.conn_ref) do
-      {:reply, {:error, :not_connected}, %{state | active_container_id: container_id}}
+      {:reply, {:error, :not_connected},
+       %{state | active_container_id: container_id, active_container_name: active_container_name}}
     else
       case Map.fetch(state.container_pids, container_id) do
         {:ok, pid} ->
@@ -154,14 +170,14 @@ defmodule Caudata.ServerWorker do
               end)
               |> Enum.reject(&is_nil/1)
 
-            if length(active_streams) >= 8 do
+            if length(active_streams) >= @max_active_streams do
               sorted_streams =
                 Enum.sort_by(active_streams, fn {_id, _c_pid, opened_at} -> opened_at end)
 
               case sorted_streams do
                 [{old_id, old_pid, _opened_at} | _] ->
                   Logger.info(
-                    "Max active channels (8) reached. Closing oldest channel for container #{old_id} to make room."
+                    "Max active channels (#{@max_active_streams}) reached. Closing oldest channel for container #{old_id} to make room."
                   )
 
                   Caudata.ContainerWorker.stop_streaming(old_pid)
@@ -174,10 +190,20 @@ defmodule Caudata.ServerWorker do
 
           case Caudata.ContainerWorker.start_streaming(pid, state.conn_ref) do
             :ok ->
-              {:reply, :ok, %{state | active_container_id: container_id}}
+              {:reply, :ok,
+               %{
+                 state
+                 | active_container_id: container_id,
+                   active_container_name: active_container_name
+               }}
 
             {:error, reason} ->
-              {:reply, {:error, reason}, %{state | active_container_id: container_id}}
+              {:reply, {:error, reason},
+               %{
+                 state
+                 | active_container_id: container_id,
+                   active_container_name: active_container_name
+               }}
           end
 
         :error ->
@@ -452,6 +478,12 @@ defmodule Caudata.ServerWorker do
 
         {:noreply, %{state | buffer: new_buffer}}
 
+      conn_ref == state.conn_ref && channel_id == state.events_channel_id ->
+        chunk_str = to_string(chunk)
+        {lines, new_events_buffer} = process_chunk(chunk_str, state.events_buffer)
+        state = Enum.reduce(lines, state, &handle_docker_event/2)
+        {:noreply, %{state | events_buffer: new_events_buffer}}
+
       true ->
         {:noreply, state}
     end
@@ -570,6 +602,7 @@ defmodule Caudata.ServerWorker do
             end
           end
 
+        state = start_docker_events_listener(state)
         {:noreply, state}
 
       conn_ref == state.conn_ref && channel_id == state.channel_id ->
@@ -595,6 +628,12 @@ defmodule Caudata.ServerWorker do
   @impl true
   def handle_info(:reconnect, state) do
     {:noreply, state, {:continue, :do_connect}}
+  end
+
+  @impl true
+  def handle_info(_other, state) do
+    # Catch-all to ignore other spurious messages (e.g. {:EXIT, pid, :normal} from Tasks)
+    {:noreply, state}
   end
 
   @impl true
@@ -687,6 +726,7 @@ defmodule Caudata.ServerWorker do
     # Close old connections cleanly
     state = close_ssh_log_channel(state)
     state = close_list_channel(state)
+    state = close_events_channel(state)
 
     # Stop all container streams
     Enum.each(state.container_pids, fn {_id, pid} ->
@@ -718,7 +758,10 @@ defmodule Caudata.ServerWorker do
     base_cmd = state.profile.log_command || "tail -F /var/log/messages"
     log_cmd = build_log_command(base_cmd, state.tail_limit)
     escaped_log_cmd = String.replace(log_cmd, "'", "'\\''")
-    wrapped_log_cmd = "sh -c '#{escaped_log_cmd} & pid=$!; read -r _; kill $pid 2>/dev/null'"
+
+    wrapped_log_cmd =
+      "sh -c '#{escaped_log_cmd} & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
+
     Logger.info("Streaming server logs via: #{wrapped_log_cmd} on #{state.profile.id}...")
 
     case state.ssh_client.open_channel(state.conn_ref) do
@@ -781,6 +824,161 @@ defmodule Caudata.ServerWorker do
     %{state | list_channel_id: nil}
   end
 
+  defp close_events_channel(state) do
+    if state.events_channel_id && state.conn_ref do
+      state.ssh_client.close_channel(state.conn_ref, state.events_channel_id)
+    end
+
+    %{state | events_channel_id: nil, events_buffer: ""}
+  end
+
+  defp start_docker_events_listener(state) do
+    state = close_events_channel(state)
+
+    if state.enable_events && state.conn_ref do
+      Logger.info("Starting docker events listener for #{state.profile.id}...")
+
+      case state.ssh_client.open_channel(state.conn_ref) do
+        {:ok, events_channel_id} ->
+          event_cmd =
+            "docker events --filter 'type=container' --filter 'event=start' --filter 'event=die' --filter 'event=destroy' --format '{{json .}}'"
+
+          case state.ssh_client.exec(state.conn_ref, events_channel_id, event_cmd) do
+            :ok ->
+              %{state | events_channel_id: events_channel_id, events_buffer: ""}
+
+            {:error, reason} ->
+              Logger.warning(
+                "Failed to exec docker events command on #{state.profile.id}: #{inspect(reason)}"
+              )
+
+              state
+          end
+
+        {:error, reason} ->
+          Logger.warning(
+            "Failed to open channel for docker events on #{state.profile.id}: #{inspect(reason)}"
+          )
+
+          state
+      end
+    else
+      state
+    end
+  end
+
+  defp handle_docker_event(line, state) do
+    case Jason.decode(line) do
+      {:ok, %{"status" => status, "id" => id, "Actor" => %{"Attributes" => attributes}}} ->
+        name = Map.get(attributes, "name")
+        image = Map.get(attributes, "image", "")
+        process_parsed_event(state, status, id, name, image)
+
+      _ ->
+        state
+    end
+  end
+
+  defp process_parsed_event(state, "start", id, name, image) do
+    # Check if this new container has the same name as the active container (rebuilt)
+    rebuilt? = state.active_container_name == name && state.active_container_id != id
+    old_active_id = state.active_container_id
+
+    new_container = %{
+      id: id,
+      name: name,
+      image: image,
+      status: "Up",
+      state: "running"
+    }
+
+    # Reject old containers with the same name or ID, then add the new one
+    updated_containers =
+      state.containers
+      |> Enum.reject(fn c -> c.name == name || c.id == id end)
+      |> Kernel.++([new_container])
+
+    # If it is rebuilt, transition active_container_id and broadcast rebuilt event
+    state =
+      if rebuilt? do
+        Logger.info("Docker container rebuilt: #{old_active_id} -> #{id} for name: #{name}")
+
+        Phoenix.PubSub.broadcast(
+          Caudata.PubSub,
+          "servers",
+          {:container_rebuilt, state.profile.id, old_active_id, id}
+        )
+
+        %{state | active_container_id: id}
+      else
+        state
+      end
+
+    # Sync container workers
+    state = sync_container_workers(state, updated_containers)
+
+    # Resume log streaming if this container is now active
+    if state.active_container_id == id do
+      case Map.fetch(state.container_pids, id) do
+        {:ok, pid} ->
+          source_id = "#{state.profile.id}/#{id}"
+          Caudata.LogStore.clear_logs(source_id)
+
+          _ = Caudata.ContainerWorker.start_streaming(pid, state.conn_ref)
+          :ok
+
+        :error ->
+          :ok
+      end
+    end
+
+    state
+  end
+
+  defp process_parsed_event(state, "die", id, _name, _image) do
+    case Map.fetch(state.container_pids, id) do
+      {:ok, pid} ->
+        if Process.alive?(pid) do
+          _ = Caudata.ContainerWorker.stop_streaming(pid)
+          :ok
+        end
+
+      :error ->
+        :ok
+    end
+
+    updated_containers =
+      Enum.map(state.containers, fn c ->
+        if c.id == id do
+          %{c | status: "Exited", state: "exited"}
+        else
+          c
+        end
+      end)
+
+    sync_container_workers(state, updated_containers)
+  end
+
+  defp process_parsed_event(state, "destroy", id, _name, _image) do
+    case Map.fetch(state.container_pids, id) do
+      {:ok, pid} ->
+        if Process.alive?(pid) do
+          _ = Caudata.ContainerWorker.stop_streaming(pid)
+          :ok
+        end
+
+      :error ->
+        :ok
+    end
+
+    updated_containers = Enum.reject(state.containers, &(&1.id == id))
+    sync_container_workers(state, updated_containers)
+  end
+
+  defp process_parsed_event(state, _status, _id, _name, _image) do
+    state
+  end
+
   defp parse_docker_ps_output(output) do
     output
     |> String.split(["\r\n", "\n"])
@@ -818,6 +1016,14 @@ defmodule Caudata.ServerWorker do
       Caudata.PubSub,
       "servers",
       {:status_updated, source_id, status}
+    )
+  end
+
+  defp broadcast_containers(source_id, containers) do
+    Phoenix.PubSub.broadcast(
+      Caudata.PubSub,
+      "servers",
+      {:containers_updated, source_id, containers}
     )
   end
 
@@ -865,6 +1071,8 @@ defmodule Caudata.ServerWorker do
             Map.put(acc, container.id, new_pid)
         end
       end)
+
+    broadcast_containers(state.profile.id, new_containers)
 
     %{state | containers: new_containers, container_pids: updated_pids}
   end

@@ -28,7 +28,7 @@ defmodule Caudata.ContainerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_channel,
-                        "sh -c 'docker logs --follow --tail 100 container123 & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 100 container123 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->
@@ -106,7 +106,7 @@ defmodule Caudata.ContainerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_channel,
-                        "sh -c 'docker logs --follow --tail 100 container123 & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 100 container123 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->

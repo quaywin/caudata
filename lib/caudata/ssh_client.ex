@@ -36,7 +36,10 @@ defmodule Caudata.SSHClient do
       ssh_opts = [
         user: to_charlist(user),
         silently_accept_hosts: true,
-        user_interaction: false
+        user_interaction: false,
+        preferred_algorithms: [
+          compression: [:zlib, :"zlib@openssh.com", :none]
+        ]
       ]
 
       # Add user directory if ~/.ssh is available
@@ -108,6 +111,12 @@ defmodule Caudata.SSHClient do
       # Without this, long-running commands (docker logs --follow, tail -F, etc.)
       # may survive a bare channel close on some SSH servers.
       _ = :ssh_connection.send_eof(conn_ref, channel_id)
+
+      # Give the remote shell a brief window (e.g., 100ms) to process the EOF,
+      # exit the blocking `read` command, and execute its `kill` handler
+      # before we forcibly close the channel.
+      Process.sleep(100)
+
       :ssh_connection.close(conn_ref, channel_id)
       :ok
     end

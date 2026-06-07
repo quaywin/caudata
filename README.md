@@ -5,163 +5,124 @@
 
 **Caudata** is a collaborative, zero-config multi-server log streamer built with **Elixir/OTP**, **Ratatui (TUI)**, and **Phoenix LiveView**. 
 
-It aggregates and streams real-time logs from multiple remote Linux servers securely over SSH config profiles, without installing any agents on remote hosts. The system utilizes supervised OTP processes, bounded per-source ring buffers, and renders a single interactive application across multiple targets (CLI/TUI and Web Browser).
+It aggregates and streams real-time logs from multiple remote Linux servers securely over SSH config profiles, without installing any agents on remote hosts.
 
 ---
 
 ## 🚀 Features
 
-- **Docker Container Auto-Discovery**: Automatically runs `docker ps` upon connection to discover running Docker containers on the remote host and displays them in a tree structure.
-- **Granular Log Streaming**: Stream logs from specific Docker containers (using `docker logs --follow`) or custom file paths (marked with `📄` next to the whale `🐳` icon) using native tail commands.
-- **Custom File Log Streaming**: Register arbitrary remote log files (e.g., `/var/log/nginx/error.log`) with built-in remote readability checks `[ -r path ]` executed via SSH.
-- **Multi-Server Aggregation**: Automatically discovers SSH connections in `~/.ssh/config` and streams logs using Erlang's native `:ssh` and `:ssh_connection` (no external `ssh` binary required).
-- **Tabbed Settings Modal**: Manage server states (enable, disable, or delete profiles), selectively toggle container logging visibility, and add/remove custom log paths.
-- **Reactive UI & Configuration Store**: Configuration is backed by a zero-latency concurrent ETS table storage. Changes to connection profiles, enabled/disabled servers, or filters instantly hot-swap their corresponding supervisor worker processes.
-- **Multiple Rendering Targets**:
-  - **Local Terminal UI (TUI)**: Fully interactive TUI in your command line.
-  - **Web Mirror (Phoenix LiveView)**: Mirrors the interactive terminal directly to your web browser with a bounded DOM viewport using `PhoenixExRatatui`.
-- **Resilient & Safe**: Bounded ring buffers (1000 lines per source by default) with drop accounting and process-isolated workers. Invalid filter regexes are safely caught without crashing.
-- **Single-Binary Packaging**: Self-extracting executables containing the entire application and the Erlang runtime (no dependency on Elixir/Erlang on the host machine).
+- 🐳 **Real-Time Docker Lifecycle**: Auto-discovers containers on connection and streams `docker events` to track container startup, stops (`die`), destruction, or rebuilds in real-time, auto-resuming log streams seamlessly.
+- 📄 **Granular Log Streaming**: Stream specific containers or custom log paths.
+- 🔗 **Multi-Server Aggregation**: Discovers and connects using SSH profiles in `~/.ssh/config`.
+- 🖥️ **Dual UI Targets**: 
+  - **Local TUI**: Fully interactive Terminal UI.
+  - **Web Mirror**: Mirrors the interactive terminal to your browser using Phoenix LiveView.
+- ⚡ **Event-Driven & Batched Performance**: Eliminates polling by utilizing Phoenix PubSub to drive UI updates reactively, and buffers log streams in worker processes to flush in 100ms batches, minimizing write pressure.
+- 📦 **Single-Binary Packaging**: Self-contained executables (no Elixir/Erlang runtime required on host).
 
 ---
 
 ## 📦 Installation
 
-### Option 1: Quick Install (Recommended)
+### Quick Install (Recommended)
 
-You can download and install the latest pre-compiled single binary of Caudata directly using the following command:
+Run the following command to download and install the pre-compiled binary:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/quaywin/caudata/main/install.sh | sh
 ```
 
-This installer script will:
-1. Detect your Operating System (macOS or Linux) and CPU architecture (`x86_64` or `aarch64`).
-2. Download the appropriate Burrito single-binary release from GitHub.
-3. Install the executable to `/usr/local/bin` (or fall back to `~/.local/bin` if permissions are restricted).
-4. Make it executable (`chmod +x`).
+### Running from Source (Development)
 
-### Option 2: Running from Source (Development)
-
-To run Caudata using the Elixir source code, make sure you have [mise](https://mise.jdx.dev/) installed.
+Requires [mise](https://mise.jdx.dev/).
 
 ```bash
-# Clone the repository
+# Clone and setup
 git clone https://github.com/quaywin/caudata.git
 cd caudata
 
-# Install correct toolchains (Elixir, Erlang, Zig) via mise
+# Install tools & dependencies
 mise install
-
-# Fetch Elixir dependencies
 mise exec -- mix deps.get
 
-# Run Caudata in development mode
+# Run development mode
 mise exec -- mix run --no-halt
 ```
-
-Once started:
-- The TUI will boot directly in your terminal.
-- Access the web UI mirror at [http://localhost:4000](http://localhost:4000).
+- **TUI** starts directly in your terminal.
+- **Web UI Mirror** is available at [http://localhost:4000](http://localhost:4000).
 
 ---
 
-## 🛠️ Keybindings (TUI Control)
+## ⌨️ Keybindings (TUI Control)
 
-When running Caudata's Terminal UI, use the following keybindings to interact with the application:
-
-### Normal Mode (Sidebar & Logs Navigation)
-- `↑` / `↓` or `k` / `j`: Move selection in the sidebar directly between active containers (`🐳`) and custom logs (`📄`) (automatically skips server header titles).
-- `Enter` (in sidebar): Connect to the selected target and start streaming its logs.
-- `a` / `A` / `+`: Open the **Add SSH Connection** modal.
-- `s` / `S`: Open the **Global Settings** modal.
-- `/`: Enter search mode to filter logs in real-time using regular expressions (Regex).
-- `Enter` (in search mode): Apply the active filter and return to navigation mode.
-- `Esc` / `Escape`: Clear active search filter or close open modals.
-- `q` / `Q`: Exit Caudata.
-
-### Add SSH Connection Modal
-- **SSH Config List Selection**:
-  - `↑` / `↓` or `k` / `j`: Navigate through discovered SSH profiles.
-  - `Enter`: Select profile or choose manual configuration.
-- **Manual Input Form**:
-  - `↑` / `↓`: Cycle focus through form fields (Connection Name, Host, Port, User, SSH Key, custom Log Command) and action buttons (Save, Cancel).
-  - `Enter`: Confirm action / submit form.
-  - `Esc`: Return to profile list selection.
-
-### Settings Modal
-- **Tab Switching**: Press `Tab` or `←` / `→` or `h` / `l` to cycle through tabs:
-  - **Servers**: Configure active profiles, view connection status (`● connected`, `◌ connecting`, `○ disconnected`, or `⊘ disabled`), or toggle/delete servers.
-  - **Docker Containers**: Toggle visibility of individual discovered Docker containers.
-  - **Custom Logs**: Register, toggle, or delete arbitrary log paths.
-- **Navigation & Selection**:
-  - `↑` / `↓` or `k` / `j`: Scroll through the list items in the active tab.
-  - `Space`: Toggle the selected item (Enable/disable server, show/hide container, enable/disable custom log).
-  - `a` / `A` (in *Custom Logs* tab): Open a path input box to add a custom log file (automatically runs an SSH remote readability test `[ -r path ]` before saving).
-  - `d` / `D` or `Backspace` (in *Servers* or *Custom Logs* tabs): Delete the selected server connection or custom log path.
-  - `Esc`: Close settings modal.
+| Key | Action |
+| :--- | :--- |
+| `↑` / `↓` (or `k` / `j`) | Navigate sidebar or lists |
+| `Enter` | Connect and start log streaming / Confirm action |
+| `a` / `A` / `+` | Open the **Add SSH Connection** modal |
+| `s` / `S` | Open the **Global Settings** modal |
+| `/` | Enter search mode to filter logs (Regex supported) |
+| `Space` | Toggle options (e.g. enable/disable servers/containers) |
+| `d` / `D` / `Backspace` | Delete selected server connection or custom log path |
+| `Esc` | Clear active search or close modals |
+| `q` / `Q` | Exit Caudata |
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ Configuration & Environment
 
-Caudata automatically manages your configuration inside `~/.caudata/config.db`. This binary database uses Erlang Term Storage (ETS) to ensure zero-latency reads while executing asynchronously saved updates.
-
-Instead of manually editing configuration files, you can manage your connections and options directly inside the application using the **Add SSH Connection** (`a`) and **Settings** (`s`) modals.
-
-### Custom Log Tail Limit
-The log view is backed by bounded ring buffers. By default, it stores the last `1000` lines per stream source to prevent high memory consumption.
+- Configuration is stored at `~/.caudata/config.db` (managed automatically via the UI).
+- Log buffers are capped at `1000` lines per stream to prevent high memory usage.
 
 ### Environment Variables
-
-You can configure the HTTP Web interface:
-
-- `PORT`: HTTP port for Phoenix Web mirror (default: `4000` in prod/dev, `4002` in test).
-- `CAUDATA_IP`: Bind address for the Web server (default: `127.0.0.1`, set to `any` or `0.0.0.0` to allow external connections).
-- `SECRET_KEY_BASE`: Phoenix Session security key (optional, automatically generated if not supplied).
+- `PORT`: Web mirror HTTP port (default: `4000`).
+- `CAUDATA_IP`: Web mirror bind address (default: `127.0.0.1`, set to `0.0.0.0` to allow external access).
 
 ---
 
-## 🗺️ Roadmap / Planned Features
+<details>
+<summary>🛠️ Under the Hood: Safety & SSH Resource Limits (Click to expand)</summary>
 
-- **Collaborative SSH UI Server**: Connect to Caudata securely over SSH to participate in a shared multiplexed terminal session.
-- **Log Archiving**: Export stream buffers to local files or remote S3-compatible object storage.
-- **Advanced Alerts**: Trigger webhooks or notifications when specific log patterns are matched.
-
----
-
-## 🏗️ Building Releases Locally
-
-If you want to package Caudata into a single-binary using Burrito yourself:
-
+### 🛡️ Process Cleanup & Safety
+To prevent orphaned processes on remote servers, Caudata runs streaming commands (like `docker logs`) inside a secure POSIX-compliant wrapper:
 ```bash
-# 1. Install toolchains (make sure zig is installed via mise)
-mise install
-
-# 2. Build for a specific target (e.g. macOS Apple Silicon)
-BURRITO_TARGET=macos_aarch64 mise exec -- mix release --overwrite
-
-# 3. Available targets defined in mix.exs:
-#    - macos_aarch64 (macOS Apple Silicon)
-#    - macos_x86_64  (macOS Intel)
-#    - linux_x86_64  (Linux Intel/AMD)
+sh -c 'docker logs --follow <container> & pid=$!; trap "kill $pid 2>/dev/null" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'
 ```
+- **Active Trapping**: Sends EOF on channel close to terminate remote processes cleanly.
+- **Abrupt Disconnections**: Laptop sleep or network drops will trigger the trap and kill the `docker logs` process.
 
-The output executables will be compiled and saved to `burrito_out/`.
+### 🔌 SSH Channel Limits & GC
+Most SSH servers limit concurrent active channels (usually 10). Caudata implements an **automatic Least Recently Used (LRU) channel garbage collector**:
+- When active channels reach **8**, opening a new stream will automatically terminate the oldest inactive stream first to prevent connection errors.
+
+### 🔄 Real-Time Container Rebuilds
+Caudata monitors container state changes dynamically using a remote event stream:
+- **`docker events` Tracking**: Streams container lifecycle events (`start`, `die`, `destroy`) in JSON format.
+- **Seamless Rebuild Recovery**: When a container is recreated or restarted (rebuilt with a new ID but the same name), Caudata automatically shifts the active logging worker's connection to the new container ID and resumes the log stream seamlessly, ensuring zero manual reconnection effort.
+
+### ⚡ Batching & Event-Driven Rendering
+To keep CPU/IO footprint low even with high-throughput logs:
+- **Log Buffering**: Rather than writing each incoming chunk to the database immediately, worker processes buffer log streams and perform batched flushes every 100ms.
+- **PubSub-Driven UI**: Polling of the local state cache has been replaced with Phoenix PubSub subscriptions. The UI only redraws and fetches logs when notified of change events (e.g., `:logs_updated` or `:status_updated`).
+</details>
 
 ---
 
-## 🧪 Testing
+## 🏗️ Development & Testing
 
-Run the full Elixir unit test suite:
+### Building Releases
+To package Caudata into a single-binary using Burrito:
+```bash
+BURRITO_TARGET=macos_aarch64 mise exec -- mix release --overwrite
+```
+*(Available targets: `macos_aarch64`, `macos_x86_64`, `linux_x86_64`)*
 
+### Testing
 ```bash
 mise exec -- mix test
 ```
 
-## 🤝 Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to get started and our [Code of Conduct](CODE_OF_CONDUCT.md).
+---
 
 ## 📄 License
 

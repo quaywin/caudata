@@ -18,6 +18,12 @@ defmodule Caudata.UI.App do
     # Start the tick timer
     {:ok, _} = :timer.send_interval(100, :tick)
 
+    # Subscribe to static updates if PubSub is running
+    if Process.whereis(Caudata.PubSub) do
+      Phoenix.PubSub.subscribe(Caudata.PubSub, "config:profiles")
+      Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+    end
+
     width = Keyword.get(opts, :width, 80)
     height = Keyword.get(opts, :height, 24)
 
@@ -79,8 +85,14 @@ defmodule Caudata.UI.App do
       settings_custom_log_idx: 0,
       settings_input_active: false,
       settings_input_value: "",
-      settings_status_msg: nil
+      settings_status_msg: nil,
+      logs_dirty: true
     }
+
+    state = adjust_log_subscription(nil, state)
+
+    # Asynchronously bootstrap state from running servers
+    send(self(), :bootstrap)
 
     {:ok, state}
   end
@@ -115,13 +127,13 @@ defmodule Caudata.UI.App do
 
     case KeyHandler.handle_key_event(key_data, state) do
       {new_state, []} ->
-        {:noreply, new_state}
+        {:noreply, adjust_log_subscription(state, new_state)}
 
       {new_state, [{:command, :quit}]} ->
         {:stop, new_state}
 
       {new_state, _other_commands} ->
-        {:noreply, new_state}
+        {:noreply, adjust_log_subscription(state, new_state)}
     end
   end
 
@@ -132,10 +144,9 @@ defmodule Caudata.UI.App do
   @impl true
   def handle_info(message, state) do
     case message do
-      :tick ->
-        profiles = Caudata.ConfigManager.list_profiles()
+      :bootstrap ->
+        profiles = state.profiles
 
-        # Get statuses and containers from supervisor/worker registry
         {statuses, containers} =
           Enum.reduce(profiles, {%{}, %{}}, fn p, {status_acc, containers_acc} ->
             case Caudata.ServerSupervisor.lookup_worker(p.id) do
@@ -149,36 +160,34 @@ defmodule Caudata.UI.App do
             end
           end)
 
-        # If the currently selected container is disabled, reset selection
-        selected_container_id =
-          case Enum.find(profiles, &(&1.id == state.selected_profile_id)) do
-            nil ->
-              state.selected_container_id
+        {sizes, drops} =
+          if state.selected_profile_id && Process.whereis(Caudata.LogStore) do
+            stats = Caudata.LogStore.get_stats(state.selected_profile_id)
 
-            profile ->
-              if state.selected_container_id &&
-                   (state.selected_container_id in profile.disabled_containers or
-                      (case Enum.find(
-                              Map.get(containers, profile.id, []),
-                              &(&1.id == state.selected_container_id)
-                            ) do
-                         nil -> false
-                         c -> c.name in profile.disabled_containers
-                       end)) do
-                nil
-              else
-                state.selected_container_id
-              end
+            {Map.put(%{}, state.selected_profile_id, stats.size),
+             Map.put(%{}, state.selected_profile_id, stats.drop_count)}
+          else
+            {%{}, %{}}
           end
 
+        {:noreply,
+         %{
+           state
+           | statuses: statuses,
+             containers: containers,
+             buffer_sizes: Map.merge(state.buffer_sizes, sizes),
+             drop_counts: Map.merge(state.drop_counts, drops)
+         }}
+
+      :tick ->
         # Get the enabled containers for the selected profile
         enabled_conts_for_profile =
-          case Enum.find(profiles, &(&1.id == state.selected_profile_id)) do
+          case Enum.find(state.profiles, &(&1.id == state.selected_profile_id)) do
             nil ->
               []
 
             profile ->
-              Map.get(containers, profile.id, [])
+              Map.get(state.containers, profile.id, [])
               |> Enum.filter(fn c ->
                 c.id not in profile.disabled_containers and
                   c.name not in profile.disabled_containers
@@ -187,7 +196,7 @@ defmodule Caudata.UI.App do
 
         # Auto-select first container of selected profile if none selected
         {selected_container_id, logs_scroll_y} =
-          if is_nil(selected_container_id) and state.selected_profile_id do
+          if is_nil(state.selected_container_id) and state.selected_profile_id do
             case enabled_conts_for_profile do
               [first_container | _] ->
                 case Caudata.ServerSupervisor.lookup_worker(state.selected_profile_id) do
@@ -202,29 +211,16 @@ defmodule Caudata.UI.App do
                 {first_container.id, :bottom}
 
               _ ->
-                {selected_container_id, state.logs_scroll_y}
+                {state.selected_container_id, state.logs_scroll_y}
             end
           else
-            {selected_container_id, state.logs_scroll_y}
+            {state.selected_container_id, state.logs_scroll_y}
           end
 
-        # Get statistics for all profiles/containers
-        {sizes, drops} =
-          Enum.reduce(profiles, {%{}, %{}}, fn p, {sz_acc, dr_acc} ->
-            source_id =
-              if state.selected_profile_id == p.id and selected_container_id do
-                "#{p.id}/#{selected_container_id}"
-              else
-                p.id
-              end
-
-            stats = Caudata.LogStore.get_stats(source_id)
-            {Map.put(sz_acc, p.id, stats.size), Map.put(dr_acc, p.id, stats.drop_count)}
-          end)
-
-        # If logs are not frozen, fetch latest snapshot from LogStore
-        new_logs =
-          if state.selected_profile_id && not state.freeze do
+        # If logs are dirty or we are loading history, fetch latest snapshot from LogStore
+        {new_logs, logs_dirty} =
+          if state.selected_profile_id && not state.freeze &&
+               (state.logs_dirty or state.loading_history) do
             source_id =
               if selected_container_id do
                 "#{state.selected_profile_id}/#{selected_container_id}"
@@ -232,9 +228,14 @@ defmodule Caudata.UI.App do
                 state.selected_profile_id
               end
 
-            Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, state.logs_fetch_limit)
+            if Process.whereis(Caudata.LogStore) do
+              {Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, state.logs_fetch_limit),
+               false}
+            else
+              {state.logs, false}
+            end
           else
-            state.logs
+            {state.logs, state.logs_dirty}
           end
 
         # Handle loading_history state machine transitions to avoid flashing/jumping:
@@ -267,43 +268,101 @@ defmodule Caudata.UI.App do
                 {state.logs, true, logs_scroll_y}
             end
           else
-            drop_diff =
-              if state.selected_profile_id do
-                old_drop = Map.get(state.drop_counts, state.selected_profile_id, 0)
-                new_drop = Map.get(drops, state.selected_profile_id, 0)
-                max(0, new_drop - old_drop)
-              else
-                0
-              end
-
-            adjusted_scroll =
-              case logs_scroll_y do
-                :bottom -> :bottom
-                val when is_integer(val) -> max(0, val - drop_diff)
-              end
-
-            {new_logs, false, adjusted_scroll}
+            {new_logs, false, logs_scroll_y}
           end
 
         new_state = %{
           state
-          | profiles: profiles,
-            statuses: statuses,
-            containers: containers,
+          | selected_container_id: selected_container_id,
             logs: logs,
-            selected_container_id: selected_container_id,
             logs_scroll_y: scroll_y,
             loading_history: loading_history,
             loading_history_ticks: loading_ticks,
-            buffer_sizes: sizes,
-            drop_counts: drops
+            logs_dirty: logs_dirty
         }
+
+        {:noreply, adjust_log_subscription(state, new_state)}
+
+      {:profiles_updated, all_profiles} ->
+        {:noreply, %{state | profiles: all_profiles}}
+
+      {:status_updated, server_id, status} ->
+        new_containers =
+          if status == :disconnected do
+            Map.put(state.containers, server_id, [])
+          else
+            state.containers
+          end
+
+        {:noreply,
+         %{
+           state
+           | statuses: Map.put(state.statuses, server_id, status),
+             containers: new_containers
+         }}
+
+      {:containers_updated, server_id, containers} ->
+        {:noreply, %{state | containers: Map.put(state.containers, server_id, containers)}}
+
+      {:container_rebuilt, server_id, old_id, new_id} ->
+        new_state =
+          if state.selected_profile_id == server_id && state.selected_container_id == old_id do
+            state = %{state | selected_container_id: new_id}
+            adjust_log_subscription(state, state)
+          else
+            state
+          end
+
+        {:noreply, new_state}
+
+      {:logs_updated, source_id, %{size: size, drop_count: drops}} ->
+        profile_id = state.selected_profile_id
+
+        new_scroll =
+          if source_id == current_source_id(state) do
+            old_drop = Map.get(state.drop_counts, profile_id, 0)
+            drop_diff = max(0, drops - old_drop)
+
+            case state.logs_scroll_y do
+              :bottom -> :bottom
+              val when is_integer(val) -> max(0, val - drop_diff)
+            end
+          else
+            state.logs_scroll_y
+          end
+
+        new_state = %{
+          state
+          | buffer_sizes: Map.put(state.buffer_sizes, profile_id, size),
+            drop_counts: Map.put(state.drop_counts, profile_id, drops),
+            logs_scroll_y: new_scroll,
+            logs_dirty: true
+        }
+
+        {:noreply, new_state}
+
+      {:logs_cleared, source_id} ->
+        profile_id = state.selected_profile_id
+
+        new_state =
+          if source_id == current_source_id(state) do
+            %{
+              state
+              | logs: [],
+                buffer_sizes: Map.put(state.buffer_sizes, profile_id, 0),
+                drop_counts: Map.put(state.drop_counts, profile_id, 0),
+                logs_scroll_y: :bottom,
+                logs_dirty: false
+            }
+          else
+            state
+          end
 
         {:noreply, new_state}
 
       {:select_profile, profile_id} ->
         {new_state, []} = KeyHandler.select_item({:server, profile_id}, state)
-        {:noreply, new_state}
+        {:noreply, adjust_log_subscription(state, new_state)}
 
       {:validation_result, server_id, path, result} ->
         profile = Enum.find(state.profiles, &(&1.id == server_id))
@@ -374,7 +433,7 @@ defmodule Caudata.UI.App do
         {new_state, []} =
           KeyHandler.select_item({:container, server_id, container_id, nil}, state)
 
-        {:noreply, new_state}
+        {:noreply, adjust_log_subscription(state, new_state)}
 
       {:update_filter, value} ->
         # Regex compile safety check
@@ -414,6 +473,39 @@ defmodule Caudata.UI.App do
     end
 
     :ok
+  end
+
+  defp adjust_log_subscription(old_state, new_state) do
+    old_source = if old_state, do: current_source_id(old_state), else: nil
+    new_source = current_source_id(new_state)
+
+    if old_source != new_source do
+      if old_source && Process.whereis(Caudata.PubSub) do
+        Phoenix.PubSub.unsubscribe(Caudata.PubSub, "logs:#{old_source}")
+      end
+
+      if new_source && Process.whereis(Caudata.PubSub) do
+        Phoenix.PubSub.subscribe(Caudata.PubSub, "logs:#{new_source}")
+      end
+
+      # Force log fetch on source change
+      %{new_state | logs_dirty: true}
+    else
+      new_state
+    end
+  end
+
+  defp current_source_id(state) do
+    cond do
+      state.selected_profile_id && state.selected_container_id ->
+        "#{state.selected_profile_id}/#{state.selected_container_id}"
+
+      state.selected_profile_id ->
+        state.selected_profile_id
+
+      true ->
+        nil
+    end
   end
 
   @impl true

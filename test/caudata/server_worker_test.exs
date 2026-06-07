@@ -43,7 +43,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_server_log_channel,
-                        "sh -c 'tail -F /var/log/test & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -F /var/log/test & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:open_channel, fn :dummy_conn ->
@@ -51,7 +51,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel,
-                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_log_channel ->
@@ -154,7 +154,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_server_log_channel,
-                        "sh -c 'tail -F /var/log/messages & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_server_log_channel ->
@@ -164,7 +164,7 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_log_channel} end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel,
-                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Reconnect attempt starts:
@@ -182,7 +182,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn2,
                         :dummy_server_log_channel2,
-                        "sh -c 'tail -F /var/log/messages & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Cleanup calls
@@ -258,7 +258,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_server_log_channel,
-                        "sh -c 'tail -F /var/log/messages & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Refresh 1:
@@ -356,7 +356,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_server_log_channel,
-                        "sh -c 'tail -F /var/log/messages & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_server_log_channel ->
@@ -366,7 +366,7 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_log_channel} end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel,
-                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Reconnect attempt starts:
@@ -385,7 +385,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn2,
                         :dummy_log_channel2,
-                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Cleanup calls
@@ -467,7 +467,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_server_log_channel,
-                        "sh -c 'tail -F /var/log/messages & pid=$!; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Validation channel expectations
@@ -600,6 +600,243 @@ defmodule Caudata.ServerWorkerTest do
     # Check if container 1 logs were closed
     assert_receive :closed_container_1, 1000
     assert %{streaming?: false} = Caudata.ContainerWorker.get_streaming_status(pid1)
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "auto-reconnects logs stream when container is rebuilt (docker events)" do
+    profile =
+      Profile.new(%{
+        host_pattern: "rebuild-server",
+        host_name: "10.0.0.5",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    # Mox expectations
+    Mock
+    |> expect(:connect, fn "10.0.0.5", 22, _ -> {:ok, :dummy_conn} end)
+    # 1. Docker ps channel
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_list_channel)
+      {:ok, :dummy_list_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
+      :ok
+    end)
+    # 2. Server log channel (opened on connect)
+    |> expect(:open_channel, fn :dummy_conn ->
+      {:ok, :dummy_server_log_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_server_log_channel,
+                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+      :ok
+    end)
+    # 3. Docker events channel (opened after list channel closes)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_events_channel)
+      {:ok, :dummy_events_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_events_channel, cmd ->
+      assert String.starts_with?(cmd, "docker events")
+      :ok
+    end)
+    # 4. Stream logs for container1 (initial)
+    |> expect(:open_channel, fn :dummy_conn ->
+      {:ok, :dummy_log_channel_1}
+    end)
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_log_channel_1,
+                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+      :ok
+    end)
+    # 5. Stream logs for container2 (after rebuild)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_log_channel_2)
+      {:ok, :dummy_log_channel_2}
+    end)
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_log_channel_2,
+                        "sh -c 'docker logs --follow --tail 100 container2 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+      :ok
+    end)
+    # 6. Cleanup calls
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    # Sub to PubSub
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    # Start ServerWorker with enable_events: true
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: true}})
+
+    # Wait for connection setup to open list channel
+    assert_receive :opened_list_channel, 1000
+
+    # Bootstrap the container list
+    send(
+      worker_pid,
+      {:ssh_cm, :dummy_conn,
+       {:data, :dummy_list_channel, 0,
+        "{\"ID\":\"container1\",\"Names\":\"test-container\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n"}}
+    )
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_list_channel}})
+
+    assert_receive {:status_updated, "rebuild-server", :connected}, 1000
+    assert_receive :opened_events_channel, 1000
+
+    # Start streaming container1
+    assert :ok = GenServer.call(worker_pid, {:stream_container_logs, "container1"})
+
+    # Simulate container1 going down (die -> destroy)
+    die_event =
+      "{\"status\":\"die\",\"id\":\"container1\",\"Actor\":{\"Attributes\":{\"name\":\"test-container\"}}}\n"
+
+    destroy_event =
+      "{\"status\":\"destroy\",\"id\":\"container1\",\"Actor\":{\"Attributes\":{\"name\":\"test-container\"}}}\n"
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, die_event}})
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, destroy_event}})
+
+    # Wait for status sync
+    Process.sleep(50)
+
+    # Now container2 starts (rebuilt)
+    start_event =
+      "{\"status\":\"start\",\"id\":\"container2\",\"Actor\":{\"Attributes\":{\"name\":\"test-container\",\"image\":\"nginx\"}}}\n"
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, start_event}})
+
+    # We expect to receive :opened_log_channel_2 as it auto-reconnects logs stream
+    assert_receive :opened_log_channel_2, 1000
+
+    # Verify that the active container has been updated to container2 in ServerWorker
+    assert ServerWorker.get_containers(worker_pid) |> Enum.find(&(&1.id == "container2"))
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "auto-reconnects logs stream when container stops and starts again with same ID (docker events)" do
+    profile =
+      Profile.new(%{
+        host_pattern: "restart-server",
+        host_name: "10.0.0.6",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    # Mox expectations
+    Mock
+    |> expect(:connect, fn "10.0.0.6", 22, _ -> {:ok, :dummy_conn} end)
+    # 1. Docker ps channel
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_list_channel)
+      {:ok, :dummy_list_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
+      :ok
+    end)
+    # 2. Server log channel (opened on connect)
+    |> expect(:open_channel, fn :dummy_conn ->
+      {:ok, :dummy_server_log_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_server_log_channel,
+                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+      :ok
+    end)
+    # 3. Docker events channel (opened after list channel closes)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_events_channel)
+      {:ok, :dummy_events_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_events_channel, cmd ->
+      assert String.starts_with?(cmd, "docker events")
+      :ok
+    end)
+    # 4. Stream logs for container1 (initial)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_log_channel_1)
+      {:ok, :dummy_log_channel_1}
+    end)
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_log_channel_1,
+                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+      :ok
+    end)
+    # 5. Stream logs for container1 (after restart, same ID)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_log_channel_1_again)
+      {:ok, :dummy_log_channel_1_again}
+    end)
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_log_channel_1_again,
+                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+      :ok
+    end)
+    # 6. Cleanup calls
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    # Sub to PubSub
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    # Start ServerWorker with enable_events: true
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: true}})
+
+    # Wait for connection setup to open list channel
+    assert_receive :opened_list_channel, 1000
+
+    # Bootstrap the container list
+    send(
+      worker_pid,
+      {:ssh_cm, :dummy_conn,
+       {:data, :dummy_list_channel, 0,
+        "{\"ID\":\"container1\",\"Names\":\"test-container\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n"}}
+    )
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_list_channel}})
+
+    assert_receive {:status_updated, "restart-server", :connected}, 1000
+    assert_receive :opened_events_channel, 1000
+
+    # Start streaming container1
+    assert :ok = GenServer.call(worker_pid, {:stream_container_logs, "container1"})
+    assert_receive :opened_log_channel_1, 1000
+
+    # Simulate container1 stopping (die only, ID remains container1)
+    die_event =
+      "{\"status\":\"die\",\"id\":\"container1\",\"Actor\":{\"Attributes\":{\"name\":\"test-container\"}}}\n"
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, die_event}})
+
+    # Wait for status sync
+    Process.sleep(50)
+
+    # Verify container is marked exited
+    assert ServerWorker.get_containers(worker_pid)
+           |> Enum.find(&(&1.id == "container1" && &1.status == "Exited"))
+
+    # Now container1 starts again (restart)
+    start_event =
+      "{\"status\":\"start\",\"id\":\"container1\",\"Actor\":{\"Attributes\":{\"name\":\"test-container\",\"image\":\"nginx\"}}}\n"
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, start_event}})
+
+    # We expect to receive :opened_log_channel_1_again as it auto-reconnects logs stream
+    assert_receive :opened_log_channel_1_again, 1000
+
+    # Verify that the active container status is back to running
+    assert ServerWorker.get_containers(worker_pid)
+           |> Enum.find(&(&1.id == "container1" && &1.status == "Up"))
 
     stop_supervised(ServerWorker)
   end

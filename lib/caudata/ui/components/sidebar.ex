@@ -1,103 +1,86 @@
 defmodule Caudata.UI.Components.Sidebar do
   @moduledoc """
-  Renders the server sidebar panel and handles its keyboard navigation events.
+  Renders the server sidebar panel split into 4 boxes, and handles its keyboard navigation events.
+  Delegates individual box rendering to sub-components.
   """
-  alias ExRatatui.Style
-  alias ExRatatui.Text.Line
-  alias ExRatatui.Text.Span
-  alias ExRatatui.Widgets.Block
-  alias ExRatatui.Widgets.Paragraph
+  alias ExRatatui.Layout
 
   alias Caudata.UI.ViewHelper
+  alias Caudata.UI.Components.Sidebar.{ServerList, ContainerList, ContainerInfo, ServerMetrics}
 
   @doc """
-  Renders the sidebar widget populated with connection profiles and active containers.
+  Renders the 4 vertical boxes inside the sidebar area by delegating to sub-components.
+  Returns a list of `{widget, area}` tuples.
   """
-  def render(state) do
-    # Sidebar items
-    sidebar_lines =
-      Enum.flat_map(state.profiles, fn profile ->
-        status =
-          if Map.get(profile, :enabled, true) do
-            Map.get(state.statuses, profile.id, :disconnected)
-          else
-            :disabled
-          end
+  def render(state, sidebar_area) do
+    # Determine the vertical heights based on overall height
+    h = sidebar_area.height
 
-        status_color = ViewHelper.status_color(status)
+    {h1, h3, h4} =
+      cond do
+        h >= 30 -> {8, 7, 7}
+        h >= 24 -> {6, 6, 6}
+        h >= 18 -> {5, 5, 5}
+        true -> {4, 4, 4}
+      end
 
-        status_icon =
-          case status do
-            :connected -> "● "
-            :connecting -> "◌ "
-            :disabled -> "⊘ "
-            _ -> "○ "
-          end
+    [box1_area, box2_area, box3_area, box4_area] =
+      Layout.split(sidebar_area, :vertical, [
+        {:length, h1},
+        {:min, 0},
+        {:length, h3},
+        {:length, h4}
+      ])
 
-        server_row =
-          Line.new([
-            Span.new("  "),
-            Span.new(status_icon, style: %Style{fg: status_color}),
-            Span.new(profile.id,
-              style: %Style{fg: if(status == :disabled, do: :dark_gray, else: :white)}
-            )
-          ])
-
-        containers = Map.get(state.containers, profile.id, [])
-
-        enabled_containers =
-          Enum.filter(containers, fn c ->
-            c.id not in profile.disabled_containers and c.name not in profile.disabled_containers
-          end)
-
-        container_rows =
-          Enum.with_index(enabled_containers)
-          |> Enum.map(fn {container, idx} ->
-            is_last = idx == length(enabled_containers) - 1
-            branch = if is_last, do: "└── ", else: "├── "
-
-            container_selected =
-              state.selected_profile_id == profile.id &&
-                state.selected_container_id == container.id
-
-            c_prefix = if container_selected, do: "> ", else: "  "
-            c_color = if container_selected, do: :green, else: :white
-
-            is_file = container.image == "file" or String.starts_with?(container.id, "file:")
-            icon = if is_file, do: "📄 ", else: "🐳 "
-            icon_color = if is_file, do: :yellow, else: :cyan
-
-            Line.new([
-              Span.new(c_prefix),
-              Span.new("  " <> branch, style: %Style{fg: c_color}),
-              Span.new(icon, style: %Style{fg: icon_color}),
-              Span.new(container.name, style: %Style{fg: c_color})
-            ])
-          end)
-
-        [server_row | container_rows]
-      end)
-
-    %Paragraph{
-      text: sidebar_lines,
-      block: %Block{
-        title: " Servers ",
-        borders: [:all],
-        border_type: :rounded
-      }
-    }
+    [
+      ServerList.render(state, box1_area),
+      ContainerList.render(state, box2_area),
+      ContainerInfo.render(state, box3_area),
+      ServerMetrics.render(state, box4_area)
+    ]
   end
 
   @doc """
   Handles navigation key events for the sidebar.
   """
   def handle_key(key, _key_data, model) do
+    focus = Map.get(model, :sidebar_focus, :servers)
+
     case key do
       :up ->
-        select_prev_item(model)
+        if focus == :containers do
+          select_prev_container(model)
+        else
+          select_prev_server(model)
+        end
 
       :down ->
-        select_next_item(model)
+        if focus == :containers do
+          select_next_container(model)
+        else
+          select_next_server(model)
+        end
+
+      :tab ->
+        new_focus = if focus == :containers, do: :servers, else: :containers
+        new_model = %{model | sidebar_focus: new_focus}
+
+        if new_focus == :containers and is_nil(new_model.selected_container_id) do
+          case get_enabled_containers_for_profile(new_model, new_model.selected_profile_id) do
+            [first_container | _] ->
+              select_container(
+                new_model.selected_profile_id,
+                first_container.id,
+                first_container.name,
+                new_model
+              )
+
+            _ ->
+              {new_model, []}
+          end
+        else
+          {new_model, []}
+        end
 
       :enter ->
         if model.selected_profile_id do
@@ -147,6 +130,87 @@ defmodule Caudata.UI.Components.Sidebar do
   def select_item(item, model) do
     case item do
       {:server, server_id} ->
+        select_server(server_id, model)
+
+      {:container, server_id, container_id, name} ->
+        select_container(server_id, container_id, name, model)
+    end
+  end
+
+  @doc """
+  Selects the next visible item down in the sidebar tree.
+  """
+  def select_next_item(model) do
+    focus = Map.get(model, :sidebar_focus, :servers)
+
+    if focus == :containers do
+      select_next_container(model)
+    else
+      select_next_server(model)
+    end
+  end
+
+  @doc """
+  Selects the previous visible item up in the sidebar tree.
+  """
+  def select_prev_item(model) do
+    focus = Map.get(model, :sidebar_focus, :servers)
+
+    if focus == :containers do
+      select_prev_container(model)
+    else
+      select_prev_server(model)
+    end
+  end
+
+  # Helpers for Servers list selection
+
+  def select_next_server(model) do
+    profiles = model.profiles
+
+    if profiles != [] do
+      current_idx = Enum.find_index(profiles, &(&1.id == model.selected_profile_id))
+      next_idx = if current_idx, do: min(current_idx + 1, length(profiles) - 1), else: 0
+      next_profile = Enum.at(profiles, next_idx)
+
+      select_server(next_profile.id, model)
+    else
+      {model, []}
+    end
+  end
+
+  def select_prev_server(model) do
+    profiles = model.profiles
+
+    if profiles != [] do
+      current_idx = Enum.find_index(profiles, &(&1.id == model.selected_profile_id))
+      prev_idx = if current_idx, do: max(current_idx - 1, 0), else: 0
+      prev_profile = Enum.at(profiles, prev_idx)
+
+      select_server(prev_profile.id, model)
+    else
+      {model, []}
+    end
+  end
+
+  def select_server(server_id, model) do
+    containers = Map.get(model.containers, server_id, [])
+    profile = Enum.find(model.profiles, &(&1.id == server_id))
+
+    enabled_containers =
+      if profile do
+        Enum.filter(containers, fn c ->
+          c.id not in profile.disabled_containers and c.name not in profile.disabled_containers
+        end)
+      else
+        []
+      end
+
+    case enabled_containers do
+      [first_container | _] ->
+        select_container(server_id, first_container.id, first_container.name, model)
+
+      _ ->
         {%{
            model
            | selected_profile_id: server_id,
@@ -158,92 +222,91 @@ defmodule Caudata.UI.Components.Sidebar do
              loading_history_ticks: 0,
              logs_len_before_history_load: 0
          }, []}
-
-      {:container, server_id, container_id, _name} ->
-        case Caudata.ServerSupervisor.lookup_worker(server_id) do
-          {:ok, pid} ->
-            Task.start(fn ->
-              GenServer.call(pid, {:stream_container_logs, container_id})
-            end)
-
-            :ok
-
-          _ ->
-            :ok
-        end
-
-        source_id = "#{server_id}/#{container_id}"
-        logs = Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, 1000)
-
-        {%{
-           model
-           | selected_profile_id: server_id,
-             selected_container_id: container_id,
-             logs: logs,
-             logs_scroll_y: :bottom,
-             logs_fetch_limit: 1000,
-             loading_history: false,
-             loading_history_ticks: 0,
-             logs_len_before_history_load: 0
-         }, []}
     end
   end
 
-  @doc """
-  Selects the next visible item down in the sidebar tree.
-  """
-  def select_next_item(model) do
-    items = list_visible_items(model)
+  # Helpers for Containers list selection
 
-    if items != [] do
-      current_item =
-        if model.selected_container_id do
-          Enum.find(items, fn
-            {:container, s_id, c_id, _name} ->
-              s_id == model.selected_profile_id and c_id == model.selected_container_id
-          end)
-        else
-          nil
-        end
+  def select_next_container(model) do
+    containers = get_enabled_containers_for_profile(model, model.selected_profile_id)
 
-      index = Enum.find_index(items, &(&1 == current_item))
-      next_index = if index, do: min(index + 1, length(items) - 1), else: 0
+    if containers != [] do
+      current_idx = Enum.find_index(containers, &(&1.id == model.selected_container_id))
+      next_idx = if current_idx, do: min(current_idx + 1, length(containers) - 1), else: 0
+      next_container = Enum.at(containers, next_idx)
 
-      case Enum.at(items, next_index) do
-        nil -> {model, []}
-        item -> select_item(item, model)
-      end
+      select_container(
+        model.selected_profile_id,
+        next_container.id,
+        next_container.name,
+        model
+      )
     else
       {model, []}
     end
   end
 
-  @doc """
-  Selects the previous visible item up in the sidebar tree.
-  """
-  def select_prev_item(model) do
-    items = list_visible_items(model)
+  def select_prev_container(model) do
+    containers = get_enabled_containers_for_profile(model, model.selected_profile_id)
 
-    if items != [] do
-      current_item =
-        if model.selected_container_id do
-          Enum.find(items, fn
-            {:container, s_id, c_id, _name} ->
-              s_id == model.selected_profile_id and c_id == model.selected_container_id
-          end)
-        else
-          nil
-        end
+    if containers != [] do
+      current_idx = Enum.find_index(containers, &(&1.id == model.selected_container_id))
+      prev_idx = if current_idx, do: max(current_idx - 1, 0), else: 0
+      prev_container = Enum.at(containers, prev_idx)
 
-      index = Enum.find_index(items, &(&1 == current_item))
-      prev_index = if index, do: max(index - 1, 0), else: 0
-
-      case Enum.at(items, prev_index) do
-        nil -> {model, []}
-        item -> select_item(item, model)
-      end
+      select_container(
+        model.selected_profile_id,
+        prev_container.id,
+        prev_container.name,
+        model
+      )
     else
       {model, []}
+    end
+  end
+
+  def select_container(server_id, container_id, _container_name, model) do
+    case Caudata.ServerSupervisor.lookup_worker(server_id) do
+      {:ok, pid} ->
+        Task.start(fn ->
+          GenServer.call(pid, {:stream_container_logs, container_id})
+        end)
+
+        :ok
+
+      _ ->
+        :ok
+    end
+
+    source_id = "#{server_id}/#{container_id}"
+    logs = Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, 1000)
+
+    {%{
+       model
+       | selected_profile_id: server_id,
+         selected_container_id: container_id,
+         logs: logs,
+         logs_scroll_y: :bottom,
+         logs_fetch_limit: 1000,
+         loading_history: false,
+         loading_history_ticks: 0,
+         logs_len_before_history_load: 0
+     }, []}
+  end
+
+  # Helper functions
+
+  defp get_enabled_containers_for_profile(model, profile_id) do
+    case Enum.find(model.profiles, &(&1.id == profile_id)) do
+      nil ->
+        []
+
+      profile ->
+        containers = Map.get(model.containers, profile_id, [])
+
+        Enum.filter(containers, fn c ->
+          c.id not in profile.disabled_containers and c.name not in profile.disabled_containers
+        end)
     end
   end
 end

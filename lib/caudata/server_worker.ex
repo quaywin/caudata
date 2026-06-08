@@ -26,6 +26,10 @@ defmodule Caudata.ServerWorker do
     :tail_limit,
     :events_channel_id,
     :enable_events,
+    :metrics_channel_id,
+    :enable_metrics,
+    :metrics,
+    metrics_buffer: "",
     events_buffer: "",
     validation_channels: %{}
   ]
@@ -60,6 +64,17 @@ defmodule Caudata.ServerWorker do
     end
   end
 
+  @doc """
+  Gets the current metrics of the server.
+  """
+  def get_metrics(pid) do
+    try do
+      GenServer.call(pid, :get_metrics, 100)
+    catch
+      :exit, _ -> nil
+    end
+  end
+
   # GenServer Callbacks
 
   @impl true
@@ -91,7 +106,11 @@ defmodule Caudata.ServerWorker do
       events_channel_id: nil,
       enable_events: Keyword.get(opts, :enable_events, Mix.env() != :test),
       events_buffer: "",
-      validation_channels: %{}
+      validation_channels: %{},
+      metrics_channel_id: nil,
+      metrics_buffer: "",
+      enable_metrics: Keyword.get(opts, :enable_metrics, Mix.env() != :test),
+      metrics: nil
     }
 
     # Broadcast initial connecting status
@@ -111,6 +130,11 @@ defmodule Caudata.ServerWorker do
   @impl true
   def handle_call(:get_containers, _from, state) do
     {:reply, state.containers, state}
+  end
+
+  @impl true
+  def handle_call(:get_metrics, _from, state) do
+    {:reply, state.metrics, state}
   end
 
   @impl true
@@ -401,6 +425,8 @@ defmodule Caudata.ServerWorker do
                 {:error, _reason, new_state} -> new_state
               end
 
+            state = start_metrics_streaming(state)
+
             {:noreply, state}
         end
 
@@ -430,6 +456,8 @@ defmodule Caudata.ServerWorker do
             {:ok, new_state} -> new_state
             {:error, _reason, new_state} -> new_state
           end
+
+        state = start_metrics_streaming(state)
 
         {:noreply, state}
     end
@@ -483,6 +511,12 @@ defmodule Caudata.ServerWorker do
         {lines, new_events_buffer} = process_chunk(chunk_str, state.events_buffer)
         state = Enum.reduce(lines, state, &handle_docker_event/2)
         {:noreply, %{state | events_buffer: new_events_buffer}}
+
+      conn_ref == state.conn_ref && channel_id == state.metrics_channel_id ->
+        chunk_str = to_string(chunk)
+        {lines, new_metrics_buffer} = process_chunk(chunk_str, state.metrics_buffer)
+        state = Enum.reduce(lines, state, &handle_metrics_line/2)
+        {:noreply, %{state | metrics_buffer: new_metrics_buffer}}
 
       true ->
         {:noreply, state}
@@ -603,11 +637,16 @@ defmodule Caudata.ServerWorker do
           end
 
         state = start_docker_events_listener(state)
+        state = start_metrics_streaming(state)
         {:noreply, state}
 
       conn_ref == state.conn_ref && channel_id == state.channel_id ->
         Logger.info("SSH Channel closed for server logs")
         handle_disconnect(state, "Channel closed")
+
+      conn_ref == state.conn_ref && channel_id == state.metrics_channel_id ->
+        Logger.info("SSH Channel closed for metrics on #{state.profile.id}")
+        {:noreply, %{state | metrics_channel_id: nil}}
 
       conn_ref == state.conn_ref && channel_id == conn_ref ->
         Logger.info("SSH Connection closed for #{state.profile.id}")
@@ -675,6 +714,7 @@ defmodule Caudata.ServerWorker do
     # 2. Close parent worker's SSH channels cleanly
     state = close_ssh_log_channel(state)
     state = close_list_channel(state)
+    state = close_metrics_channel(state)
 
     # 3. Stop SSH connection task and await its termination (closes the actual SSH connection)
     if state.conn_task_pid do
@@ -727,6 +767,7 @@ defmodule Caudata.ServerWorker do
     state = close_ssh_log_channel(state)
     state = close_list_channel(state)
     state = close_events_channel(state)
+    state = close_metrics_channel(state)
 
     # Stop all container streams
     Enum.each(state.container_pids, fn {_id, pid} ->
@@ -865,6 +906,190 @@ defmodule Caudata.ServerWorker do
     else
       state
     end
+  end
+
+  defp close_metrics_channel(state) do
+    if state.metrics_channel_id && state.conn_ref do
+      state.ssh_client.close_channel(state.conn_ref, state.metrics_channel_id)
+    end
+
+    %{state | metrics_channel_id: nil, metrics_buffer: "", metrics: nil}
+  end
+
+  defp start_metrics_streaming(state) do
+    state = close_metrics_channel(state)
+
+    if state.enable_metrics && state.conn_ref do
+      Logger.info("Starting real-time metrics collector for #{state.profile.id}...")
+
+      case state.ssh_client.open_channel(state.conn_ref) do
+        {:ok, metrics_channel_id} ->
+          # Run the metrics loop
+          metrics_cmd = """
+          prev_total=0
+          prev_idle=0
+          while true; do
+            # CPU
+            if [ -f /proc/stat ]; then
+              user=0; nice=0; system=0; idle=0; iowait=0; irq=0; softirq=0; steal=0
+              read -r _ user nice system idle iowait irq softirq steal _ < /proc/stat
+              total=$((${user:-0} + ${nice:-0} + ${system:-0} + ${idle:-0} + ${iowait:-0} + ${irq:-0} + ${softirq:-0} + ${steal:-0}))
+              diff_idle=$((${idle:-0} - ${prev_idle:-0}))
+              diff_total=$((${total:-0} - ${prev_total:-0}))
+              if [ "${prev_total:-0}" -gt 0 ] && [ "${diff_total:-0}" -gt 0 ]; then
+                cpu_pct=$((100 - (diff_idle * 100) / diff_total))
+              else
+                cpu_pct=0
+              fi
+              prev_total=$total
+              prev_idle=$idle
+            else
+              cpu_pct=0
+            fi
+
+            # RAM
+            ram_total=0
+            ram_used=0
+            ram_pct=0
+            if [ -f /proc/meminfo ]; then
+              mem_total=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+              mem_avail=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
+              mem_total=${mem_total:-0}
+              mem_avail=${mem_avail:-0}
+              if [ "$mem_avail" -eq 0 ]; then
+                mem_free=$(grep MemFree /proc/meminfo | awk '{print $2}')
+                mem_cached=$(grep ^Cached /proc/meminfo | awk '{print $2}')
+                mem_buffers=$(grep Buffers /proc/meminfo | awk '{print $2}')
+                mem_free=${mem_free:-0}
+                mem_cached=${mem_cached:-0}
+                mem_buffers=${mem_buffers:-0}
+                mem_avail=$((${mem_free:-0} + ${mem_cached:-0} + ${mem_buffers:-0}))
+              fi
+              if [ "${mem_total:-0}" -gt 0 ]; then
+                ram_total=$mem_total
+                ram_used=$((mem_total - mem_avail))
+                ram_pct=$((ram_used * 100 / mem_total))
+              fi
+            elif command -v free >/dev/null 2>&1; then
+              ram_info=$(free -k | awk '/Mem:/ {print $2" "$3}')
+              ram_total=$(echo "$ram_info" | awk '{print $1}')
+              ram_used=$(echo "$ram_info" | awk '{print $2}')
+              ram_total=${ram_total:-0}
+              ram_used=${ram_used:-0}
+              if [ "${ram_total:-0}" -gt 0 ]; then
+                ram_pct=$((ram_used * 100 / ram_total))
+              fi
+            fi
+
+            # Disk
+            disk_info=$(df -k -P / | awk 'NR==2 {print $2" "$3" "$5}' | tr -d '%')
+            if [ -z "$disk_info" ]; then
+              disk_info="0 0 0"
+            fi
+
+            echo "METRICS: $cpu_pct $ram_pct $ram_total $ram_used $disk_info"
+
+            # Container stats
+            if command -v docker >/dev/null 2>&1; then
+              docker stats --no-stream --format 'CONTAINER_METRICS: {{.ID}} {{.CPUPerc}} {{.MemUsage}}' 2>/dev/null
+            fi
+
+            sleep 5
+          done
+          """
+
+          wrapped_metrics_cmd =
+            "sh -c '#{String.replace(metrics_cmd, "'", "'\\''")} & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
+
+          case state.ssh_client.exec(state.conn_ref, metrics_channel_id, wrapped_metrics_cmd) do
+            :ok ->
+              %{state | metrics_channel_id: metrics_channel_id, metrics_buffer: ""}
+
+            {:error, reason} ->
+              Logger.warning(
+                "Failed to exec metrics command on #{state.profile.id}: #{inspect(reason)}"
+              )
+
+              state
+          end
+
+        {:error, reason} ->
+          Logger.warning(
+            "Failed to open channel for metrics on #{state.profile.id}: #{inspect(reason)}"
+          )
+
+          state
+      end
+    else
+      state
+    end
+  end
+
+  defp handle_metrics_line(line, state) do
+    case String.split(line, " ", trim: true) do
+      ["METRICS:", cpu, ram, total_ram, used_ram, total_disk_kb, used_disk_kb, disk_pct] ->
+        try do
+          cpu_val = String.to_integer(cpu)
+          ram_val = String.to_integer(ram)
+          disk_val = String.to_integer(disk_pct)
+
+          total_ram_val = String.to_integer(total_ram)
+          used_ram_val = String.to_integer(used_ram)
+
+          total_disk_val = String.to_integer(total_disk_kb)
+          used_disk_val = String.to_integer(used_disk_kb)
+
+          # Convert KB to GB
+          total_ram_gb = Float.round(total_ram_val / (1024 * 1024), 1)
+          used_ram_gb = Float.round(used_ram_val / (1024 * 1024), 1)
+
+          total_disk_gb = round(total_disk_val / (1024 * 1024))
+          used_disk_gb = Float.round(used_disk_val / (1024 * 1024), 1)
+
+          metrics =
+            {cpu_val, ram_val, used_ram_gb, total_ram_gb, disk_val, used_disk_gb, total_disk_gb}
+
+          # Update state
+          new_state = %{state | metrics: metrics}
+
+          # Broadcast metrics to UI
+          broadcast_metrics(state.profile.id, metrics)
+
+          new_state
+        rescue
+          _ -> state
+        end
+
+      ["CONTAINER_METRICS:", id, cpu_val, used_val, "/", limit_val] ->
+        updated_containers =
+          Enum.map(state.containers, fn container ->
+            if String.starts_with?(container.id, id) or String.starts_with?(id, container.id) do
+              container
+              |> Map.put(:cpu_text, cpu_val)
+              |> Map.put(:ram_text, "#{used_val} / #{limit_val}")
+            else
+              container
+            end
+          end)
+
+        if updated_containers != state.containers do
+          broadcast_containers(state.profile.id, updated_containers)
+          %{state | containers: updated_containers}
+        else
+          state
+        end
+
+      _ ->
+        state
+    end
+  end
+
+  defp broadcast_metrics(source_id, metrics) do
+    Phoenix.PubSub.broadcast(
+      Caudata.PubSub,
+      "servers",
+      {:metrics_updated, source_id, metrics}
+    )
   end
 
   defp handle_docker_event(line, state) do
@@ -1028,6 +1253,20 @@ defmodule Caudata.ServerWorker do
   end
 
   defp sync_container_workers(state, new_containers) do
+    # Preserve cpu_text and ram_text from old containers if they exist
+    new_containers =
+      Enum.map(new_containers, fn new_c ->
+        case Enum.find(state.containers, &(&1.id == new_c.id)) do
+          nil ->
+            new_c
+
+          old_c ->
+            new_c
+            |> Map.put(:cpu_text, Map.get(old_c, :cpu_text))
+            |> Map.put(:ram_text, Map.get(old_c, :ram_text))
+        end
+      end)
+
     new_ids = MapSet.new(Enum.map(new_containers, & &1.id))
 
     # Stop and remove workers for containers that no longer exist

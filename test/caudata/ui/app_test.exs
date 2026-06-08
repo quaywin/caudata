@@ -97,6 +97,55 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, _} = App.handle_event(event_enter, state)
   end
 
+  test "handle_event/2 handles tab and arrow navigation in 4-box layout" do
+    {:ok, state} = App.mount([])
+
+    if length(state.profiles) > 1 do
+      [p1, p2 | _] = state.profiles
+
+      state = %{
+        state
+        | containers: %{
+            p1.id => [
+              %{id: "c1", name: "container-1"},
+              %{id: "c2", name: "container-2"}
+            ],
+            p2.id => [
+              %{id: "c3", name: "container-3"}
+            ]
+          },
+          selected_profile_id: p1.id,
+          selected_container_id: "c1",
+          sidebar_focus: :servers
+      }
+
+      # Pressing 'tab' switches focus to :containers
+      event_tab = %ExRatatui.Event.Key{code: "tab", modifiers: []}
+      assert {:noreply, state_focused_containers} = App.handle_event(event_tab, state)
+      assert state_focused_containers.sidebar_focus == :containers
+
+      # ArrowDown when in :containers focus moves to the next container
+      event_down = %ExRatatui.Event.Key{code: "down", modifiers: []}
+
+      assert {:noreply, state_next_container} =
+               App.handle_event(event_down, state_focused_containers)
+
+      assert state_next_container.selected_profile_id == p1.id
+      assert state_next_container.selected_container_id == "c2"
+
+      # Pressing 'tab' again switches back to :servers
+      assert {:noreply, state_refocused_servers} =
+               App.handle_event(event_tab, state_next_container)
+
+      assert state_refocused_servers.sidebar_focus == :servers
+
+      # ArrowDown when in :servers focus changes the active server (and selects its first container)
+      assert {:noreply, state_next_server} = App.handle_event(event_down, state_refocused_servers)
+      assert state_next_server.selected_profile_id == p2.id
+      assert state_next_server.selected_container_id == "c3"
+    end
+  end
+
   test "handle_event/2 handles keyboard events for search mode state machine transitions" do
     {:ok, state} = App.mount([])
     assert state.mode == :browsing

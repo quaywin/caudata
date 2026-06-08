@@ -38,7 +38,7 @@ defmodule Caudata.UI.Components.LogsPane do
         {outer, [{logs_widget, inner_area}]}
 
       selected_profile ->
-        inner_width = max(0, state.width - 27)
+        inner_width = max(0, state.width - 34)
         displayed_logs = ViewHelper.get_displayed_logs(state)
 
         wrapped_logs =
@@ -244,7 +244,7 @@ defmodule Caudata.UI.Components.LogsPane do
       "j" ->
         displayed_logs = ViewHelper.get_displayed_logs(model)
         logs_height = ViewHelper.get_logs_pane_height(model)
-        inner_width = max(0, model.width - 27)
+        inner_width = max(0, model.width - 34)
         wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
         max_scroll = max(0, wrapped_lines_count - logs_height)
 
@@ -262,7 +262,7 @@ defmodule Caudata.UI.Components.LogsPane do
         if model.selected_profile_id do
           displayed_logs = ViewHelper.get_displayed_logs(model)
           logs_height = ViewHelper.get_logs_pane_height(model)
-          inner_width = max(0, model.width - 27)
+          inner_width = max(0, model.width - 34)
           current_visual_len = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
           max_scroll = max(0, current_visual_len - logs_height)
 

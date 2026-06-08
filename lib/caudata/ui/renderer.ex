@@ -41,18 +41,18 @@ defmodule Caudata.UI.Renderer do
     # 3. Main row: sidebar + logs (always rendered)
     [sidebar_area, logs_area] =
       Layout.split(main_content_area, :horizontal, [
-        {:length, 25},
+        {:length, 38},
         {:min, 0}
       ])
 
-    sidebar_widget = Sidebar.render(state)
+    sidebar_widgets = Sidebar.render(state, sidebar_area)
     {logs_widget, logs_content_widgets} = LogsPane.render(state, logs_area)
 
     base_widgets =
-      [
-        {sidebar_widget, sidebar_area},
-        {logs_widget, logs_area}
-      ] ++ logs_content_widgets
+      sidebar_widgets ++
+        [
+          {logs_widget, logs_area}
+        ] ++ logs_content_widgets
 
     # If modal is visible, draw the modal popup on top of the main content area
     main_widgets =

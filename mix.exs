@@ -4,7 +4,7 @@ defmodule Caudata.MixProject do
   def project do
     [
       app: :caudata,
-      version: "0.1.6",
+      version: "0.1.12",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:

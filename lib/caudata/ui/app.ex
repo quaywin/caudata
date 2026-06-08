@@ -47,7 +47,9 @@ defmodule Caudata.UI.App do
       profiles: profiles,
       selected_profile_id: selected_id,
       selected_container_id: nil,
+      sidebar_focus: :servers,
       containers: %{},
+      metrics: %{},
       logs: [],
       logs_scroll_y: :bottom,
       logs_fetch_limit: 1000,
@@ -147,16 +149,21 @@ defmodule Caudata.UI.App do
       :bootstrap ->
         profiles = state.profiles
 
-        {statuses, containers} =
-          Enum.reduce(profiles, {%{}, %{}}, fn p, {status_acc, containers_acc} ->
+        {statuses, containers, metrics} =
+          Enum.reduce(profiles, {%{}, %{}, %{}}, fn p,
+                                                    {status_acc, containers_acc, metrics_acc} ->
             case Caudata.ServerSupervisor.lookup_worker(p.id) do
               {:ok, pid} ->
                 status = Caudata.ServerWorker.get_status(pid)
                 conts = Caudata.ServerWorker.get_containers(pid)
-                {Map.put(status_acc, p.id, status), Map.put(containers_acc, p.id, conts)}
+                mets = Caudata.ServerWorker.get_metrics(pid)
+
+                {Map.put(status_acc, p.id, status), Map.put(containers_acc, p.id, conts),
+                 Map.put(metrics_acc, p.id, mets)}
 
               _ ->
-                {Map.put(status_acc, p.id, :disconnected), Map.put(containers_acc, p.id, [])}
+                {Map.put(status_acc, p.id, :disconnected), Map.put(containers_acc, p.id, []),
+                 Map.put(metrics_acc, p.id, nil)}
             end
           end)
 
@@ -175,6 +182,7 @@ defmodule Caudata.UI.App do
            state
            | statuses: statuses,
              containers: containers,
+             metrics: metrics,
              buffer_sizes: Map.merge(state.buffer_sizes, sizes),
              drop_counts: Map.merge(state.drop_counts, drops)
          }}
@@ -297,12 +305,23 @@ defmodule Caudata.UI.App do
             state.containers
           end
 
+        new_metrics =
+          if status != :connected do
+            Map.put(state.metrics, server_id, nil)
+          else
+            state.metrics
+          end
+
         {:noreply,
          %{
            state
            | statuses: Map.put(state.statuses, server_id, status),
-             containers: new_containers
+             containers: new_containers,
+             metrics: new_metrics
          }}
+
+      {:metrics_updated, server_id, metrics} ->
+        {:noreply, %{state | metrics: Map.put(state.metrics, server_id, metrics)}}
 
       {:containers_updated, server_id, containers} ->
         {:noreply, %{state | containers: Map.put(state.containers, server_id, containers)}}

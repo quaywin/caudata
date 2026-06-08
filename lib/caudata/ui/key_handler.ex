@@ -50,8 +50,8 @@ defmodule Caudata.UI.KeyHandler do
 
     case norm_key do
       # Sidebar navigation
-      k when k in [:up, :down, :enter] ->
-        Sidebar.handle_key(key, key_data, model)
+      k when k in [:up, :down, :enter, :tab] ->
+        Sidebar.handle_key(norm_key, key_data, model)
 
       # Log display navigation
       k when k in ["j", "k", "/"] ->

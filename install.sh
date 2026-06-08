@@ -73,18 +73,24 @@ info "Selected version: $VERSION"
 DOWNLOAD_URL="https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/${VERSION}/${RELEASE_FILE_NAME}"
 
 # Determine installation directory
-INSTALL_DIR="/usr/local/bin"
-USE_SUDO=false
-
-if [ ! -w "$INSTALL_DIR" ]; then
-  # Fallback to user-local directory if no write access to /usr/local/bin
+if [ "$TARGET_OS" = "macos" ]; then
   INSTALL_DIR="$HOME/.local/bin"
   mkdir -p "$INSTALL_DIR"
-  info "No write permission for /usr/local/bin, installing to $INSTALL_DIR instead."
+  USE_SUDO=false
 else
-  # Double check if we need sudo just in case
+  INSTALL_DIR="/usr/local/bin"
+  USE_SUDO=false
+
   if [ ! -w "$INSTALL_DIR" ]; then
-    USE_SUDO=true
+    # Fallback to user-local directory if no write access to /usr/local/bin
+    INSTALL_DIR="$HOME/.local/bin"
+    mkdir -p "$INSTALL_DIR"
+    info "No write permission for /usr/local/bin, installing to $INSTALL_DIR instead."
+  else
+    # Double check if we need sudo just in case
+    if [ ! -w "$INSTALL_DIR" ]; then
+      USE_SUDO=true
+    fi
   fi
 fi
 

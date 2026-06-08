@@ -45,15 +45,54 @@ defmodule Caudata.MixProject do
   end
 
   defp current_version do
-    base = "0.1.14"
+    base = "0.1.15"
 
-    case System.cmd("git", ["describe", "--tags", "--exact-match"], stderr_to_stdout: true) do
-      {tag, 0} ->
-        tag |> String.trim() |> String.trim_leading("v")
+    version_from_env() || version_from_git() || base
+  end
 
-      _ ->
-        timestamp = System.system_time(:second) |> Integer.to_string()
-        "#{base}+dev.#{timestamp}"
+  defp version_from_env do
+    env_version = System.get_env("CAUDATA_VERSION") || System.get_env("VERSION")
+    github_ref = System.get_env("GITHUB_REF_NAME")
+
+    cond do
+      env_version ->
+        env_version |> String.trim() |> String.trim_leading("v")
+
+      github_ref && String.starts_with?(github_ref, "v") ->
+        github_ref |> String.trim() |> String.trim_leading("v")
+
+      true ->
+        nil
+    end
+  end
+
+  defp version_from_git do
+    if File.exists?(Path.join(__DIR__, ".git")) && System.find_executable("git") do
+      case System.cmd("git", ["describe", "--tags", "--long"],
+             cd: __DIR__,
+             stderr_to_stdout: true
+           ) do
+        {output, 0} ->
+          output
+          |> String.trim()
+          |> String.split("-")
+          |> Enum.reverse()
+          |> case do
+            [_git_hash, "0" | rest] ->
+              rest |> Enum.reverse() |> Enum.join("-") |> String.trim_leading("v")
+
+            [git_hash, count | rest] ->
+              tag = rest |> Enum.reverse() |> Enum.join("-") |> String.trim_leading("v")
+              hash = String.trim_leading(git_hash, "g")
+              "#{tag}+dev.#{count}.#{hash}"
+
+            _ ->
+              nil
+          end
+
+        _ ->
+          nil
+      end
     end
   end
 

@@ -101,6 +101,7 @@ defmodule Caudata.UI.App do
       settings_input_value: "",
       settings_status_msg: nil,
       logs_dirty: true,
+      logs_full_screen: false,
       update_available: nil
     }
 

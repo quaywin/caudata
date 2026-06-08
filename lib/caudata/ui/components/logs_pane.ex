@@ -38,7 +38,8 @@ defmodule Caudata.UI.Components.LogsPane do
         {outer, [{logs_widget, inner_area}]}
 
       selected_profile ->
-        inner_width = max(0, state.width - 34)
+        inner_area = ViewHelper.inner_rect(logs_area)
+        inner_width = inner_area.width
         displayed_logs = ViewHelper.get_displayed_logs(state)
 
         wrapped_logs =
@@ -46,7 +47,7 @@ defmodule Caudata.UI.Components.LogsPane do
             ViewHelper.wrap_text(line, inner_width)
           end)
 
-        log_lines = Enum.map(wrapped_logs, fn line -> Line.new([Span.new(line)]) end)
+        log_lines = Enum.map(wrapped_logs, fn line -> Line.new(format_line(line)) end)
 
         title =
           if state.selected_container_id do
@@ -63,8 +64,6 @@ defmodule Caudata.UI.Components.LogsPane do
           borders: [:all],
           border_type: :rounded
         }
-
-        inner_area = ViewHelper.inner_rect(logs_area)
 
         content =
           if state.mode == :searching or state.filter_regex != "" do
@@ -244,7 +243,14 @@ defmodule Caudata.UI.Components.LogsPane do
       "j" ->
         displayed_logs = ViewHelper.get_displayed_logs(model)
         logs_height = ViewHelper.get_logs_pane_height(model)
-        inner_width = max(0, model.width - 34)
+
+        inner_width =
+          if Map.get(model, :logs_full_screen, false) do
+            max(0, model.width - 2)
+          else
+            max(0, model.width - 40)
+          end
+
         wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
         max_scroll = max(0, wrapped_lines_count - logs_height)
 
@@ -262,7 +268,14 @@ defmodule Caudata.UI.Components.LogsPane do
         if model.selected_profile_id do
           displayed_logs = ViewHelper.get_displayed_logs(model)
           logs_height = ViewHelper.get_logs_pane_height(model)
-          inner_width = max(0, model.width - 34)
+
+          inner_width =
+            if Map.get(model, :logs_full_screen, false) do
+              max(0, model.width - 2)
+            else
+              max(0, model.width - 40)
+            end
+
           current_visual_len = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
           max_scroll = max(0, current_visual_len - logs_height)
 
@@ -289,6 +302,90 @@ defmodule Caudata.UI.Components.LogsPane do
 
       _ ->
         {model, []}
+    end
+  end
+
+  @log_regex ~r/^(?:(?=\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}|\d{2}:\d{2}:\d{2}|\[[a-zA-Z0-9_-]+\]|\b(?:info|warn|warning|error|err|debug|fatal|trace|critical|crit|emerg|emergency|stderr|fail|failure)\b)(?:(?<ts>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?|\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s)?(?:(?:\[(?<bracket_lvl>[a-zA-Z0-9_-]+)\]|(?<colon_lvl>\b(?:info|warn|warning|error|err|debug|fatal|trace|critical|crit|emerg|emergency|stderr|fail|failure)\b):|(?<bare_lvl>\b(?:info|warn|warning|error|err|debug|fatal|trace|critical|crit|emerg|emergency|stderr|fail|failure)\b))\s?)?)?(?<msg>.*)$/i
+
+  defp format_line(line) do
+    case Regex.named_captures(@log_regex, line) do
+      %{
+        "ts" => ts,
+        "bracket_lvl" => bracket_lvl,
+        "colon_lvl" => colon_lvl,
+        "bare_lvl" => bare_lvl,
+        "msg" => msg
+      } ->
+        {_level, lvl_style} =
+          cond do
+            bracket_lvl != "" -> {bracket_lvl, level_style(bracket_lvl)}
+            colon_lvl != "" -> {colon_lvl, level_style(colon_lvl)}
+            bare_lvl != "" -> {bare_lvl, level_style(bare_lvl)}
+            true -> {nil, nil}
+          end
+
+        msg_style = %Style{fg: :white}
+
+        spans = []
+
+        spans =
+          if ts != "" do
+            spans ++ [Span.new(ts <> " ", style: %Style{fg: :dark_gray})]
+          else
+            spans
+          end
+
+        spans =
+          cond do
+            bracket_lvl != "" ->
+              spans ++
+                [Span.new("[" <> bracket_lvl <> "] ", style: %{lvl_style | modifiers: [:bold]})]
+
+            colon_lvl != "" ->
+              spans ++ [Span.new(colon_lvl <> ": ", style: %{lvl_style | modifiers: [:bold]})]
+
+            bare_lvl != "" ->
+              spans ++ [Span.new(bare_lvl <> " ", style: %{lvl_style | modifiers: [:bold]})]
+
+            true ->
+              spans
+          end
+
+        spans ++ [Span.new(msg, style: msg_style)]
+
+      nil ->
+        [Span.new(line, style: %Style{fg: :white})]
+    end
+  end
+
+  defp level_style(level) do
+    case String.downcase(level) do
+      l when l in ["info"] ->
+        %Style{fg: :green}
+
+      l when l in ["warn", "warning"] ->
+        %Style{fg: :yellow}
+
+      l
+      when l in [
+             "error",
+             "err",
+             "fatal",
+             "critical",
+             "crit",
+             "emerg",
+             "emergency",
+             "stderr",
+             "fail",
+             "failure"
+           ] ->
+        %Style{fg: :red}
+
+      l when l in ["debug", "trace"] ->
+        %Style{fg: :magenta}
+
+      _ ->
+        %Style{fg: :cyan}
     end
   end
 end

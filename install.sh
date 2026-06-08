@@ -116,6 +116,10 @@ else
   chmod +x "$DEST_PATH"
 fi
 
+# Pre-extract Burrito payload to avoid slow first start
+info "Pre-extracting application payload (this may take a few seconds)..."
+"$DEST_PATH" --version > /dev/null || true
+
 info "Caudata $VERSION installed successfully at $DEST_PATH!"
 
 # PATH check

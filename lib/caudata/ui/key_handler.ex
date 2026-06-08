@@ -28,11 +28,16 @@ defmodule Caudata.UI.KeyHandler do
 
       # 2. Escape key in search mode returns to browsing
       key in [:escape, :esc] ->
-        if model.mode == :searching or model.active_field != nil do
-          {%{model | mode: :browsing, active_field: nil, filter_regex: "", filter_error: false},
-           []}
-        else
-          {model, []}
+        cond do
+          model.mode == :searching or model.active_field != nil ->
+            {%{model | mode: :browsing, active_field: nil, filter_regex: "", filter_error: false},
+             []}
+
+          Map.get(model, :logs_full_screen, false) ->
+            {%{model | logs_full_screen: false}, []}
+
+          true ->
+            {model, []}
         end
 
       # 3. Active regex search intercepts text keys
@@ -56,6 +61,10 @@ defmodule Caudata.UI.KeyHandler do
       # Log display navigation
       k when k in ["j", "k", "/"] ->
         LogsPane.handle_key(key, key_data, model)
+
+      # Toggle Logs Full Screen
+      k when k in ["f", "F"] ->
+        {%{model | logs_full_screen: not Map.get(model, :logs_full_screen, false)}, []}
 
       # Global Add Connection Modal
       k when k in ["a", "A"] ->

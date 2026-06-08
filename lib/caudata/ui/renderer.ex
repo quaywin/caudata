@@ -38,14 +38,20 @@ defmodule Caudata.UI.Renderer do
     # 2. Footer widget
     footer_widget = Footer.render(state)
 
-    # 3. Main row: sidebar + logs (always rendered)
-    [sidebar_area, logs_area] =
-      Layout.split(main_content_area, :horizontal, [
-        {:length, 38},
-        {:min, 0}
-      ])
+    # 3. Main row: sidebar + logs
+    {sidebar_widgets, logs_area} =
+      if Map.get(state, :logs_full_screen, false) do
+        {[], main_content_area}
+      else
+        [sidebar_area, logs_area] =
+          Layout.split(main_content_area, :horizontal, [
+            {:length, 38},
+            {:min, 0}
+          ])
 
-    sidebar_widgets = Sidebar.render(state, sidebar_area)
+        {Sidebar.render(state, sidebar_area), logs_area}
+      end
+
     {logs_widget, logs_content_widgets} = LogsPane.render(state, logs_area)
 
     base_widgets =

@@ -91,14 +91,26 @@ defmodule Caudata.UI.Components.Footer do
           drops =
             if selected_profile, do: Map.get(state.drop_counts, selected_profile.id, 0), else: 0
 
-          base_shortcuts = [
-            Span.new(" Shortcuts: "),
-            Span.new("[q] Quit "),
-            Span.new("[Enter] Connect "),
-            Span.new("[a] Add Server "),
-            Span.new("[/] Filter "),
-            Span.new("[⇅] Navigate | [j/k] Scroll Logs ")
-          ]
+          base_shortcuts =
+            if Map.get(state, :logs_full_screen, false) do
+              [
+                Span.new(" Shortcuts: "),
+                Span.new("[q] Quit "),
+                Span.new("[f/Esc] Normal Screen ", style: %Style{fg: :yellow}),
+                Span.new("[/] Filter "),
+                Span.new("[j/k] Scroll Logs ")
+              ]
+            else
+              [
+                Span.new(" Shortcuts: "),
+                Span.new("[q] Quit "),
+                Span.new("[Enter] Connect "),
+                Span.new("[a] Add Server "),
+                Span.new("[f] Fullscreen ", style: %Style{fg: :yellow}),
+                Span.new("[/] Filter "),
+                Span.new("[⇅] Navigate | [j/k] Scroll Logs ")
+              ]
+            end
 
           base_shortcuts =
             if Map.get(state, :update_available) do

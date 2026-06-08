@@ -602,4 +602,195 @@ defmodule Caudata.UI.AppTest do
     assert updated_state.settings_status_msg ==
              "Added path (unvalidated: server is not connected or timed out)"
   end
+
+  test "LogsPane.render/2 formats log lines with color spans" do
+    alias Caudata.UI.Components.LogsPane
+    alias ExRatatui.Layout.Rect
+
+    # Prepare some mock state
+    profile = %Caudata.Profile{
+      id: "test-server",
+      host_name: "1.1.1.1",
+      host_pattern: "test-server"
+    }
+
+    state = %{
+      profiles: [profile],
+      selected_profile_id: "test-server",
+      selected_container_id: "container-1",
+      containers: %{"test-server" => [%{id: "container-1", name: "c1"}]},
+      logs: [
+        "15:33:22.268 [info] Running Caudata",
+        "2026-06-08 15:33:22 ERROR: Database error",
+        "[warn] API warning",
+        "Just a plain message",
+        "[stderr] system error output",
+        "2026-06-08 15:33:22 crit: Critical system issue",
+        "fail: operation failed"
+      ],
+      logs_scroll_y: :bottom,
+      filter_regex: "",
+      filter_error: false,
+      mode: :browsing,
+      width: 80,
+      height: 24
+    }
+
+    area = %Rect{x: 0, y: 0, width: 80, height: 20}
+    {_outer_block, content} = LogsPane.render(state, area)
+
+    # Content should be a list of tuples like {paragraph, inner_rect}
+    assert [{paragraph, _}] = content
+    assert is_list(paragraph.text)
+
+    # We should have 7 formatted Lines in the paragraph text
+    assert length(paragraph.text) == 7
+
+    # Let's inspect the Spans of each Line to verify formatting:
+    # 1. "15:33:22.268 [info] Running Caudata" -> ts, bracket_lvl, msg
+    line1 = Enum.at(paragraph.text, 0)
+    assert [span_ts, span_lvl, span_msg] = line1.spans
+    assert span_ts.content == "15:33:22.268 "
+    assert span_ts.style.fg == :dark_gray
+    assert span_lvl.content == "[info] "
+    assert span_lvl.style.fg == :green
+    assert :bold in span_lvl.style.modifiers
+    assert span_msg.content == "Running Caudata"
+
+    # 2. "2026-06-08 15:33:22 ERROR: Database error" -> ts, colon_lvl, msg
+    line2 = Enum.at(paragraph.text, 1)
+    assert [span_ts2, span_lvl2, span_msg2] = line2.spans
+    assert span_ts2.content == "2026-06-08 15:33:22 "
+    assert span_ts2.style.fg == :dark_gray
+    assert span_lvl2.content == "ERROR: "
+    assert span_lvl2.style.fg == :red
+    assert :bold in span_lvl2.style.modifiers
+    assert span_msg2.content == "Database error"
+    assert span_msg2.style.fg == :white
+
+    # 3. "[warn] API warning" -> bracket_lvl, msg (no timestamp)
+    line3 = Enum.at(paragraph.text, 2)
+    assert [span_lvl3, span_msg3] = line3.spans
+    assert span_lvl3.content == "[warn] "
+    assert span_lvl3.style.fg == :yellow
+    assert :bold in span_lvl3.style.modifiers
+    assert span_msg3.content == "API warning"
+    assert span_msg3.style.fg == :white
+
+    # 4. "Just a plain message" -> msg (no timestamp, no level)
+    line4 = Enum.at(paragraph.text, 3)
+    assert [span_msg4] = line4.spans
+    assert span_msg4.content == "Just a plain message"
+    assert span_msg4.style.fg == :white
+
+    # 5. "[stderr] system error output" -> bracket_lvl, msg
+    line5 = Enum.at(paragraph.text, 4)
+    assert [span_lvl5, span_msg5] = line5.spans
+    assert span_lvl5.content == "[stderr] "
+    assert span_lvl5.style.fg == :red
+    assert :bold in span_lvl5.style.modifiers
+    assert span_msg5.content == "system error output"
+    assert span_msg5.style.fg == :white
+
+    # 6. "2026-06-08 15:33:22 crit: Critical system issue" -> ts, colon_lvl, msg
+    line6 = Enum.at(paragraph.text, 5)
+    assert [span_ts6, span_lvl6, span_msg6] = line6.spans
+    assert span_ts6.content == "2026-06-08 15:33:22 "
+    assert span_lvl6.content == "crit: "
+    assert span_lvl6.style.fg == :red
+    assert :bold in span_lvl6.style.modifiers
+    assert span_msg6.content == "Critical system issue"
+    assert span_msg6.style.fg == :white
+
+    # 7. "fail: operation failed" -> colon_lvl, msg
+    line7 = Enum.at(paragraph.text, 6)
+    assert [span_lvl7, span_msg7] = line7.spans
+    assert span_lvl7.content == "fail: "
+    assert span_lvl7.style.fg == :red
+    assert :bold in span_lvl7.style.modifiers
+    assert span_msg7.content == "operation failed"
+    assert span_msg7.style.fg == :white
+  end
+
+  test "LogsPane.render/2 preserves leading spaces in continuation lines and messages" do
+    alias Caudata.UI.Components.LogsPane
+    alias ExRatatui.Layout.Rect
+
+    # Prepare mock state
+    profile = %Caudata.Profile{
+      id: "test-server",
+      host_name: "1.1.1.1",
+      host_pattern: "test-server"
+    }
+
+    state = %{
+      profiles: [profile],
+      selected_profile_id: "test-server",
+      selected_container_id: "container-1",
+      containers: %{"test-server" => [%{id: "container-1", name: "c1"}]},
+      logs: [
+        "  continuation line starting with spaces",
+        "2026-06-08 12:00:00 [info]   message with leading spaces",
+        "2026-06-08 12:00:00   message with leading spaces and no level",
+        "[info]   message with leading spaces and level"
+      ],
+      logs_scroll_y: :bottom,
+      filter_regex: "",
+      filter_error: false,
+      mode: :browsing,
+      width: 80,
+      height: 24
+    }
+
+    area = %Rect{x: 0, y: 0, width: 80, height: 20}
+    {_outer_block, content} = LogsPane.render(state, area)
+
+    assert [{paragraph, _}] = content
+    assert is_list(paragraph.text)
+    assert length(paragraph.text) == 4
+
+    # 1. \"  continuation line starting with spaces\" -> leading spaces should be fully preserved
+    line1 = Enum.at(paragraph.text, 0)
+    assert [span1] = line1.spans
+    assert span1.content == "  continuation line starting with spaces"
+
+    # 2. \"2026-06-08 12:00:00 [info]   message with leading spaces\" -> should keep extra spaces after the separator
+    line2 = Enum.at(paragraph.text, 1)
+    assert [_ts, _lvl, span2] = line2.spans
+    assert span2.content == "  message with leading spaces"
+
+    # 3. \"2026-06-08 12:00:00   message with leading spaces and no level\" -> should keep extra spaces after the separator
+    line3 = Enum.at(paragraph.text, 2)
+    assert [_ts, span3] = line3.spans
+    assert span3.content == "  message with leading spaces and no level"
+
+    # 4. \"[info]   message with leading spaces and level\" -> should keep extra spaces after the separator
+    line4 = Enum.at(paragraph.text, 3)
+    assert [_lvl, span4] = line4.spans
+    assert span4.content == "  message with leading spaces and level"
+  end
+
+  test "handle_event/2 toggles logs_full_screen with f/F keys and esc key" do
+    {:ok, state} = App.mount([])
+    assert state.logs_full_screen == false
+
+    # Pressing "f" toggles it to true
+    event_f = %ExRatatui.Event.Key{code: "f", modifiers: []}
+    assert {:noreply, state_f1} = App.handle_event(event_f, state)
+    assert state_f1.logs_full_screen == true
+
+    # Pressing "f" again toggles it back to false
+    assert {:noreply, state_f2} = App.handle_event(event_f, state_f1)
+    assert state_f2.logs_full_screen == false
+
+    # Pressing "F" (uppercase) also toggles it to true
+    event_F = %ExRatatui.Event.Key{code: "F", modifiers: []}
+    assert {:noreply, state_F1} = App.handle_event(event_F, state)
+    assert state_F1.logs_full_screen == true
+
+    # Pressing "escape" when logs_full_screen is true toggles it back to false
+    event_esc = %ExRatatui.Event.Key{code: "escape", modifiers: []}
+    assert {:noreply, state_esc} = App.handle_event(event_esc, state_F1)
+    assert state_esc.logs_full_screen == false
+  end
 end

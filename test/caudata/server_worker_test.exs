@@ -28,7 +28,9 @@ defmodule Caudata.ServerWorkerTest do
     test_pid = self()
 
     Mock
-    |> expect(:connect, fn "127.0.0.1", 2222, [user: "test-user", identity_file: nil] ->
+    |> expect(:connect, fn "127.0.0.1",
+                           2222,
+                           [user: "test-user", identity_file: nil, password: nil] ->
       {:ok, :dummy_conn}
     end)
     |> expect(:open_channel, fn :dummy_conn ->

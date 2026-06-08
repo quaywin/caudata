@@ -87,7 +87,7 @@ defmodule Caudata.UI.Components.AddServerModal do
           {"port", "Port (default 22):"},
           {"user", "User:"},
           {"identity_file", "Identity File (optional path):"},
-          {"log_command", "Log Command:"}
+          {"password", "Password (optional):"}
         ]
 
         form_lines =
@@ -98,7 +98,11 @@ defmodule Caudata.UI.Components.AddServerModal do
             label_color = if active, do: :cyan, else: :white
             value_color = if active, do: :green, else: :white
             value = Map.get(state.modal_fields, key, "")
-            display_value = if active, do: value <> "█", else: value
+
+            masked_value =
+              if key == "password", do: String.duplicate("*", String.length(value)), else: value
+
+            display_value = if active, do: masked_value <> "█", else: masked_value
 
             [
               Line.new([Span.new(prefix), Span.new(label, style: %Style{fg: label_color})]),
@@ -203,7 +207,7 @@ defmodule Caudata.UI.Components.AddServerModal do
                  "user" => "",
                  "port" => "22",
                  "identity_file" => "",
-                 "log_command" => "tail -F /var/log/messages"
+                 "password" => ""
                }
            }, []}
         else
@@ -238,9 +242,11 @@ defmodule Caudata.UI.Components.AddServerModal do
   end
 
   defp handle_manual_input_key(key, key_data, model) do
-    fields = ["id", "host_name", "port", "user", "identity_file", "log_command", :save, :cancel]
+    fields = ["id", "host_name", "port", "user", "identity_file", "password", :save, :cancel]
     num_fields = length(fields)
     active_item = Enum.at(fields, model.modal_focus_index)
+    modifiers = Map.get(key_data, :modifiers, [])
+    is_shift = Enum.any?(modifiers, &(&1 in ["shift", "Shift"]))
 
     cond do
       key == :down ->
@@ -251,11 +257,26 @@ defmodule Caudata.UI.Components.AddServerModal do
         new_focus = rem(model.modal_focus_index - 1 + num_fields, num_fields)
         {%{model | modal_focus_index: new_focus}, []}
 
+      key == :tab and is_shift ->
+        new_focus = rem(model.modal_focus_index - 1 + num_fields, num_fields)
+        {%{model | modal_focus_index: new_focus}, []}
+
+      key == :tab ->
+        new_focus = rem(model.modal_focus_index + 1, num_fields)
+        {%{model | modal_focus_index: new_focus}, []}
+
       key == :enter ->
-        if active_item == :cancel do
-          {%{model | modal_type: :select_ssh, modal_selected_index: 0, modal_error: nil}, []}
-        else
-          save_manual_connection(model)
+        case active_item do
+          :cancel ->
+            {%{model | modal_type: :select_ssh, modal_selected_index: 0, modal_error: nil}, []}
+
+          :save ->
+            save_manual_connection(model)
+
+          _input_field ->
+            # Enter key on input fields acts as Tab to move to next field
+            new_focus = rem(model.modal_focus_index + 1, num_fields)
+            {%{model | modal_focus_index: new_focus}, []}
         end
 
       is_binary(active_item) ->
@@ -312,12 +333,17 @@ defmodule Caudata.UI.Components.AddServerModal do
     identity_file = String.trim(model.modal_fields["identity_file"] || "")
     identity_file = if identity_file == "", do: nil, else: identity_file
 
-    log_command = String.trim(model.modal_fields["log_command"] || "")
-    log_command = if log_command == "", do: "tail -F /var/log/messages", else: log_command
+    password = String.trim(model.modal_fields["password"] || "")
+    password = if password == "", do: nil, else: password
+
+    id_exists? = Enum.any?(model.profiles, &(&1.id == id))
 
     cond do
       host_name == "" ->
         {%{model | modal_error: "Host/IP is required"}, []}
+
+      id_exists? ->
+        {%{model | modal_error: "Connection Name/ID already exists"}, []}
 
       true ->
         profile_attrs = %{
@@ -327,7 +353,7 @@ defmodule Caudata.UI.Components.AddServerModal do
           user: user,
           port: port,
           identity_file: identity_file,
-          log_command: log_command
+          password: password
         }
 
         case Caudata.ConfigManager.add_manual_profile(profile_attrs) do

@@ -84,7 +84,7 @@ defmodule Caudata.UI.App do
         "user" => "",
         "port" => "22",
         "identity_file" => "",
-        "log_command" => "tail -F /var/log/messages"
+        "password" => ""
       },
       drop_counts: %{},
       buffer_sizes: %{},
@@ -97,6 +97,8 @@ defmodule Caudata.UI.App do
       settings_focus: :servers,
       settings_container_idx: 0,
       settings_custom_log_idx: 0,
+      settings_connection_focus_idx: 0,
+      settings_connection_fields: %{},
       settings_input_active: false,
       settings_input_value: "",
       settings_status_msg: nil,

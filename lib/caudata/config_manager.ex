@@ -186,11 +186,50 @@ defmodule Caudata.ConfigManager do
                 end
               end)
 
-          # If it was already enabled and stays enabled: cast update
+          # If it was already enabled and stays enabled: cast update (or restart if connection details changed)
           was_enabled and is_enabled ->
-            case Caudata.ServerSupervisor.lookup_worker(id) do
-              {:ok, pid} -> GenServer.cast(pid, {:update_profile, updated_profile})
-              _ -> :ok
+            connection_changed? =
+              old_profile.host_name != updated_profile.host_name or
+                old_profile.port != updated_profile.port or
+                old_profile.user != updated_profile.user or
+                old_profile.identity_file != updated_profile.identity_file or
+                Map.get(old_profile, :password) != Map.get(updated_profile, :password)
+
+            if connection_changed? do
+              _ =
+                Task.start(fn ->
+                  start_time = System.monotonic_time(:millisecond)
+
+                  case Caudata.ServerSupervisor.lookup_worker(id) do
+                    {:ok, pid} ->
+                      ref = Process.monitor(pid)
+                      _ = Caudata.ServerSupervisor.stop_worker(id)
+
+                      # Await the actual process termination to avoid registry collisions
+                      receive do
+                        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+                      after
+                        5000 -> :ok
+                      end
+
+                      _ = Caudata.UI.ViewHelper.start_worker_if_needed(updated_profile)
+                      duration = System.monotonic_time(:millisecond) - start_time
+
+                      Logger.info(
+                        "Restarted ServerWorker for #{id} due to connection change in #{duration}ms"
+                      )
+
+                    {:error, :not_found} ->
+                      _ = Caudata.UI.ViewHelper.start_worker_if_needed(updated_profile)
+                      duration = System.monotonic_time(:millisecond) - start_time
+                      Logger.info("Started ServerWorker for #{id} in #{duration}ms")
+                  end
+                end)
+            else
+              case Caudata.ServerSupervisor.lookup_worker(id) do
+                {:ok, pid} -> GenServer.cast(pid, {:update_profile, updated_profile})
+                _ -> :ok
+              end
             end
 
           # If it transitioned from enabled -> disabled: stop worker

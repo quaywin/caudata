@@ -273,7 +273,8 @@ defmodule Caudata.ServerWorker do
         old_profile.port != updated_profile.port or
         old_profile.user != updated_profile.user or
         old_profile.log_command != updated_profile.log_command or
-        old_profile.identity_file != updated_profile.identity_file
+        old_profile.identity_file != updated_profile.identity_file or
+        Map.get(old_profile, :password) != Map.get(updated_profile, :password)
 
     if needs_refresh and state.conn_ref do
       GenServer.cast(self(), :refresh_containers)
@@ -348,7 +349,8 @@ defmodule Caudata.ServerWorker do
 
     connect_opts = [
       user: state.profile.user,
-      identity_file: state.profile.identity_file
+      identity_file: state.profile.identity_file,
+      password: Map.get(state.profile, :password)
     ]
 
     ssh_client = state.ssh_client

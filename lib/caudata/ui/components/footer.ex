@@ -50,6 +50,12 @@ defmodule Caudata.UI.Components.Footer do
                         Span.new("[d/Backspace] Delete Server ", style: %Style{fg: :red})
                       ]
 
+                    :connection ->
+                      [
+                        Span.new("[⇅] Navigate fields ", style: %Style{fg: :cyan}),
+                        Span.new("[Type] Edit text ", style: %Style{fg: :green})
+                      ]
+
                     :containers ->
                       [
                         Span.new("[⇅/j/k] Select Container ", style: %Style{fg: :cyan}),

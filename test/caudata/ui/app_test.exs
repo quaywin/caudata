@@ -293,6 +293,16 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, focused_state} = App.handle_event(event_down, manual_state)
     assert focused_state.modal_focus_index == 1
 
+    # In manual_input, pressing tab changes focus
+    event_tab = %ExRatatui.Event.Key{code: "tab", modifiers: []}
+    assert {:noreply, tabbed_state} = App.handle_event(event_tab, manual_state)
+    assert tabbed_state.modal_focus_index == 1
+
+    # Pressing shift+tab changes focus back
+    event_shift_tab = %ExRatatui.Event.Key{code: "tab", modifiers: ["shift"]}
+    assert {:noreply, shift_tabbed_state} = App.handle_event(event_shift_tab, tabbed_state)
+    assert shift_tabbed_state.modal_focus_index == 0
+
     # Focused on "host_name", typing appends characters
     event_h = %ExRatatui.Event.Key{code: "1", modifiers: []}
     assert {:noreply, type_state1} = App.handle_event(event_h, focused_state)
@@ -305,9 +315,34 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, backspaced} = App.handle_event(event_backspace, type_state2)
     assert backspaced.modal_fields["host_name"] == "1"
 
-    # Pressing enter with empty host_name shows error
-    assert {:noreply, err_state} = App.handle_event(event_enter, manual_state)
+    # Pressing enter with empty host_name when focused on Save button (index 6) shows error
+    save_focused_state = %{manual_state | modal_focus_index: 6}
+    assert {:noreply, err_state} = App.handle_event(event_enter, save_focused_state)
     assert err_state.modal_error == "Host/IP is required"
+
+    # Testing duplicate ID error
+    existing_profile = %Caudata.Profile{
+      id: "duplicate-server",
+      host_name: "1.1.1.1",
+      host_pattern: "duplicate-server"
+    }
+
+    manual_state_with_profile = %{
+      manual_state
+      | profiles: [existing_profile],
+        modal_fields: %{
+          "id" => "duplicate-server",
+          "host_name" => "2.2.2.2",
+          "port" => "22",
+          "user" => "",
+          "identity_file" => "",
+          "password" => ""
+        },
+        modal_focus_index: 6
+    }
+
+    assert {:noreply, dup_err_state} = App.handle_event(event_enter, manual_state_with_profile)
+    assert dup_err_state.modal_error == "Connection Name/ID already exists"
 
     # Pressing enter on Cancel button (index 7) switches back to select_ssh
     cancel_focused_state = %{manual_state | modal_focus_index: 7}
@@ -475,15 +510,19 @@ defmodule Caudata.UI.AppTest do
     # Verify tab key switches focus
     event_tab = %ExRatatui.Event.Key{code: "tab", modifiers: []}
 
-    # Tab 1: :servers -> :containers
-    assert {:noreply, state_tab1} = App.handle_event(event_tab, state)
+    # Tab 1: :servers -> :connection
+    assert {:noreply, state_tab0} = App.handle_event(event_tab, state)
+    assert state_tab0.settings_focus == :connection
+
+    # Tab 2: :connection -> :containers
+    assert {:noreply, state_tab1} = App.handle_event(event_tab, state_tab0)
     assert state_tab1.settings_focus == :containers
 
-    # Tab 2: :containers -> :custom_logs
+    # Tab 3: :containers -> :custom_logs
     assert {:noreply, state_tab2} = App.handle_event(event_tab, state_tab1)
     assert state_tab2.settings_focus == :custom_logs
 
-    # Tab 3: :custom_logs -> :servers
+    # Tab 4: :custom_logs -> :servers
     assert {:noreply, state_tab3} = App.handle_event(event_tab, state_tab2)
     assert state_tab3.settings_focus == :servers
 

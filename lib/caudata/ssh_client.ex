@@ -39,6 +39,12 @@ defmodule Caudata.SSHClient do
           val -> to_string(val)
         end
 
+      password =
+        case Keyword.get(opts, :password) do
+          nil -> nil
+          val -> to_string(val)
+        end
+
       # Build standard options
       # silently_accept_hosts: true — this is an internal tool, host key verification
       # is handled by KeyCallback.is_host_key/5 when a custom key_cb is set.
@@ -51,11 +57,21 @@ defmodule Caudata.SSHClient do
         ]
       ]
 
-      # Add user directory if ~/.ssh is available
+      # Add password if specified
+      ssh_opts =
+        if password && password != "" do
+          Keyword.put(ssh_opts, :password, to_charlist(password))
+        else
+          ssh_opts
+        end
+
+      # Add user directory if ~/.ssh is available AND we are not using password auth
+      has_password = not is_nil(password) and password != ""
+      has_valid_identity_file = not is_nil(identity_file) and File.exists?(identity_file)
       user_dir = Path.expand("~/.ssh")
 
       ssh_opts =
-        if File.dir?(user_dir) do
+        if File.dir?(user_dir) && (not has_password || has_valid_identity_file) do
           Keyword.put(ssh_opts, :user_dir, to_charlist(user_dir))
         else
           ssh_opts
@@ -63,7 +79,7 @@ defmodule Caudata.SSHClient do
 
       # Add identity file callback options if identity_file is specified
       ssh_opts =
-        if identity_file && File.exists?(identity_file) do
+        if has_valid_identity_file do
           Keyword.put(
             ssh_opts,
             :key_cb,

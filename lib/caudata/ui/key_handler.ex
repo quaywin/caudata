@@ -85,6 +85,16 @@ defmodule Caudata.UI.KeyHandler do
           selected_idx =
             Enum.find_index(model.profiles, &(&1.id == model.selected_profile_id)) || 0
 
+          profile = Enum.at(model.profiles, selected_idx)
+
+          connection_fields = %{
+            "host_name" => profile.host_name || "",
+            "port" => to_string(profile.port || 22),
+            "user" => profile.user || "",
+            "identity_file" => profile.identity_file || "",
+            "password" => profile.password || ""
+          }
+
           {%{
              model
              | modal_visible: true,
@@ -93,6 +103,8 @@ defmodule Caudata.UI.KeyHandler do
                settings_focus: :servers,
                settings_container_idx: 0,
                settings_custom_log_idx: 0,
+               settings_connection_focus_idx: 0,
+               settings_connection_fields: connection_fields,
                settings_input_active: false,
                settings_input_value: "",
                settings_status_msg: nil

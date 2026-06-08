@@ -1,5 +1,7 @@
 import Config
 
+config :caudata, :env, Mix.env()
+
 config :logger, level: :info
 
 if Mix.env() == :test do

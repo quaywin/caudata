@@ -104,12 +104,14 @@ defmodule Caudata.ServerWorker do
       conn_task_pid: nil,
       tail_limit: nil,
       events_channel_id: nil,
-      enable_events: Keyword.get(opts, :enable_events, Mix.env() != :test),
+      enable_events:
+        Keyword.get(opts, :enable_events, Application.get_env(:caudata, :env) != :test),
       events_buffer: "",
       validation_channels: %{},
       metrics_channel_id: nil,
       metrics_buffer: "",
-      enable_metrics: Keyword.get(opts, :enable_metrics, Mix.env() != :test),
+      enable_metrics:
+        Keyword.get(opts, :enable_metrics, Application.get_env(:caudata, :env) != :test),
       metrics: nil
     }
 

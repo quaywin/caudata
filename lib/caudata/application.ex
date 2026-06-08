@@ -3,7 +3,7 @@ defmodule Caudata.Application do
   use Application
   require Logger
 
-  @env Mix.env()
+  @env Application.compile_env(:caudata, :env, :prod)
 
   @impl true
   def start(_type, _args) do

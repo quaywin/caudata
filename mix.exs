@@ -4,7 +4,7 @@ defmodule Caudata.MixProject do
   def project do
     [
       app: :caudata,
-      version: "0.1.12",
+      version: current_version(),
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
@@ -42,6 +42,19 @@ defmodule Caudata.MixProject do
         ]
       ]
     ]
+  end
+
+  defp current_version do
+    base = "0.1.14"
+
+    case System.cmd("git", ["describe", "--tags", "--exact-match"], stderr_to_stdout: true) do
+      {tag, 0} ->
+        tag |> String.trim() |> String.trim_leading("v")
+
+      _ ->
+        timestamp = System.system_time(:second) |> Integer.to_string()
+        "#{base}+dev.#{timestamp}"
+    end
   end
 
   defp package do

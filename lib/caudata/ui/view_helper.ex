@@ -105,7 +105,7 @@ defmodule Caudata.UI.ViewHelper do
   Starts a server worker for a profile if one is not already running.
   """
   def start_worker_if_needed(profile) do
-    if Code.ensure_loaded?(Mix) and Mix.env() == :test do
+    if Application.get_env(:caudata, :env) == :test do
       :ok
     else
       if Map.get(profile, :enabled, true) do

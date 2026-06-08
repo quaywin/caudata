@@ -222,7 +222,7 @@ defmodule Caudata.ConfigStore do
 
     path = state.config_path
     char_path = String.to_charlist(path)
-    is_test = Code.ensure_loaded?(Mix) and Mix.env() == :test
+    is_test = Application.get_env(:caudata, :env) == :test
 
     if is_test do
       dir = Path.dirname(path)

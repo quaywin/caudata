@@ -7,6 +7,14 @@ defmodule Caudata.Application do
 
   @impl true
   def start(_type, _args) do
+    # Handle command-line arguments if not running in test mode
+    if @env != :test do
+      case Caudata.CLI.handle_args(Burrito.Util.Args.argv()) do
+        :continue -> :ok
+        _ -> :ok
+      end
+    end
+
     # Load configuration
     {:ok, config} = Caudata.Config.load()
     capacity = Caudata.Config.global_capacity(config)

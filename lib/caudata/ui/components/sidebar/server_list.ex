@@ -57,8 +57,20 @@ defmodule Caudata.UI.Components.Sidebar.ServerList do
 
     border_color = if focus == :servers, do: :green, else: :white
 
+    selected_idx = Enum.find_index(state.profiles, &(&1.id == state.selected_profile_id))
+    n = length(state.profiles)
+    inner_height = max(0, box_area.height - 2)
+
+    scroll_y =
+      cond do
+        n <= inner_height -> 0
+        is_nil(selected_idx) -> 0
+        true -> max(0, min(selected_idx - div(inner_height, 2), n - inner_height))
+      end
+
     widget = %Paragraph{
       text: server_rows,
+      scroll: {scroll_y, 0},
       block: %Block{
         title: " Servers ",
         borders: [:all],

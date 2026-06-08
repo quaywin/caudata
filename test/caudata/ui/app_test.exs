@@ -146,6 +146,70 @@ defmodule Caudata.UI.AppTest do
     end
   end
 
+  test "handle_event/2 wrap-around navigation in servers and containers lists" do
+    {:ok, state} = App.mount([])
+
+    if length(state.profiles) > 1 do
+      [p1, p2 | _] = state.profiles
+
+      state = %{
+        state
+        | containers: %{
+            p1.id => [
+              %{id: "c1", name: "container-1"},
+              %{id: "c2", name: "container-2"}
+            ],
+            p2.id => [
+              %{id: "c3", name: "container-3"}
+            ]
+          },
+          selected_profile_id: p2.id,
+          selected_container_id: "c3",
+          sidebar_focus: :servers
+      }
+
+      event_down = %ExRatatui.Event.Key{code: "down", modifiers: []}
+      event_up = %ExRatatui.Event.Key{code: "up", modifiers: []}
+
+      # 1. Servers wrap-around:
+      # Currently at the last server (p2). Down should wrap around to the first server (p1).
+      assert {:noreply, state_wrap_down_server} = App.handle_event(event_down, state)
+      assert state_wrap_down_server.selected_profile_id == p1.id
+      assert state_wrap_down_server.selected_container_id == "c1"
+
+      # Set to the first server (p1). Up should wrap around to the last server (p2).
+      state_at_first_server = %{state | selected_profile_id: p1.id, selected_container_id: "c1"}
+      assert {:noreply, state_wrap_up_server} = App.handle_event(event_up, state_at_first_server)
+      assert state_wrap_up_server.selected_profile_id == p2.id
+      assert state_wrap_up_server.selected_container_id == "c3"
+
+      # 2. Containers wrap-around:
+      # Focus containers for p1 (which has "c1" and "c2")
+      state_containers_focus = %{
+        state
+        | selected_profile_id: p1.id,
+          selected_container_id: "c2",
+          sidebar_focus: :containers
+      }
+
+      # Currently at last container (c2). Down should wrap around to the first container (c1).
+      assert {:noreply, state_wrap_down_container} =
+               App.handle_event(event_down, state_containers_focus)
+
+      assert state_wrap_down_container.selected_profile_id == p1.id
+      assert state_wrap_down_container.selected_container_id == "c1"
+
+      # Set to the first container (c1). Up should wrap around to the last container (c2).
+      state_containers_focus_first = %{state_containers_focus | selected_container_id: "c1"}
+
+      assert {:noreply, state_wrap_up_container} =
+               App.handle_event(event_up, state_containers_focus_first)
+
+      assert state_wrap_up_container.selected_profile_id == p1.id
+      assert state_wrap_up_container.selected_container_id == "c2"
+    end
+  end
+
   test "handle_event/2 handles keyboard events for search mode state machine transitions" do
     {:ok, state} = App.mount([])
     assert state.mode == :browsing

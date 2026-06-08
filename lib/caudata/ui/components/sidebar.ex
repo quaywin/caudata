@@ -16,28 +16,42 @@ defmodule Caudata.UI.Components.Sidebar do
     # Determine the vertical heights based on overall height
     h = sidebar_area.height
 
-    {h1, h3, h4} =
-      cond do
-        h >= 30 -> {8, 7, 7}
-        h >= 24 -> {6, 6, 6}
-        h >= 18 -> {5, 5, 5}
-        true -> {4, 4, 4}
-      end
+    if h >= 18 do
+      {h1, h3, h4} =
+        cond do
+          h >= 30 -> {8, 7, 5}
+          h >= 24 -> {6, 6, 5}
+          true -> {5, 5, 5}
+        end
 
-    [box1_area, box2_area, box3_area, box4_area] =
-      Layout.split(sidebar_area, :vertical, [
-        {:length, h1},
-        {:min, 0},
-        {:length, h3},
-        {:length, h4}
-      ])
+      [box1_area, box2_area, box3_area, box4_area] =
+        Layout.split(sidebar_area, :vertical, [
+          {:length, h1},
+          {:min, 0},
+          {:length, h3},
+          {:length, h4}
+        ])
 
-    [
-      ServerList.render(state, box1_area),
-      ContainerList.render(state, box2_area),
-      ContainerInfo.render(state, box3_area),
-      ServerMetrics.render(state, box4_area)
-    ]
+      [
+        ServerList.render(state, box1_area),
+        ContainerList.render(state, box2_area),
+        ContainerInfo.render(state, box3_area),
+        ServerMetrics.render(state, box4_area)
+      ]
+    else
+      servers_h = if h >= 10, do: 5, else: max(2, div(h, 2))
+
+      [box1_area, box2_area] =
+        Layout.split(sidebar_area, :vertical, [
+          {:length, servers_h},
+          {:min, 0}
+        ])
+
+      [
+        ServerList.render(state, box1_area),
+        ContainerList.render(state, box2_area)
+      ]
+    end
   end
 
   @doc """
@@ -170,7 +184,14 @@ defmodule Caudata.UI.Components.Sidebar do
 
     if profiles != [] do
       current_idx = Enum.find_index(profiles, &(&1.id == model.selected_profile_id))
-      next_idx = if current_idx, do: min(current_idx + 1, length(profiles) - 1), else: 0
+
+      next_idx =
+        cond do
+          is_nil(current_idx) -> 0
+          current_idx == length(profiles) - 1 -> 0
+          true -> current_idx + 1
+        end
+
       next_profile = Enum.at(profiles, next_idx)
 
       select_server(next_profile.id, model)
@@ -184,7 +205,14 @@ defmodule Caudata.UI.Components.Sidebar do
 
     if profiles != [] do
       current_idx = Enum.find_index(profiles, &(&1.id == model.selected_profile_id))
-      prev_idx = if current_idx, do: max(current_idx - 1, 0), else: 0
+
+      prev_idx =
+        cond do
+          is_nil(current_idx) -> 0
+          current_idx == 0 -> length(profiles) - 1
+          true -> current_idx - 1
+        end
+
       prev_profile = Enum.at(profiles, prev_idx)
 
       select_server(prev_profile.id, model)
@@ -232,7 +260,14 @@ defmodule Caudata.UI.Components.Sidebar do
 
     if containers != [] do
       current_idx = Enum.find_index(containers, &(&1.id == model.selected_container_id))
-      next_idx = if current_idx, do: min(current_idx + 1, length(containers) - 1), else: 0
+
+      next_idx =
+        cond do
+          is_nil(current_idx) -> 0
+          current_idx == length(containers) - 1 -> 0
+          true -> current_idx + 1
+        end
+
       next_container = Enum.at(containers, next_idx)
 
       select_container(
@@ -251,7 +286,14 @@ defmodule Caudata.UI.Components.Sidebar do
 
     if containers != [] do
       current_idx = Enum.find_index(containers, &(&1.id == model.selected_container_id))
-      prev_idx = if current_idx, do: max(current_idx - 1, 0), else: 0
+
+      prev_idx =
+        cond do
+          is_nil(current_idx) -> 0
+          current_idx == 0 -> length(containers) - 1
+          true -> current_idx - 1
+        end
+
       prev_container = Enum.at(containers, prev_idx)
 
       select_container(

@@ -100,6 +100,19 @@ defmodule Caudata.UI.Components.Footer do
             Span.new("[⇅] Navigate | [j/k] Scroll Logs ")
           ]
 
+          base_shortcuts =
+            if Map.get(state, :update_available) do
+              base_shortcuts ++
+                [
+                  Span.new(
+                    " | Update v#{state.update_available} available! Run 'caudata upgrade'",
+                    style: %Style{fg: :green}
+                  )
+                ]
+            else
+              base_shortcuts
+            end
+
           if size > 0 do
             base_shortcuts ++ [Span.new(" | Size: #{size}/1000 | Drops: #{drops}")]
           else

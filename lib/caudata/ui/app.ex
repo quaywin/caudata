@@ -11,6 +11,8 @@ defmodule Caudata.UI.App do
   alias Caudata.UI.KeyHandler
   alias Caudata.UI.Renderer
 
+  @env Application.compile_env(:caudata, :env, :prod)
+
   # Model Definition
 
   @impl true
@@ -24,8 +26,18 @@ defmodule Caudata.UI.App do
       Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
     end
 
-    width = Keyword.get(opts, :width, 80)
-    height = Keyword.get(opts, :height, 24)
+    {width, height} =
+      if Keyword.get(opts, :terminal, false) do
+        case ExRatatui.terminal_size() do
+          {w, h} ->
+            {Keyword.get(opts, :width, w), Keyword.get(opts, :height, h)}
+
+          _ ->
+            {Keyword.get(opts, :width, 80), Keyword.get(opts, :height, 24)}
+        end
+      else
+        {Keyword.get(opts, :width, 80), Keyword.get(opts, :height, 24)}
+      end
 
     profiles = Caudata.ConfigManager.list_profiles()
 
@@ -88,13 +100,30 @@ defmodule Caudata.UI.App do
       settings_input_active: false,
       settings_input_value: "",
       settings_status_msg: nil,
-      logs_dirty: true
+      logs_dirty: true,
+      update_available: nil
     }
 
     state = adjust_log_subscription(nil, state)
 
     # Asynchronously bootstrap state from running servers
     send(self(), :bootstrap)
+
+    # Check for update in the background if in prod and running inside Burrito release
+    if @env == :prod and Code.ensure_loaded?(Burrito.Util.Args) and
+         Burrito.Util.Args.get_bin_path() != :not_in_burrito do
+      parent = self()
+
+      Task.start(fn ->
+        case Caudata.CLI.check_for_update() do
+          {:update_available, tag_name} ->
+            send(parent, {:update_available, tag_name})
+
+          _ ->
+            :ok
+        end
+      end)
+    end
 
     {:ok, state}
   end
@@ -293,6 +322,9 @@ defmodule Caudata.UI.App do
         }
 
         {:noreply, adjust_log_subscription(state, new_state)}
+
+      {:update_available, tag_name} ->
+        {:noreply, %{state | update_available: tag_name}}
 
       {:profiles_updated, all_profiles} ->
         {:noreply, %{state | profiles: all_profiles}}

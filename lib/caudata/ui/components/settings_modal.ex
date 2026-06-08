@@ -179,7 +179,9 @@ defmodule Caudata.UI.Components.SettingsModal do
 
     # Filter out virtual file containers representing custom logs
     docker_only_containers =
-      Enum.reject(containers, &(&1.image == "file" or String.starts_with?(&1.id, "file:")))
+      Enum.reject(containers, fn c ->
+        c.image == "file" or String.starts_with?(to_string(c.id), "file:")
+      end)
 
     list_rows =
       if Enum.empty?(docker_only_containers) do
@@ -364,7 +366,9 @@ defmodule Caudata.UI.Components.SettingsModal do
 
     # Filtered containers to match UI
     docker_only_containers =
-      Enum.reject(containers, &(&1.image == "file" or String.starts_with?(&1.id, "file:")))
+      Enum.reject(containers, fn c ->
+        c.image == "file" or String.starts_with?(to_string(c.id), "file:")
+      end)
 
     if model.settings_input_active do
       case key do
@@ -514,13 +518,15 @@ defmodule Caudata.UI.Components.SettingsModal do
               container = Enum.at(docker_only_containers, model.settings_container_idx)
 
               if container do
-                disabled = profile.disabled_containers || []
+                disabled = Enum.map(profile.disabled_containers || [], &to_string/1)
+                container_id = to_string(container.id)
+                container_name = to_string(container.name)
 
                 new_disabled =
-                  if container.id in disabled or container.name in disabled do
-                    disabled -- [container.id, container.name]
+                  if container_id in disabled or container_name in disabled do
+                    disabled -- [container_id, container_name]
                   else
-                    [container.name | disabled]
+                    [container_name | disabled]
                   end
 
                 case Caudata.ConfigManager.update_profile(profile.id, %{
@@ -546,12 +552,13 @@ defmodule Caudata.UI.Components.SettingsModal do
               path = Enum.at(custom_logs, model.settings_custom_log_idx)
 
               if path do
-                disabled = profile.disabled_containers || []
-                container_id = "file:#{path}"
+                disabled = Enum.map(profile.disabled_containers || [], &to_string/1)
+                path_str = to_string(path)
+                container_id = "file:#{path_str}"
 
                 new_disabled =
-                  if container_id in disabled or path in disabled do
-                    disabled -- [container_id, path]
+                  if container_id in disabled or path_str in disabled do
+                    disabled -- [container_id, path_str]
                   else
                     [container_id | disabled]
                   end

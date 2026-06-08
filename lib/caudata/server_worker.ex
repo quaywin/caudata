@@ -166,10 +166,12 @@ defmodule Caudata.ServerWorker do
 
   @impl true
   def handle_call({:stream_container_logs, container_id}, _from, state) do
+    container_id = to_string(container_id)
+
     active_container_name =
-      case Enum.find(state.containers, &(&1.id == container_id)) do
+      case Enum.find(state.containers, &(to_string(&1.id) == container_id)) do
         nil -> nil
-        c -> c.name
+        c -> to_string(c.name)
       end
 
     if is_nil(state.conn_ref) do
@@ -596,9 +598,11 @@ defmodule Caudata.ServerWorker do
 
         custom_containers =
           Enum.map(state.profile.custom_logs || [], fn path ->
+            path_str = to_string(path)
+
             %{
-              id: "file:#{path}",
-              name: path,
+              id: "file:#{path_str}",
+              name: path_str,
               image: "file",
               status: "active",
               state: "running"

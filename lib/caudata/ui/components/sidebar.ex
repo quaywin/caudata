@@ -259,7 +259,8 @@ defmodule Caudata.UI.Components.Sidebar do
     containers = get_enabled_containers_for_profile(model, model.selected_profile_id)
 
     if containers != [] do
-      current_idx = Enum.find_index(containers, &(&1.id == model.selected_container_id))
+      current_idx =
+        Enum.find_index(containers, &(to_string(&1.id) == to_string(model.selected_container_id)))
 
       next_idx =
         cond do
@@ -285,7 +286,8 @@ defmodule Caudata.UI.Components.Sidebar do
     containers = get_enabled_containers_for_profile(model, model.selected_profile_id)
 
     if containers != [] do
-      current_idx = Enum.find_index(containers, &(&1.id == model.selected_container_id))
+      current_idx =
+        Enum.find_index(containers, &(to_string(&1.id) == to_string(model.selected_container_id)))
 
       prev_idx =
         cond do
@@ -345,9 +347,11 @@ defmodule Caudata.UI.Components.Sidebar do
 
       profile ->
         containers = Map.get(model.containers, profile_id, [])
+        disabled_containers = Enum.map(profile.disabled_containers || [], &to_string/1)
 
         Enum.filter(containers, fn c ->
-          c.id not in profile.disabled_containers and c.name not in profile.disabled_containers
+          to_string(c.id) not in disabled_containers and
+            to_string(c.name) not in disabled_containers
         end)
     end
   end

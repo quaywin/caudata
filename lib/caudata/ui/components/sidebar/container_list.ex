@@ -40,10 +40,12 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
 
         true ->
           Enum.map(enabled_containers, fn container ->
-            is_selected = state.selected_container_id == container.id
+            is_selected = to_string(state.selected_container_id) == to_string(container.id)
             prefix = if is_selected, do: "> ", else: "  "
 
-            is_file = container.image == "file" or String.starts_with?(container.id, "file:")
+            is_file =
+              container.image == "file" or String.starts_with?(to_string(container.id), "file:")
+
             icon = if is_file, do: "📄 ", else: "🐳 "
             icon_color = if is_file, do: :yellow, else: :cyan
 
@@ -69,7 +71,12 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
 
     border_color = if focus == :containers, do: :green, else: :white
 
-    selected_idx = Enum.find_index(enabled_containers, &(&1.id == state.selected_container_id))
+    selected_idx =
+      Enum.find_index(
+        enabled_containers,
+        &(to_string(&1.id) == to_string(state.selected_container_id))
+      )
+
     n = length(enabled_containers)
     inner_height = max(0, box_area.height - 2)
 

@@ -25,7 +25,10 @@ defmodule Caudata.UI.Components.Sidebar.ContainerInfo do
 
     selected_container =
       if selected_profile && state.selected_container_id do
-        Enum.find(enabled_containers, &(&1.id == state.selected_container_id))
+        Enum.find(
+          enabled_containers,
+          &(to_string(&1.id) == to_string(state.selected_container_id))
+        )
       end
 
     container_info_lines =

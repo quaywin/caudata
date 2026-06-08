@@ -17,7 +17,11 @@ defmodule Caudata.SSHClient do
 
     @impl true
     def connect(host, port, opts) do
-      user = Keyword.get(opts, :user)
+      user =
+        case Keyword.get(opts, :user) do
+          nil -> nil
+          val -> to_string(val)
+        end
 
       if is_nil(user) or user == "" do
         {:error, :missing_user}
@@ -28,7 +32,12 @@ defmodule Caudata.SSHClient do
 
     defp do_connect(host, port, user, opts) do
       char_host = to_charlist(host)
-      identity_file = Keyword.get(opts, :identity_file)
+
+      identity_file =
+        case Keyword.get(opts, :identity_file) do
+          nil -> nil
+          val -> to_string(val)
+        end
 
       # Build standard options
       # silently_accept_hosts: true — this is an internal tool, host key verification
@@ -161,8 +170,8 @@ defmodule Caudata.SSHClient.KeyCallback do
     # Erlang SSH wraps :key_cb options in an extra layer, so we unwrap twice:
     #   options[:key_cb_private][:key_cb_private] -> identity_file path
     case get_identity_file(options) do
-      identity_file when is_binary(identity_file) ->
-        decode_private_key(identity_file)
+      identity_file when is_binary(identity_file) or is_list(identity_file) ->
+        decode_private_key(to_string(identity_file))
 
       _ ->
         Logger.info("SSH KeyCallback: No identity file specified in options")

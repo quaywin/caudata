@@ -52,7 +52,10 @@ defmodule Caudata.UI.Components.LogsPane do
         title =
           if state.selected_container_id do
             containers = Map.get(state.containers, selected_profile.id, [])
-            container = Enum.find(containers, &(&1.id == state.selected_container_id))
+
+            container =
+              Enum.find(containers, &(to_string(&1.id) == to_string(state.selected_container_id)))
+
             container_name = if container, do: container.name, else: state.selected_container_id
             " Logs: #{selected_profile.id} (container: #{container_name}) "
           else

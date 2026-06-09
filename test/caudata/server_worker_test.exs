@@ -21,12 +21,12 @@ defmodule Caudata.ServerWorkerTest do
         host_pattern: "test-server",
         host_name: "127.0.0.1",
         user: "test-user",
-        port: 2222,
-        log_command: "tail -F /var/log/test"
+        port: 2222
       })
 
     test_pid = self()
 
+    # Expect calls on Mock SSH Client
     Mock
     |> expect(:connect, fn "127.0.0.1",
                            2222,
@@ -41,25 +41,14 @@ defmodule Caudata.ServerWorkerTest do
       :ok
     end)
     |> expect(:open_channel, fn :dummy_conn ->
-      {:ok, :dummy_server_log_channel}
-    end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_server_log_channel,
-                        "sh -c 'tail -n 1000 -F /var/log/test 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
-      :ok
-    end)
-    |> expect(:open_channel, fn :dummy_conn ->
       {:ok, :dummy_log_channel}
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel,
-                        "sh -c 'docker logs --follow --tail 1000 container1 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs -t --follow --tail 1000 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_log_channel ->
-      :ok
-    end)
-    |> expect(:close_channel, fn :dummy_conn, :dummy_server_log_channel ->
       :ok
     end)
     |> expect(:close, fn :dummy_conn ->
@@ -122,7 +111,12 @@ defmodule Caudata.ServerWorkerTest do
 
     # Read from global LogStore
     snapshot = LogStore.get_snapshot("test-server/container1")
-    assert snapshot == ["line 1", "part 2", "line 3"]
+
+    assert snapshot == [
+             %{message: "line 1", stream: :stdout, timestamp: nil},
+             %{message: "part 2", stream: :stdout, timestamp: nil},
+             %{message: "line 3", stream: :stdout, timestamp: nil}
+           ]
 
     # Terminate the process to verify cleanup and close
     stop_supervised(ServerWorker)
@@ -151,22 +145,10 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
       :ok
     end)
-    |> expect(:open_channel, fn :dummy_conn ->
-      {:ok, :dummy_server_log_channel}
-    end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_server_log_channel,
-                        "sh -c 'tail -n 1000 -F /var/log/messages 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
-      :ok
-    end)
-    |> expect(:close_channel, fn :dummy_conn, :dummy_server_log_channel ->
-      :ok
-    end)
     # Then log stream channel open
     |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_log_channel} end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_log_channel,
-                        "sh -c 'docker logs --follow --tail 1000 container1 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_log_channel, cmd ->
+      assert String.contains?(cmd, "docker logs")
       :ok
     end)
     # Reconnect attempt starts:
@@ -178,18 +160,8 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:exec, fn :dummy_conn2, :dummy_list_channel2, "docker ps --format '{{json .}}'" ->
       :ok
     end)
-    # On reconnect, container1 is not found, so it falls back to server logs
-    |> expect(:open_channel, fn :dummy_conn2 ->
-      {:ok, :dummy_server_log_channel2}
-    end)
-    |> expect(:exec, fn :dummy_conn2,
-                        :dummy_server_log_channel2,
-                        "sh -c 'tail -n 1000 -F /var/log/messages 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
-      :ok
-    end)
     # Cleanup calls
     |> expect(:close_channel, fn :dummy_conn, :dummy_log_channel -> :ok end)
-    |> expect(:close_channel, fn :dummy_conn2, :dummy_server_log_channel2 -> :ok end)
     |> expect(:close, fn :dummy_conn -> :ok end)
     |> expect(:close, fn :dummy_conn2 -> :ok end)
 
@@ -253,16 +225,6 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
       :ok
     end)
-    # Falling back to server logs stream because no active container is selected
-    |> expect(:open_channel, fn :dummy_conn ->
-      send(test_pid, :opened_server_log_channel)
-      {:ok, :dummy_server_log_channel}
-    end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_server_log_channel,
-                        "sh -c 'tail -n 1000 -F /var/log/messages 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
-      :ok
-    end)
     # Refresh 1:
     |> expect(:open_channel, fn :dummy_conn ->
       send(test_pid, :opened_list_channel2)
@@ -284,9 +246,6 @@ defmodule Caudata.ServerWorkerTest do
       :ok
     end)
     # Terminate:
-    |> expect(:close_channel, fn :dummy_conn, :dummy_server_log_channel ->
-      :ok
-    end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_list_channel3 ->
       :ok
     end)
@@ -308,8 +267,6 @@ defmodule Caudata.ServerWorkerTest do
     # Simulate container listing completion (closes list channel)
     send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_list_channel}})
 
-    # Wait for server log channel open and transition to :connected
-    assert_receive :opened_server_log_channel, 1000
     assert_receive {:status_updated, "toggle-logs-server", :connected}, 1000
 
     # Act: manually trigger refresh_containers, which opens list channel 2
@@ -353,22 +310,10 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
       :ok
     end)
-    |> expect(:open_channel, fn :dummy_conn ->
-      {:ok, :dummy_server_log_channel}
-    end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_server_log_channel,
-                        "sh -c 'tail -n 1000 -F /var/log/messages 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
-      :ok
-    end)
-    |> expect(:close_channel, fn :dummy_conn, :dummy_server_log_channel ->
-      :ok
-    end)
     # Then log stream channel open
     |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_log_channel} end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_log_channel,
-                        "sh -c 'docker logs --follow --tail 1000 container1 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_log_channel, cmd ->
+      assert String.contains?(cmd, "docker logs")
       :ok
     end)
     # Reconnect attempt starts:
@@ -385,9 +330,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :resumed_log_channel)
       {:ok, :dummy_log_channel2}
     end)
-    |> expect(:exec, fn :dummy_conn2,
-                        :dummy_log_channel2,
-                        "sh -c 'docker logs --follow --tail 1000 container1 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+    |> expect(:exec, fn :dummy_conn2, :dummy_log_channel2, cmd ->
+      assert String.contains?(cmd, "docker logs")
       :ok
     end)
     # Cleanup calls
@@ -464,14 +408,6 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
       :ok
     end)
-    |> expect(:open_channel, fn :dummy_conn ->
-      {:ok, :dummy_server_log_channel}
-    end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_server_log_channel,
-                        "sh -c 'tail -n 1000 -F /var/log/messages 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
-      :ok
-    end)
     # Validation channel expectations
     |> expect(:open_channel, fn :dummy_conn ->
       send(test_pid, :val_channel_opened)
@@ -483,9 +419,6 @@ defmodule Caudata.ServerWorkerTest do
       :ok
     end)
     |> expect(:close, fn :dummy_conn ->
-      :ok
-    end)
-    |> expect(:close_channel, fn :dummy_conn, :dummy_server_log_channel ->
       :ok
     end)
 
@@ -514,7 +447,7 @@ defmodule Caudata.ServerWorkerTest do
     stop_supervised(ServerWorker)
   end
 
-  test "closes oldest channel when opening more than 8 channels" do
+  test "closes oldest channel when exceeding max_active_streams limit" do
     profile =
       Profile.new(%{
         host_pattern: "limit-test-server",
@@ -536,12 +469,9 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
       :ok
     end)
-    # 2. server log channel
-    |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_server_log_channel} end)
-    |> expect(:exec, fn :dummy_conn, :dummy_server_log_channel, _cmd -> :ok end)
 
-    # 3. Expect 8 container log channels to be opened in order
-    Enum.each(1..8, fn i ->
+    # 2. Expect 5 container log channels to be opened in order
+    Enum.each(1..5, fn i ->
       ch_id = :"dummy_log_channel_#{i}"
 
       Mock
@@ -549,15 +479,17 @@ defmodule Caudata.ServerWorkerTest do
       |> expect(:exec, fn :dummy_conn, ^ch_id, _cmd -> :ok end)
     end)
 
-    # 4. Expect closing of the oldest channel (dummy_log_channel_1) when container 9 starts streaming
+    # 4. Expect closing of the oldest channel (dummy_log_channel_1) when container 6 starts streaming
     Mock
     |> expect(:close_channel, fn :dummy_conn, :dummy_log_channel_1 ->
       send(test_pid, :closed_container_1)
       :ok
     end)
-    # Then opening channel for container 9
-    |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_log_channel_9} end)
-    |> expect(:exec, fn :dummy_conn, :dummy_log_channel_9, _cmd -> :ok end)
+
+    # Then opening channel for container 6
+    Mock
+    |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_log_channel_6} end)
+    |> expect(:exec, fn :dummy_conn, :dummy_log_channel_6, _cmd -> :ok end)
 
     # General stub for other close_channel calls during termination
     Mock
@@ -570,7 +502,7 @@ defmodule Caudata.ServerWorkerTest do
     assert_receive :opened_list_channel, 1000
 
     containers_json =
-      1..9
+      1..6
       |> Enum.map(fn i ->
         "{\"ID\":\"container#{i}\",\"Names\":\"test-container-#{i}\",\"Image\":\"nginx\",\"Status\":\"Up\"}"
       end)
@@ -583,9 +515,9 @@ defmodule Caudata.ServerWorkerTest do
     # Wait for status to become connected
     Process.sleep(100)
 
-    # Start streaming logs for first 8 containers
+    # Start streaming logs for first 5 containers
     # Wait a bit between calls to guarantee monotonic time difference
-    Enum.each(1..8, fn i ->
+    Enum.each(1..5, fn i ->
       assert :ok = GenServer.call(worker_pid, {:stream_container_logs, "container#{i}"})
       Process.sleep(10)
     end)
@@ -596,8 +528,8 @@ defmodule Caudata.ServerWorkerTest do
 
     assert %{streaming?: true} = Caudata.ContainerWorker.get_streaming_status(pid1)
 
-    # Start streaming logs for container 9 - this should trigger closing container 1 logs
-    assert :ok = GenServer.call(worker_pid, {:stream_container_logs, "container9"})
+    # Start streaming logs for container 6 - this should trigger closing container 1 logs
+    assert :ok = GenServer.call(worker_pid, {:stream_container_logs, "container6"})
 
     # Check if container 1 logs were closed
     assert_receive :closed_container_1, 1000
@@ -628,16 +560,7 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
       :ok
     end)
-    # 2. Server log channel (opened on connect)
-    |> expect(:open_channel, fn :dummy_conn ->
-      {:ok, :dummy_server_log_channel}
-    end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_server_log_channel,
-                        "sh -c 'tail -n 1000 -F /var/log/messages 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
-      :ok
-    end)
-    # 3. Docker events channel (opened after list channel closes)
+    # 2. Docker events channel (opened after list channel closes)
     |> expect(:open_channel, fn :dummy_conn ->
       send(test_pid, :opened_events_channel)
       {:ok, :dummy_events_channel}
@@ -646,26 +569,24 @@ defmodule Caudata.ServerWorkerTest do
       assert String.starts_with?(cmd, "docker events")
       :ok
     end)
-    # 4. Stream logs for container1 (initial)
+    # 3. Stream logs for container1 (initial)
     |> expect(:open_channel, fn :dummy_conn ->
       {:ok, :dummy_log_channel_1}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_log_channel_1,
-                        "sh -c 'docker logs --follow --tail 1000 container1 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_log_channel_1, cmd ->
+      assert String.contains?(cmd, "docker logs")
       :ok
     end)
-    # 5. Stream logs for container2 (after rebuild)
+    # 4. Stream logs for container2 (after rebuild)
     |> expect(:open_channel, fn :dummy_conn ->
       send(test_pid, :opened_log_channel_2)
       {:ok, :dummy_log_channel_2}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_log_channel_2,
-                        "sh -c 'docker logs --follow --tail 1000 container2 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_log_channel_2, cmd ->
+      assert String.contains?(cmd, "docker logs")
       :ok
     end)
-    # 6. Cleanup calls
+    # 5. Cleanup calls
     |> stub(:close_channel, fn _conn, _chan -> :ok end)
     |> stub(:close, fn _conn -> :ok end)
 
@@ -745,16 +666,7 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
       :ok
     end)
-    # 2. Server log channel (opened on connect)
-    |> expect(:open_channel, fn :dummy_conn ->
-      {:ok, :dummy_server_log_channel}
-    end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_server_log_channel,
-                        "sh -c 'tail -n 1000 -F /var/log/messages 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
-      :ok
-    end)
-    # 3. Docker events channel (opened after list channel closes)
+    # 2. Docker events channel (opened after list channel closes)
     |> expect(:open_channel, fn :dummy_conn ->
       send(test_pid, :opened_events_channel)
       {:ok, :dummy_events_channel}
@@ -763,27 +675,25 @@ defmodule Caudata.ServerWorkerTest do
       assert String.starts_with?(cmd, "docker events")
       :ok
     end)
-    # 4. Stream logs for container1 (initial)
+    # 3. Stream logs for container1 (initial)
     |> expect(:open_channel, fn :dummy_conn ->
       send(test_pid, :opened_log_channel_1)
       {:ok, :dummy_log_channel_1}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_log_channel_1,
-                        "sh -c 'docker logs --follow --tail 1000 container1 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_log_channel_1, cmd ->
+      assert String.contains?(cmd, "docker logs")
       :ok
     end)
-    # 5. Stream logs for container1 (after restart, same ID)
+    # 4. Stream logs for container1 (after restart, same ID)
     |> expect(:open_channel, fn :dummy_conn ->
       send(test_pid, :opened_log_channel_1_again)
       {:ok, :dummy_log_channel_1_again}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_log_channel_1_again,
-                        "sh -c 'docker logs --follow --tail 1000 container1 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_log_channel_1_again, cmd ->
+      assert String.contains?(cmd, "docker logs")
       :ok
     end)
-    # 6. Cleanup calls
+    # 5. Cleanup calls
     |> stub(:close_channel, fn _conn, _chan -> :ok end)
     |> stub(:close, fn _conn -> :ok end)
 

@@ -28,7 +28,6 @@ defmodule Caudata.ConfigTest do
     assert File.exists?(@temp_config_path)
 
     assert Caudata.Config.global_capacity(config) == 1000
-    assert Caudata.Config.global_log_command(config) == "tail -F /var/log/messages"
     assert Caudata.Config.discover_ssh_config?(config) == true
 
     assert Caudata.Config.ssh_server_settings(config) == %{
@@ -45,7 +44,6 @@ defmodule Caudata.ConfigTest do
     # Create an ETS table and write it
     tab = :ets.new(:caudata_config, [:set, :public])
     :ets.insert(tab, {{:global, :capacity}, 5000})
-    :ets.insert(tab, {{:global, :log_command}, "journalctl -f"})
     :ets.insert(tab, {{:global, :discover_ssh_config}, false})
     :ets.insert(tab, {{:ssh_server, :enabled}, true})
     :ets.insert(tab, {{:ssh_server, :ip}, "0.0.0.0"})
@@ -59,8 +57,7 @@ defmodule Caudata.ConfigTest do
         host_name: "10.0.0.5",
         user: "deploy",
         port: 2222,
-        identity_file: "/tmp/id_rsa",
-        log_command: "tail -f log"
+        identity_file: "/tmp/id_rsa"
       })
 
     :ets.insert(tab, {{:profile, "custom-server"}, profile})
@@ -72,7 +69,6 @@ defmodule Caudata.ConfigTest do
     assert {:ok, config} = Caudata.Config.load()
 
     assert Caudata.Config.global_capacity(config) == 5000
-    assert Caudata.Config.global_log_command(config) == "journalctl -f"
     assert Caudata.Config.discover_ssh_config?(config) == false
 
     assert Caudata.Config.ssh_server_settings(config) == %{
@@ -88,7 +84,6 @@ defmodule Caudata.ConfigTest do
     assert profile_loaded.user == "deploy"
     assert profile_loaded.port == 2222
     assert profile_loaded.identity_file == "/tmp/id_rsa"
-    assert profile_loaded.log_command == "tail -f log"
   end
 
   test "append_profile/1 persists a profile to the config file" do
@@ -100,8 +95,7 @@ defmodule Caudata.ConfigTest do
       host_name: "10.0.0.6",
       user: "admin",
       port: 22,
-      identity_file: "/tmp/id_rsa",
-      log_command: "tail -F /var/log/app.log"
+      identity_file: "/tmp/id_rsa"
     }
 
     assert :ok = Caudata.Config.append_profile(profile_attrs)
@@ -113,7 +107,6 @@ defmodule Caudata.ConfigTest do
     assert profile.user == "admin"
     assert profile.port == 22
     assert profile.identity_file == "/tmp/id_rsa"
-    assert profile.log_command == "tail -F /var/log/app.log"
   end
 
   test "append_profile/1 handles nil fields gracefully" do
@@ -125,8 +118,7 @@ defmodule Caudata.ConfigTest do
       host_name: "10.0.0.7",
       port: 22,
       user: nil,
-      identity_file: nil,
-      log_command: nil
+      identity_file: nil
     }
 
     assert :ok = Caudata.Config.append_profile(profile_attrs)
@@ -138,7 +130,5 @@ defmodule Caudata.ConfigTest do
     assert profile.port == 22
     assert is_nil(profile.user)
     assert is_nil(profile.identity_file)
-    # falls back to global default
-    assert profile.log_command == "tail -F /var/log/messages"
   end
 end

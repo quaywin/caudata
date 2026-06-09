@@ -29,7 +29,7 @@ defmodule Caudata.ContainerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_channel,
-                        "sh -c 'docker logs --follow --tail 1000 container123 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs -t --follow --tail 1000 container123 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->
@@ -84,7 +84,11 @@ defmodule Caudata.ContainerWorkerTest do
 
     Process.sleep(50)
     snapshot = LogStore.get_snapshot("my-server/container123")
-    assert snapshot == ["log line 1", "log line 2"]
+
+    assert snapshot == [
+             %{timestamp: nil, stream: :stdout, message: "log line 1"},
+             %{timestamp: nil, stream: :stdout, message: "log line 2"}
+           ]
 
     # Test stop_streaming
     assert :ok = ContainerWorker.stop_streaming(pid)
@@ -107,7 +111,7 @@ defmodule Caudata.ContainerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_channel,
-                        "sh -c 'docker logs --follow --tail 1000 container123 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs -t --follow --tail 1000 container123 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->
@@ -132,7 +136,7 @@ defmodule Caudata.ContainerWorkerTest do
     stop_supervised(ContainerWorker)
   end
 
-  test "redirected stderr and stdout logs are streamed and processed sequentially in order" do
+  test "concurrent stdout and stderr logs are sorted chronologically by Docker timestamps" do
     container = %{
       id: "container123",
       name: "my-nginx",
@@ -141,12 +145,15 @@ defmodule Caudata.ContainerWorkerTest do
       state: "running"
     }
 
+    # Clear logs to avoid leak
+    Caudata.LogStore.clear_logs("my-server/container123")
+
     Mock
     |> expect(:open_channel, fn :dummy_conn ->
       {:ok, :dummy_channel}
     end)
     |> expect(:exec, fn :dummy_conn, :dummy_channel, cmd ->
-      assert String.contains?(cmd, "2>&1")
+      assert String.contains?(cmd, "docker logs -t")
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->
@@ -161,10 +168,20 @@ defmodule Caudata.ContainerWorkerTest do
     # Subscribe to LogStore updates
     Phoenix.PubSub.subscribe(Caudata.PubSub, "logs:my-server/container123")
 
-    # Simulate sequential data sent over stdout stream (stream_id = 0)
+    # Simulate interleaved stdout (stream 0) and stderr (stream 1) chunks with ISO 8601 timestamps
+    # Notice that stderr is received FIRST, but its timestamp is LATER (T12:00:01)
+    # stdout is received SECOND, but its timestamp is EARLIER (T12:00:00)
+    # The LogStore should sort them chronologically (stdout first, then stderr)!
     send(
       pid,
-      {:ssh_cm, :dummy_conn, {:data, :dummy_channel, 0, "stderr line 1\nstdout line 1\n"}}
+      {:ssh_cm, :dummy_conn,
+       {:data, :dummy_channel, 1, "2026-06-08T12:00:01.000000000Z stderr line\n"}}
+    )
+
+    send(
+      pid,
+      {:ssh_cm, :dummy_conn,
+       {:data, :dummy_channel, 0, "2026-06-08T12:00:00.000000000Z stdout line\n"}}
     )
 
     # Expect log updates in LogStore
@@ -173,8 +190,19 @@ defmodule Caudata.ContainerWorkerTest do
     Process.sleep(120)
     snapshot = LogStore.get_snapshot("my-server/container123")
 
-    # The lines should be separated correctly without corruption
-    assert snapshot == ["stderr line 1", "stdout line 1"]
+    # Verify that the logs are sorted by their Docker timestamp correctly!
+    assert snapshot == [
+             %{
+               timestamp: "2026-06-08T12:00:00.000000000Z",
+               stream: :stdout,
+               message: "stdout line"
+             },
+             %{
+               timestamp: "2026-06-08T12:00:01.000000000Z",
+               stream: :stderr,
+               message: "stderr line"
+             }
+           ]
 
     assert :ok = ContainerWorker.stop_streaming(pid)
     stop_supervised(ContainerWorker)

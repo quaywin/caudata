@@ -499,7 +499,7 @@ defmodule Caudata.UI.AppTest do
     source_id = profile_id
     Caudata.LogStore.clear_logs(source_id)
 
-    initial_logs = Enum.map(1..10, &"log line #{&1}")
+    initial_logs = Enum.map(1..10, &%{timestamp: nil, stream: :stdout, message: "log line #{&1}"})
 
     {:ok, state} = App.mount([])
 
@@ -515,7 +515,9 @@ defmodule Caudata.UI.AppTest do
     }
 
     # Now, the LogStore gets updated with new logs, shifting the window
-    new_store_logs = Enum.map(4..13, &"log line #{&1}")
+    new_store_logs =
+      Enum.map(4..13, &%{timestamp: nil, stream: :stdout, message: "log line #{&1}"})
+
     Caudata.LogStore.append_logs(source_id, new_store_logs)
     :sys.get_state(Caudata.LogStore)
 
@@ -544,7 +546,7 @@ defmodule Caudata.UI.AppTest do
     Caudata.LogStore.clear_logs(source_id)
 
     # Initial logs: 15 lines. Capped at 15 fetch limit.
-    initial_logs = Enum.map(1..15, &"log line #{&1}")
+    initial_logs = Enum.map(1..15, &%{timestamp: nil, stream: :stdout, message: "log line #{&1}"})
     Caudata.LogStore.append_logs(source_id, initial_logs)
     :sys.get_state(Caudata.LogStore)
 
@@ -573,7 +575,9 @@ defmodule Caudata.UI.AppTest do
 
     # 3. Now 5 new logs are appended to LogStore (total 20 logs).
     # Since logs_fetch_limit is 15, the new snapshot will be lines 6 to 20.
-    new_store_logs = Enum.map(6..20, &"log line #{&1}")
+    new_store_logs =
+      Enum.map(6..20, &%{timestamp: nil, stream: :stdout, message: "log line #{&1}"})
+
     Caudata.LogStore.clear_logs(source_id)
     Caudata.LogStore.append_logs(source_id, new_store_logs)
     :sys.get_state(Caudata.LogStore)
@@ -894,9 +898,10 @@ defmodule Caudata.UI.AppTest do
     assert length(paragraph.text) == 7
 
     # Let's inspect the Spans of each Line to verify formatting:
-    # 1. "15:33:22.268 [info] Running Caudata" -> ts, bracket_lvl, msg
+    # 1. "15:33:22.268 [info] Running Caudata" -> prefix, ts, bracket_lvl, msg
     line1 = Enum.at(paragraph.text, 0)
-    assert [span_ts, span_lvl, span_msg] = line1.spans
+    assert [span_pref, span_ts, span_lvl, span_msg] = line1.spans
+    assert span_pref.content == "  "
     assert span_ts.content == "15:33:22.268 "
     assert span_ts.style.fg == :dark_gray
     assert span_lvl.content == "[info] "
@@ -904,9 +909,10 @@ defmodule Caudata.UI.AppTest do
     assert :bold in span_lvl.style.modifiers
     assert span_msg.content == "Running Caudata"
 
-    # 2. "2026-06-08 15:33:22 ERROR: Database error" -> ts, colon_lvl, msg
+    # 2. "2026-06-08 15:33:22 ERROR: Database error" -> prefix, ts, colon_lvl, msg
     line2 = Enum.at(paragraph.text, 1)
-    assert [span_ts2, span_lvl2, span_msg2] = line2.spans
+    assert [span_pref2, span_ts2, span_lvl2, span_msg2] = line2.spans
+    assert span_pref2.content == "┃ "
     assert span_ts2.content == "2026-06-08 15:33:22 "
     assert span_ts2.style.fg == :dark_gray
     assert span_lvl2.content == "ERROR: "
@@ -915,33 +921,37 @@ defmodule Caudata.UI.AppTest do
     assert span_msg2.content == "Database error"
     assert span_msg2.style.fg == :white
 
-    # 3. "[warn] API warning" -> bracket_lvl, msg (no timestamp)
+    # 3. "[warn] API warning" -> prefix, bracket_lvl, msg (no timestamp)
     line3 = Enum.at(paragraph.text, 2)
-    assert [span_lvl3, span_msg3] = line3.spans
+    assert [span_pref3, span_lvl3, span_msg3] = line3.spans
+    assert span_pref3.content == "  "
     assert span_lvl3.content == "[warn] "
     assert span_lvl3.style.fg == :yellow
     assert :bold in span_lvl3.style.modifiers
     assert span_msg3.content == "API warning"
     assert span_msg3.style.fg == :white
 
-    # 4. "Just a plain message" -> msg (no timestamp, no level)
+    # 4. "Just a plain message" -> prefix, msg (no timestamp, no level)
     line4 = Enum.at(paragraph.text, 3)
-    assert [span_msg4] = line4.spans
+    assert [span_pref4, span_msg4] = line4.spans
+    assert span_pref4.content == "  "
     assert span_msg4.content == "Just a plain message"
     assert span_msg4.style.fg == :white
 
-    # 5. "[stderr] system error output" -> bracket_lvl, msg
+    # 5. "[stderr] system error output" -> prefix, bracket_lvl, msg
     line5 = Enum.at(paragraph.text, 4)
-    assert [span_lvl5, span_msg5] = line5.spans
+    assert [span_pref5, span_lvl5, span_msg5] = line5.spans
+    assert span_pref5.content == "┃ "
     assert span_lvl5.content == "[stderr] "
     assert span_lvl5.style.fg == :red
     assert :bold in span_lvl5.style.modifiers
     assert span_msg5.content == "system error output"
     assert span_msg5.style.fg == :white
 
-    # 6. "2026-06-08 15:33:22 crit: Critical system issue" -> ts, colon_lvl, msg
+    # 6. "2026-06-08 15:33:22 crit: Critical system issue" -> prefix, ts, colon_lvl, msg
     line6 = Enum.at(paragraph.text, 5)
-    assert [span_ts6, span_lvl6, span_msg6] = line6.spans
+    assert [span_pref6, span_ts6, span_lvl6, span_msg6] = line6.spans
+    assert span_pref6.content == "┃ "
     assert span_ts6.content == "2026-06-08 15:33:22 "
     assert span_lvl6.content == "crit: "
     assert span_lvl6.style.fg == :red
@@ -949,9 +959,10 @@ defmodule Caudata.UI.AppTest do
     assert span_msg6.content == "Critical system issue"
     assert span_msg6.style.fg == :white
 
-    # 7. "fail: operation failed" -> colon_lvl, msg
+    # 7. "fail: operation failed" -> prefix, colon_lvl, msg
     line7 = Enum.at(paragraph.text, 6)
-    assert [span_lvl7, span_msg7] = line7.spans
+    assert [span_pref7, span_lvl7, span_msg7] = line7.spans
+    assert span_pref7.content == "┃ "
     assert span_lvl7.content == "fail: "
     assert span_lvl7.style.fg == :red
     assert :bold in span_lvl7.style.modifiers
@@ -996,24 +1007,28 @@ defmodule Caudata.UI.AppTest do
     assert is_list(paragraph.text)
     assert length(paragraph.text) == 4
 
-    # 1. \"  continuation line starting with spaces\" -> leading spaces should be fully preserved
+    # 1. "  continuation line starting with spaces" -> leading spaces should be fully preserved
     line1 = Enum.at(paragraph.text, 0)
-    assert [span1] = line1.spans
+    assert [span_pref1, span1] = line1.spans
+    assert span_pref1.content == "  "
     assert span1.content == "  continuation line starting with spaces"
 
-    # 2. \"2026-06-08 12:00:00 [info]   message with leading spaces\" -> should keep extra spaces after the separator
+    # 2. "2026-06-08 12:00:00 [info]   message with leading spaces" -> should keep extra spaces after the separator
     line2 = Enum.at(paragraph.text, 1)
-    assert [_ts, _lvl, span2] = line2.spans
+    assert [span_pref2, _ts, _lvl, span2] = line2.spans
+    assert span_pref2.content == "  "
     assert span2.content == "  message with leading spaces"
 
-    # 3. \"2026-06-08 12:00:00   message with leading spaces and no level\" -> should keep extra spaces after the separator
+    # 3. "2026-06-08 12:00:00   message with leading spaces and no level" -> should keep extra spaces after the separator
     line3 = Enum.at(paragraph.text, 2)
-    assert [_ts, span3] = line3.spans
+    assert [span_pref3, _ts, span3] = line3.spans
+    assert span_pref3.content == "  "
     assert span3.content == "  message with leading spaces and no level"
 
-    # 4. \"[info]   message with leading spaces and level\" -> should keep extra spaces after the separator
+    # 4. "[info]   message with leading spaces and level" -> should keep extra spaces after the separator
     line4 = Enum.at(paragraph.text, 3)
-    assert [_lvl, span4] = line4.spans
+    assert [span_pref4, _lvl, span4] = line4.spans
+    assert span_pref4.content == "  "
     assert span4.content == "  message with leading spaces and level"
   end
 
@@ -1048,7 +1063,7 @@ defmodule Caudata.UI.AppTest do
     source_id = "#{profile_id}/#{container_id}"
     Caudata.LogStore.clear_logs(source_id)
 
-    initial_logs = Enum.map(1..15, &"log line #{&1}")
+    initial_logs = Enum.map(1..15, &%{timestamp: nil, stream: :stdout, message: "log line #{&1}"})
 
     {:ok, state} = App.mount([])
 
@@ -1063,7 +1078,9 @@ defmodule Caudata.UI.AppTest do
     }
 
     # Append new logs shifting the window by 5
-    new_store_logs = Enum.map(6..20, &"log line #{&1}")
+    new_store_logs =
+      Enum.map(6..20, &%{timestamp: nil, stream: :stdout, message: "log line #{&1}"})
+
     Caudata.LogStore.append_logs(source_id, new_store_logs)
     :sys.get_state(Caudata.LogStore)
 
@@ -1092,7 +1109,12 @@ defmodule Caudata.UI.AppTest do
     source_id = "#{server_id}/#{new_id}"
 
     Caudata.LogStore.clear_logs(source_id)
-    new_logs = ["new log 1", "new log 2"]
+
+    new_logs = [
+      %{timestamp: nil, stream: :stdout, message: "new log 1"},
+      %{timestamp: nil, stream: :stdout, message: "new log 2"}
+    ]
+
     Caudata.LogStore.append_logs(source_id, new_logs)
     :sys.get_state(Caudata.LogStore)
 
@@ -1102,7 +1124,10 @@ defmodule Caudata.UI.AppTest do
       state
       | selected_profile_id: server_id,
         selected_container_id: old_id,
-        logs: ["old log line 1", "old log line 2"]
+        logs: [
+          %{timestamp: nil, stream: :stdout, message: "old log line 1"},
+          %{timestamp: nil, stream: :stdout, message: "old log line 2"}
+        ]
     }
 
     # Simulate container rebuild event

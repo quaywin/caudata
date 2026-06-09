@@ -25,7 +25,10 @@ defmodule Caudata.UI.ViewHelper do
       if model.filter_regex != "" and not model.filter_error do
         case Regex.compile(model.filter_regex) do
           {:ok, re} ->
-            Enum.filter(model.logs, &Regex.match?(re, &1))
+            Enum.filter(model.logs, fn
+              %{message: msg} -> Regex.match?(re, msg)
+              line when is_binary(line) -> Regex.match?(re, line)
+            end)
 
           _ ->
             model.logs
@@ -34,15 +37,30 @@ defmodule Caudata.UI.ViewHelper do
         model.logs
       end
 
+    normalized =
+      Enum.map(filtered_logs, fn
+        %{timestamp: ts, stream: stream, message: msg} ->
+          %{timestamp: ts, stream: stream, message: msg}
+
+        line when is_binary(line) ->
+          %{timestamp: nil, stream: :stdout, message: line}
+      end)
+
     cond do
       is_nil(model.selected_container_id) ->
-        ["No container selected. Select a container in the sidebar to view logs."]
+        [
+          %{
+            timestamp: nil,
+            stream: :stdout,
+            message: "No container selected. Select a container in the sidebar to view logs."
+          }
+        ]
 
-      filtered_logs == [] ->
-        ["No logs captured yet."]
+      normalized == [] ->
+        [%{timestamp: nil, stream: :stdout, message: "No logs captured yet."}]
 
       true ->
-        filtered_logs
+        normalized
     end
   end
 
@@ -80,7 +98,9 @@ defmodule Caudata.UI.ViewHelper do
   @doc """
   Calculates the wrapped lines count for a single string line.
   """
-  def visual_line_count(line, width) do
+  def visual_line_count(%{message: line}, width), do: visual_line_count(line, width)
+
+  def visual_line_count(line, width) when is_binary(line) do
     w = max(1, width)
     len = String.length(line)
     div(max(0, len - 1), w) + 1
@@ -251,11 +271,16 @@ defmodule Caudata.UI.ViewHelper do
   Computes the inner width of the logs pane based on fullscreen state.
   """
   def get_logs_inner_width(model) do
-    if Map.get(model, :logs_full_screen, false) do
-      max(0, model.width - 2)
-    else
-      max(0, model.width - 40)
-    end
+    width =
+      if Map.get(model, :logs_full_screen, false) do
+        max(0, model.width - 2)
+      else
+        max(0, model.width - 40)
+      end
+
+    prefix_width = if Map.get(model, :show_timestamps, false), do: 22, else: 2
+
+    max(1, width - prefix_width)
   end
 
   @doc """

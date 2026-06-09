@@ -78,10 +78,6 @@ defmodule Caudata.Config do
     get_in(config, ["global", "capacity"]) || 1000
   end
 
-  def global_log_command(config) do
-    get_in(config, ["global", "log_command"]) || "tail -F /var/log/messages"
-  end
-
   def discover_ssh_config?(config) do
     case get_in(config, ["global", "discover_ssh_config"]) do
       nil -> true
@@ -148,12 +144,6 @@ defmodule Caudata.Config do
         _ -> 1000
       end
 
-    global_log_command =
-      case :ets.lookup(tab, {:global, :log_command}) do
-        [{_, val}] -> val
-        _ -> "tail -F /var/log/messages"
-      end
-
     discover_ssh_config =
       case :ets.lookup(tab, {:global, :discover_ssh_config}) do
         [{_, val}] -> val
@@ -193,7 +183,6 @@ defmodule Caudata.Config do
     %{
       "global" => %{
         "capacity" => global_capacity,
-        "log_command" => global_log_command,
         "discover_ssh_config" => discover_ssh_config
       },
       "ssh_server" => %{
@@ -210,7 +199,6 @@ defmodule Caudata.Config do
     %{
       "global" => %{
         "capacity" => 1000,
-        "log_command" => "tail -F /var/log/messages",
         "discover_ssh_config" => true
       },
       "ssh_server" => %{
@@ -225,7 +213,6 @@ defmodule Caudata.Config do
 
   defp map_to_ets(tab, map) do
     :ets.insert(tab, {{:global, :capacity}, get_in(map, ["global", "capacity"])})
-    :ets.insert(tab, {{:global, :log_command}, get_in(map, ["global", "log_command"])})
 
     :ets.insert(
       tab,

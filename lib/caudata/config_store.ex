@@ -189,7 +189,6 @@ defmodule Caudata.ConfigStore do
 
   defp initialize_defaults(t) do
     :ets.insert(t, {{:global, :capacity}, 1000})
-    :ets.insert(t, {{:global, :log_command}, "tail -F /var/log/messages"})
     :ets.insert(t, {{:global, :discover_ssh_config}, true})
 
     :ets.insert(t, {{:ssh_server, :enabled}, false})

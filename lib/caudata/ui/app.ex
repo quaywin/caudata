@@ -65,6 +65,7 @@ defmodule Caudata.UI.App do
       logs: [],
       logs_scroll_y: :bottom,
       logs_fetch_limit: 100,
+      show_timestamps: false,
       loading_history: false,
       loading_history_ticks: 0,
       logs_len_before_history_load: 0,
@@ -331,7 +332,11 @@ defmodule Caudata.UI.App do
                 case Caudata.ServerSupervisor.lookup_worker(state.selected_profile_id) do
                   {:ok, pid} ->
                     Task.start(fn ->
-                      GenServer.call(pid, {:stream_container_logs, first_container.id})
+                      try do
+                        GenServer.call(pid, {:stream_container_logs, first_container.id}, 10_000)
+                      catch
+                        :exit, _ -> :ok
+                      end
                     end)
 
                     :ok

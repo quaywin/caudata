@@ -60,7 +60,19 @@ defmodule Caudata.LogStore do
 
   @impl true
   def handle_cast({:append_logs, source_id, lines}, state) do
-    sanitized_lines = Enum.map(lines, &LogSanitizer.sanitize/1)
+    sanitized_lines =
+      Enum.map(lines, fn
+        %{timestamp: ts, stream: stream, message: msg} ->
+          %{timestamp: ts, stream: stream, message: LogSanitizer.sanitize(msg)}
+
+        {stream, line} ->
+          {ts, msg} = parse_docker_log(line)
+          %{timestamp: ts, stream: stream, message: LogSanitizer.sanitize(msg)}
+
+        line when is_binary(line) ->
+          {ts, msg} = parse_docker_log(line)
+          %{timestamp: ts, stream: :stdout, message: LogSanitizer.sanitize(msg)}
+      end)
 
     # Retrieve or initialize the source buffer state
     source_state =
@@ -120,7 +132,14 @@ defmodule Caudata.LogStore do
 
       source_state ->
         lines = :queue.to_list(source_state.queue)
-        tail_lines = Enum.take(lines, -limit)
+
+        sorted_lines =
+          Enum.sort_by(lines, fn
+            %{timestamp: ts} when is_binary(ts) -> ts
+            _ -> ""
+          end)
+
+        tail_lines = Enum.take(sorted_lines, -limit)
         {:reply, tail_lines, state}
     end
   end
@@ -155,5 +174,19 @@ defmodule Caudata.LogStore do
     )
 
     {:reply, :ok, %{state | sources: new_sources}}
+  end
+
+  defp parse_docker_log(line) do
+    case String.split(line, " ", parts: 2) do
+      [timestamp, msg] ->
+        if String.match?(timestamp, ~r/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/) do
+          {timestamp, msg}
+        else
+          {nil, line}
+        end
+
+      _ ->
+        {nil, line}
+    end
   end
 end

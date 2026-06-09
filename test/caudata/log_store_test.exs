@@ -15,7 +15,11 @@ defmodule Caudata.LogStoreTest do
     Process.sleep(50)
 
     snapshot = LogStore.get_snapshot(TestLogStore, "source1")
-    assert snapshot == ["line 1", "line 2"]
+
+    assert snapshot == [
+             %{timestamp: nil, stream: :stdout, message: "line 1"},
+             %{timestamp: nil, stream: :stdout, message: "line 2"}
+           ]
 
     stats = LogStore.get_stats(TestLogStore, "source1")
     assert stats.size == 2
@@ -30,7 +34,14 @@ defmodule Caudata.LogStoreTest do
     Process.sleep(50)
 
     snapshot = LogStore.get_snapshot(TestLogStore, "source1")
-    assert snapshot == ["3", "4", "5", "6", "7"]
+
+    assert snapshot == [
+             %{timestamp: nil, stream: :stdout, message: "3"},
+             %{timestamp: nil, stream: :stdout, message: "4"},
+             %{timestamp: nil, stream: :stdout, message: "5"},
+             %{timestamp: nil, stream: :stdout, message: "6"},
+             %{timestamp: nil, stream: :stdout, message: "7"}
+           ]
 
     stats = LogStore.get_stats(TestLogStore, "source1")
     assert stats.size == 5

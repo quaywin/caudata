@@ -17,7 +17,6 @@ defmodule Caudata.UI.Components.Footer do
           case state.modal_type do
             :select_ssh ->
               [
-                Span.new(" Shortcuts: "),
                 Span.new("[⇅/j/k] Navigate ", style: %Style{fg: :yellow}),
                 Span.new("[Enter] Select ", style: %Style{fg: :green}),
                 Span.new("[Esc] Cancel ", style: %Style{fg: :red})
@@ -25,8 +24,7 @@ defmodule Caudata.UI.Components.Footer do
 
             :manual_input ->
               [
-                Span.new(" Shortcuts: "),
-                Span.new("[⇅] Navigate fields ", style: %Style{fg: :yellow}),
+                Span.new("[⇅] Navigate fields  ", style: %Style{fg: :yellow}),
                 Span.new("[Type] Edit text ", style: %Style{fg: :cyan}),
                 Span.new("[Enter] Submit/Action ", style: %Style{fg: :green}),
                 Span.new("[Esc] Close ", style: %Style{fg: :red})
@@ -35,7 +33,6 @@ defmodule Caudata.UI.Components.Footer do
             :settings ->
               if state.settings_input_active do
                 [
-                  Span.new(" Shortcuts: "),
                   Span.new("[Type] Input path ", style: %Style{fg: :cyan}),
                   Span.new("[Enter] Validate & Save ", style: %Style{fg: :green}),
                   Span.new("[Esc] Cancel ", style: %Style{fg: :red})
@@ -77,7 +74,6 @@ defmodule Caudata.UI.Components.Footer do
                   end
 
                 [
-                  Span.new(" Shortcuts: "),
                   Span.new("[Tab/⇅/⇄] Switch Tab ", style: %Style{fg: :yellow})
                 ] ++
                   tab_specific_shortcuts ++
@@ -89,14 +85,12 @@ defmodule Caudata.UI.Components.Footer do
 
         state.mode == :searching ->
           [
-            Span.new(" Shortcuts: "),
             Span.new("[Esc] Cancel ", style: %Style{fg: :yellow}),
             Span.new("[Enter] Apply ", style: %Style{fg: :green})
           ]
 
         state.mode == :selecting ->
           [
-            Span.new(" Shortcuts: "),
             Span.new("[j/k] Move ", style: %Style{fg: :yellow}),
             Span.new("[↑/↓] Select ", style: %Style{fg: :cyan}),
             Span.new("[y] Yank ", style: %Style{fg: :green}),
@@ -122,9 +116,9 @@ defmodule Caudata.UI.Components.Footer do
           base_shortcuts =
             if Map.get(state, :logs_full_screen, false) do
               [
-                Span.new(" Shortcuts: "),
                 Span.new("[q] Quit "),
                 Span.new("[f/Esc] Normal Screen ", style: %Style{fg: :yellow}),
+                Span.new("[t] Time ", style: %Style{fg: :magenta}),
                 Span.new("[/] Filter "),
                 Span.new("[y] Copy All ", style: %Style{fg: :green}),
                 Span.new("[v] Select ", style: %Style{fg: :cyan}),
@@ -132,11 +126,11 @@ defmodule Caudata.UI.Components.Footer do
               ]
             else
               [
-                Span.new(" Shortcuts: "),
                 Span.new("[q] Quit "),
                 Span.new("[Enter] Connect "),
                 Span.new("[a] Add Server "),
                 Span.new("[f] Fullscreen ", style: %Style{fg: :yellow}),
+                Span.new("[t] Time ", style: %Style{fg: :magenta}),
                 Span.new("[/] Filter "),
                 Span.new("[y] Copy ", style: %Style{fg: :green}),
                 Span.new("[v] Select ", style: %Style{fg: :cyan}),

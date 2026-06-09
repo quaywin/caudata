@@ -92,4 +92,21 @@ defmodule Caudata.UI.LogFormatter do
         %Style{fg: :cyan}
     end
   end
+
+  def log_regex, do: @log_regex
+
+  def error_level?(level) do
+    String.downcase(level) in [
+      "error",
+      "err",
+      "fatal",
+      "critical",
+      "crit",
+      "emerg",
+      "emergency",
+      "stderr",
+      "fail",
+      "failure"
+    ]
+  end
 end

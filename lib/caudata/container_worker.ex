@@ -12,7 +12,8 @@ defmodule Caudata.ContainerWorker do
     :state,
     :conn_ref,
     :channel_id,
-    :buffer,
+    :stdout_buffer,
+    :stderr_buffer,
     :ssh_client,
     :tail_limit,
     :channel_opened_at,
@@ -71,7 +72,8 @@ defmodule Caudata.ContainerWorker do
       state: Map.get(container, :state, ""),
       conn_ref: nil,
       channel_id: nil,
-      buffer: "",
+      stdout_buffer: "",
+      stderr_buffer: "",
       ssh_client: ssh_client,
       tail_limit: 1000,
       channel_opened_at: nil,
@@ -152,7 +154,7 @@ defmodule Caudata.ContainerWorker do
 
     # Cancel timer and discard pending logs to ensure a clean restart
     state = cancel_flush_timer(state)
-    state = %{state | pending_logs: [], buffer: ""}
+    state = %{state | pending_logs: [], stdout_buffer: "", stderr_buffer: ""}
 
     conn_ref = state.conn_ref
 
@@ -173,15 +175,28 @@ defmodule Caudata.ContainerWorker do
 
   # Handle SSH incoming messages
   @impl true
-  def handle_info({:ssh_cm, conn_ref, {:data, channel_id, _stream_id, chunk}}, state) do
+  def handle_info({:ssh_cm, conn_ref, {:data, channel_id, stream_id, chunk}}, state) do
     if conn_ref == state.conn_ref && channel_id == state.channel_id do
       chunk_str = to_string(chunk)
-      {lines, new_buffer} = process_chunk(chunk_str, state.buffer)
+
+      {lines, new_buffer, state_key} =
+        if stream_id == 1 do
+          {lines, new_buf} = process_chunk(chunk_str, state.stderr_buffer)
+          {lines, new_buf, :stderr_buffer}
+        else
+          {lines, new_buf} = process_chunk(chunk_str, state.stdout_buffer)
+          {lines, new_buf, :stdout_buffer}
+        end
+
+      state = Map.put(state, state_key, new_buffer)
 
       state =
         if length(lines) > 0 do
+          stream = if stream_id == 1, do: :stderr, else: :stdout
+          streamed_lines = Enum.map(lines, fn line -> {stream, line} end)
+
           # Accumulate logs to be flushed in batch
-          new_pending_logs = state.pending_logs ++ lines
+          new_pending_logs = state.pending_logs ++ streamed_lines
 
           # Lazy-start the timer to flush pending logs after 100ms
           if is_nil(state.flush_timer) do
@@ -194,7 +209,7 @@ defmodule Caudata.ContainerWorker do
           state
         end
 
-      {:noreply, %{state | buffer: new_buffer}}
+      {:noreply, state}
     else
       {:noreply, state}
     end
@@ -251,9 +266,14 @@ defmodule Caudata.ContainerWorker do
     # Force flush any buffered lines and pending logs on termination
     state = flush_pending_logs(state)
 
-    if state.buffer != "" do
-      source_id = "#{state.profile_id}/#{state.container_id}"
-      LogStore.append_logs(source_id, [state.buffer])
+    source_id = "#{state.profile_id}/#{state.container_id}"
+
+    remaining =
+      [{:stdout, state.stdout_buffer}, {:stderr, state.stderr_buffer}]
+      |> Enum.filter(fn {_, b} -> b != "" end)
+
+    if remaining != [] do
+      LogStore.append_logs(source_id, remaining)
     end
 
     _ = close_log_channel(state)
@@ -279,10 +299,17 @@ defmodule Caudata.ContainerWorker do
     # Force flush any pending logs before disconnecting
     state = flush_pending_logs(state)
 
-    if state.buffer != "" do
-      source_id = "#{state.profile_id}/#{state.container_id}"
-      LogStore.append_logs(source_id, [state.buffer])
+    source_id = "#{state.profile_id}/#{state.container_id}"
+
+    remaining =
+      [{:stdout, state.stdout_buffer}, {:stderr, state.stderr_buffer}]
+      |> Enum.filter(fn {_, b} -> b != "" end)
+
+    if remaining != [] do
+      LogStore.append_logs(source_id, remaining)
     end
+
+    state = %{state | stdout_buffer: "", stderr_buffer: ""}
 
     Phoenix.PubSub.broadcast(
       Caudata.PubSub,
@@ -303,11 +330,11 @@ defmodule Caudata.ContainerWorker do
             "file:" <> path = state.container_id
             escaped_path = String.replace(path, "'", "'\\''")
 
-            "sh -c 'tail -n #{state.tail_limit || 100} -F \"#{escaped_path}\" 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
+            "sh -c 'tail -n #{state.tail_limit || 100} -F \"#{escaped_path}\" & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
           else
             escaped_container_id = String.replace(state.container_id, "'", "'\\''")
 
-            "sh -c 'docker logs --follow --tail #{state.tail_limit || 1000} #{escaped_container_id} 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
+            "sh -c 'docker logs -t --follow --tail #{state.tail_limit || 1000} #{escaped_container_id} & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
           end
 
         case state.ssh_client.exec(conn_ref, channel_id, log_cmd) do
@@ -317,7 +344,8 @@ defmodule Caudata.ContainerWorker do
                state
                | conn_ref: conn_ref,
                  channel_id: channel_id,
-                 buffer: "",
+                 stdout_buffer: "",
+                 stderr_buffer: "",
                  channel_opened_at: System.monotonic_time()
              }}
 

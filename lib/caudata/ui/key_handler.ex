@@ -72,6 +72,10 @@ defmodule Caudata.UI.KeyHandler do
       k when k in ["f", "F"] ->
         {%{model | logs_full_screen: not Map.get(model, :logs_full_screen, false)}, []}
 
+      # Toggle Timestamps
+      k when k in ["t", "T"] ->
+        {%{model | show_timestamps: not Map.get(model, :show_timestamps, false)}, []}
+
       # Global Add Connection Modal
       k when k in ["a", "A"] ->
         ssh_config_profiles = Caudata.ConfigManager.discover_ssh_profiles()

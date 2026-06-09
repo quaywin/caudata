@@ -97,26 +97,34 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
     case ViewHelper.get_selection_range(model) do
       nil ->
         # No selection: copy single line at cursor
-        line = Enum.at(displayed_logs, model.visual_cursor, "")
+        case Enum.at(displayed_logs, model.visual_cursor) do
+          %{message: line} ->
+            notification_msg =
+              case ViewHelper.copy_to_clipboard(line) do
+                :ok -> "Copied 1 log line to clipboard!"
+                {:error, _reason} -> "Failed to copy to clipboard"
+              end
 
-        notification_msg =
-          case ViewHelper.copy_to_clipboard(line) do
-            :ok -> "Copied 1 log line to clipboard!"
-            {:error, _reason} -> "Failed to copy to clipboard"
-          end
+            {%{
+               model
+               | notification: {notification_msg, 25},
+                 mode: :browsing,
+                 visual_anchor: nil,
+                 visual_cursor: nil
+             }, []}
 
-        {%{
-           model
-           | notification: {notification_msg, 25},
-             mode: :browsing,
-             visual_anchor: nil,
-             visual_cursor: nil
-         }, []}
+          _ ->
+            {model, []}
+        end
 
       range ->
         count = Enum.count(range)
         selected_logs = Enum.slice(displayed_logs, range)
-        text = Enum.join(selected_logs, "\n")
+
+        text =
+          selected_logs
+          |> Enum.map(fn %{message: line} -> line end)
+          |> Enum.join("\n")
 
         notification_msg =
           case ViewHelper.copy_to_clipboard(text) do
@@ -318,7 +326,11 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
         ]
 
     if has_real_logs? do
-      text = Enum.join(displayed_logs, "\n")
+      text =
+        displayed_logs
+        |> Enum.map(fn %{message: line} -> line end)
+        |> Enum.join("\n")
+
       count = length(displayed_logs)
 
       notification_msg =

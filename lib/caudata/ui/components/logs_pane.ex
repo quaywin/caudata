@@ -85,15 +85,45 @@ defmodule Caudata.UI.Components.LogsPane do
     inner_width = inner_area.width
     displayed_logs = ViewHelper.get_displayed_logs(state)
 
+    prefix_width = if Map.get(state, :show_timestamps, false), do: 22, else: 2
+    wrap_width = max(1, inner_width - prefix_width)
+
     # Build wrapped lines with raw-log-index tracking
     wrapped_with_indices =
       displayed_logs
       |> Enum.with_index()
-      |> Enum.flat_map(fn {line, idx} ->
+      |> Enum.flat_map(fn {%{timestamp: ts, stream: stream, message: line}, idx} ->
         spans = LogFormatter.format_line(line)
+        is_error = stream == :stderr or error_line?(line)
 
-        ViewHelper.wrap_spans(spans, inner_width)
-        |> Enum.map(fn w -> {w, idx} end)
+        ViewHelper.wrap_spans(spans, wrap_width)
+        |> Enum.with_index()
+        |> Enum.map(fn {chunk_spans, chunk_idx} ->
+          prefix_span =
+            cond do
+              is_error ->
+                Span.new("┃ ", style: %Style{fg: :red, modifiers: [:bold]})
+
+              true ->
+                Span.new("  ", style: %Style{})
+            end
+
+          final_spans =
+            if Map.get(state, :show_timestamps, false) do
+              ts_span =
+                if chunk_idx == 0 and ts do
+                  Span.new(format_docker_timestamp(ts) <> " ", style: %Style{fg: :dark_gray})
+                else
+                  Span.new(String.duplicate(" ", 20), style: %Style{})
+                end
+
+              [prefix_span, ts_span | chunk_spans]
+            else
+              [prefix_span | chunk_spans]
+            end
+
+          {final_spans, idx}
+        end)
       end)
 
     selection_range = ViewHelper.get_selection_range(state)
@@ -234,4 +264,34 @@ defmodule Caudata.UI.Components.LogsPane do
 
   defp get_scroll_y(:bottom, max_scroll), do: max_scroll
   defp get_scroll_y(val, max_scroll) when is_integer(val), do: min(val, max_scroll)
+
+  defp format_docker_timestamp(ts) when is_binary(ts) do
+    ts
+    |> String.slice(0, 19)
+    |> String.replace("T", " ")
+  end
+
+  defp format_docker_timestamp(_), do: String.duplicate(" ", 19)
+
+  defp error_line?(line) do
+    case Regex.named_captures(LogFormatter.log_regex(), line) do
+      %{
+        "bracket_lvl" => bracket_lvl,
+        "colon_lvl" => colon_lvl,
+        "bare_lvl" => bare_lvl
+      } ->
+        lvl =
+          cond do
+            bracket_lvl != "" -> bracket_lvl
+            colon_lvl != "" -> colon_lvl
+            bare_lvl != "" -> bare_lvl
+            true -> nil
+          end
+
+        if lvl, do: LogFormatter.error_level?(lvl), else: false
+
+      _ ->
+        false
+    end
+  end
 end

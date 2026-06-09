@@ -12,7 +12,6 @@ defmodule Caudata.Profile do
     :identity_file,
     :password,
     port: 22,
-    log_command: "tail -F /var/log/messages",
     disabled_containers: [],
     custom_logs: [],
     enabled: true
@@ -26,7 +25,6 @@ defmodule Caudata.Profile do
           port: integer(),
           identity_file: String.t() | nil,
           password: String.t() | nil,
-          log_command: String.t(),
           disabled_containers: [String.t()],
           custom_logs: [String.t()],
           enabled: boolean()
@@ -56,7 +54,6 @@ defmodule Caudata.Profile do
           id: id,
           host_name: host_pattern,
           port: 22,
-          log_command: "tail -F /var/log/messages",
           disabled_containers: [],
           custom_logs: [],
           enabled: true

@@ -89,7 +89,7 @@ defmodule Caudata.SSHClient do
           ssh_opts
         end
 
-      case :ssh.connect(char_host, port, ssh_opts) do
+      case :ssh.connect(char_host, port, ssh_opts, 15_000) do
         {:ok, conn_ref} ->
           {:ok, conn_ref}
 

@@ -68,6 +68,12 @@ defmodule Caudata.UI.Components.Footer do
                         Span.new("[a] Add Path ", style: %Style{fg: :green}),
                         Span.new("[d/Backspace] Delete Path ", style: %Style{fg: :red})
                       ]
+
+                    :general ->
+                      [
+                        Span.new("[⇅] Navigate fields ", style: %Style{fg: :cyan}),
+                        Span.new("[Type] Edit text ", style: %Style{fg: :green})
+                      ]
                   end
 
                 [
@@ -88,14 +94,30 @@ defmodule Caudata.UI.Components.Footer do
             Span.new("[Enter] Apply ", style: %Style{fg: :green})
           ]
 
+        state.mode == :selecting ->
+          [
+            Span.new(" Shortcuts: "),
+            Span.new("[j/k] Move ", style: %Style{fg: :yellow}),
+            Span.new("[↑/↓] Select ", style: %Style{fg: :cyan}),
+            Span.new("[y] Yank ", style: %Style{fg: :green}),
+            Span.new("[Esc] Cancel ", style: %Style{fg: :red})
+          ]
+
         true ->
-          selected_profile = Enum.find(state.profiles, &(&1.id == state.selected_profile_id))
+          current_src_id =
+            cond do
+              state.selected_profile_id && state.selected_container_id ->
+                "#{state.selected_profile_id}/#{state.selected_container_id}"
+
+              state.selected_profile_id ->
+                state.selected_profile_id
+
+              true ->
+                nil
+            end
 
           size =
-            if selected_profile, do: Map.get(state.buffer_sizes, selected_profile.id, 0), else: 0
-
-          drops =
-            if selected_profile, do: Map.get(state.drop_counts, selected_profile.id, 0), else: 0
+            if current_src_id, do: Map.get(state.buffer_sizes, current_src_id, 0), else: 0
 
           base_shortcuts =
             if Map.get(state, :logs_full_screen, false) do
@@ -104,6 +126,8 @@ defmodule Caudata.UI.Components.Footer do
                 Span.new("[q] Quit "),
                 Span.new("[f/Esc] Normal Screen ", style: %Style{fg: :yellow}),
                 Span.new("[/] Filter "),
+                Span.new("[y] Copy All ", style: %Style{fg: :green}),
+                Span.new("[v] Select ", style: %Style{fg: :cyan}),
                 Span.new("[j/k] Scroll Logs ")
               ]
             else
@@ -114,7 +138,9 @@ defmodule Caudata.UI.Components.Footer do
                 Span.new("[a] Add Server "),
                 Span.new("[f] Fullscreen ", style: %Style{fg: :yellow}),
                 Span.new("[/] Filter "),
-                Span.new("[⇅] Navigate | [j/k] Scroll Logs ")
+                Span.new("[y] Copy ", style: %Style{fg: :green}),
+                Span.new("[v] Select ", style: %Style{fg: :cyan}),
+                Span.new("[⇅] Navigate | [j/k] Scroll ")
               ]
             end
 
@@ -131,8 +157,15 @@ defmodule Caudata.UI.Components.Footer do
               base_shortcuts
             end
 
+          capacity =
+            if Process.whereis(Caudata.ConfigStore) do
+              Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :global, :capacity, 1000)
+            else
+              1000
+            end
+
           if size > 0 do
-            base_shortcuts ++ [Span.new(" | Size: #{size}/1000 | Drops: #{drops}")]
+            base_shortcuts ++ [Span.new(" | Lines: #{size}/#{capacity}")]
           else
             base_shortcuts
           end

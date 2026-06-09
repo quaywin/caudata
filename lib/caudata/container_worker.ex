@@ -73,7 +73,7 @@ defmodule Caudata.ContainerWorker do
       channel_id: nil,
       buffer: "",
       ssh_client: ssh_client,
-      tail_limit: 100,
+      tail_limit: 1000,
       channel_opened_at: nil,
       pending_logs: [],
       flush_timer: nil

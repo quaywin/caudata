@@ -102,7 +102,7 @@ defmodule Caudata.ServerWorker do
       active_container_id: nil,
       active_container_name: nil,
       conn_task_pid: nil,
-      tail_limit: nil,
+      tail_limit: 1000,
       events_channel_id: nil,
       enable_events:
         Keyword.get(opts, :enable_events, Application.get_env(:caudata, :env) != :test),

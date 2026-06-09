@@ -239,16 +239,27 @@ defmodule Caudata.UI.Components.Sidebar do
         select_container(server_id, first_container.id, first_container.name, model)
 
       _ ->
+        source_id = server_id
+
+        stats =
+          if Process.whereis(Caudata.LogStore) do
+            Caudata.LogStore.get_stats(source_id)
+          else
+            %{size: 0, drop_count: 0}
+          end
+
         {%{
            model
            | selected_profile_id: server_id,
              selected_container_id: nil,
              logs: [],
              logs_scroll_y: :bottom,
-             logs_fetch_limit: 1000,
+             logs_fetch_limit: 100,
              loading_history: false,
              loading_history_ticks: 0,
-             logs_len_before_history_load: 0
+             logs_len_before_history_load: 0,
+             buffer_sizes: Map.put(model.buffer_sizes, source_id, stats.size),
+             drop_counts: Map.put(model.drop_counts, source_id, stats.drop_count)
          }, []}
     end
   end
@@ -325,16 +336,25 @@ defmodule Caudata.UI.Components.Sidebar do
     source_id = "#{server_id}/#{container_id}"
     logs = Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, 1000)
 
+    stats =
+      if Process.whereis(Caudata.LogStore) do
+        Caudata.LogStore.get_stats(source_id)
+      else
+        %{size: 0, drop_count: 0}
+      end
+
     {%{
        model
        | selected_profile_id: server_id,
          selected_container_id: container_id,
          logs: logs,
          logs_scroll_y: :bottom,
-         logs_fetch_limit: 1000,
+         logs_fetch_limit: 100,
          loading_history: false,
          loading_history_ticks: 0,
-         logs_len_before_history_load: 0
+         logs_len_before_history_load: 0,
+         buffer_sizes: Map.put(model.buffer_sizes, source_id, stats.size),
+         drop_counts: Map.put(model.drop_counts, source_id, stats.drop_count)
      }, []}
   end
 

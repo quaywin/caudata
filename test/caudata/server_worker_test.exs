@@ -45,7 +45,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_server_log_channel,
-                        "sh -c 'tail -F /var/log/test & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -n 1000 -F /var/log/test & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:open_channel, fn :dummy_conn ->
@@ -53,7 +53,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel,
-                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 1000 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_log_channel ->
@@ -156,7 +156,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_server_log_channel,
-                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -n 1000 -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_server_log_channel ->
@@ -166,7 +166,7 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_log_channel} end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel,
-                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 1000 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Reconnect attempt starts:
@@ -184,7 +184,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn2,
                         :dummy_server_log_channel2,
-                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -n 1000 -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Cleanup calls
@@ -260,7 +260,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_server_log_channel,
-                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -n 1000 -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Refresh 1:
@@ -358,7 +358,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_server_log_channel,
-                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -n 1000 -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_server_log_channel ->
@@ -368,7 +368,7 @@ defmodule Caudata.ServerWorkerTest do
     |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_log_channel} end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel,
-                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 1000 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Reconnect attempt starts:
@@ -387,7 +387,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn2,
                         :dummy_log_channel2,
-                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 1000 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Cleanup calls
@@ -469,7 +469,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_server_log_channel,
-                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -n 1000 -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # Validation channel expectations
@@ -634,7 +634,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_server_log_channel,
-                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -n 1000 -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # 3. Docker events channel (opened after list channel closes)
@@ -652,7 +652,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel_1,
-                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 1000 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # 5. Stream logs for container2 (after rebuild)
@@ -662,7 +662,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel_2,
-                        "sh -c 'docker logs --follow --tail 100 container2 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 1000 container2 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # 6. Cleanup calls
@@ -751,7 +751,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_server_log_channel,
-                        "sh -c 'tail -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'tail -n 1000 -F /var/log/messages & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # 3. Docker events channel (opened after list channel closes)
@@ -770,7 +770,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel_1,
-                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 1000 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # 5. Stream logs for container1 (after restart, same ID)
@@ -780,7 +780,7 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_log_channel_1_again,
-                        "sh -c 'docker logs --follow --tail 100 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 1000 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     # 6. Cleanup calls

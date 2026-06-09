@@ -27,7 +27,7 @@ defmodule Caudata.ConfigStore do
     tab = get_table_name(store)
 
     :ets.match_object(tab, {{:profile, :_}, :_})
-    |> Enum.map(fn {_, p} -> p end)
+    |> Enum.map(fn {_, p} -> Caudata.Profile.ensure_struct_fields(p) end)
   end
 
   @doc """
@@ -37,7 +37,7 @@ defmodule Caudata.ConfigStore do
     tab = get_table_name(store)
 
     case :ets.lookup(tab, {:profile, id}) do
-      [{_, p}] -> p
+      [{_, p}] -> Caudata.Profile.ensure_struct_fields(p)
       [] -> nil
     end
   end
@@ -113,7 +113,16 @@ defmodule Caudata.ConfigStore do
         {:ok, file_tab} ->
           :ets.foldl(
             fn element, _acc ->
-              :ets.insert(my_tab, element)
+              sanitized_element =
+                case element do
+                  {{:profile, id}, profile} ->
+                    {{:profile, id}, Caudata.Profile.ensure_struct_fields(profile)}
+
+                  other ->
+                    other
+                end
+
+              :ets.insert(my_tab, sanitized_element)
             end,
             :ok,
             file_tab
@@ -138,6 +147,7 @@ defmodule Caudata.ConfigStore do
 
   @impl true
   def handle_call({:add_profile, profile}, _from, state) do
+    profile = Caudata.Profile.ensure_struct_fields(profile)
     :ets.insert(state.table, {{:profile, profile.id}, profile})
     save_async(state)
     {:reply, :ok, state}
@@ -147,10 +157,10 @@ defmodule Caudata.ConfigStore do
   def handle_call({:update_profile, id, updates}, _from, state) do
     case :ets.lookup(state.table, {:profile, id}) do
       [{_, p}] ->
+        p = Caudata.Profile.ensure_struct_fields(p)
         updated_profile = struct!(p, updates)
 
-        updated_profile =
-          Map.put(updated_profile, :enabled, Map.get(updated_profile, :enabled, true))
+        updated_profile = Caudata.Profile.ensure_struct_fields(updated_profile)
 
         :ets.insert(state.table, {{:profile, id}, updated_profile})
         save_async(state)

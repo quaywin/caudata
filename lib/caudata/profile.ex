@@ -75,4 +75,14 @@ defmodule Caudata.Profile do
       ArgumentError -> String.to_atom(k)
     end
   end
+
+  @doc """
+  Ensures that the profile has all current struct fields.
+  Useful when loading profiles from older serialized configurations.
+  """
+  def ensure_struct_fields(profile) when is_map(profile) do
+    # Strip __struct__ if present, and rebuild the struct with current defaults.
+    fields = Map.delete(profile, :__struct__)
+    struct(__MODULE__, fields)
+  end
 end

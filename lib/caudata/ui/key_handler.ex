@@ -26,12 +26,15 @@ defmodule Caudata.UI.KeyHandler do
           AddServerModal.handle_key(key, key_data, model)
         end
 
-      # 2. Escape key in search mode returns to browsing
+      # 2. Escape key in search/visual mode returns to browsing
       key in [:escape, :esc] ->
         cond do
           model.mode == :searching or model.active_field != nil ->
             {%{model | mode: :browsing, active_field: nil, filter_regex: "", filter_error: false},
              []}
+
+          model.mode == :selecting ->
+            {%{model | mode: :browsing, visual_anchor: nil, visual_cursor: nil}, []}
 
           Map.get(model, :logs_full_screen, false) ->
             {%{model | logs_full_screen: false}, []}
@@ -40,8 +43,11 @@ defmodule Caudata.UI.KeyHandler do
             {model, []}
         end
 
-      # 3. Active regex search intercepts text keys
+      # 3. Active regex search or visual select intercepts text keys
       model.mode == :searching ->
+        LogsPane.handle_key(key, key_data, model)
+
+      model.mode == :selecting ->
         LogsPane.handle_key(key, key_data, model)
 
       # 4. Normal Mode routing
@@ -58,8 +64,8 @@ defmodule Caudata.UI.KeyHandler do
       k when k in [:up, :down, :enter, :tab] ->
         Sidebar.handle_key(norm_key, key_data, model)
 
-      # Log display navigation
-      k when k in ["j", "k", "/"] ->
+      # Log display navigation and copy/select
+      k when k in ["j", "k", "/", "y", "Y", "v", "V"] ->
         LogsPane.handle_key(key, key_data, model)
 
       # Toggle Logs Full Screen
@@ -95,6 +101,13 @@ defmodule Caudata.UI.KeyHandler do
             "password" => profile.password || ""
           }
 
+          capacity =
+            if Process.whereis(Caudata.ConfigStore) do
+              Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :global, :capacity, 1000)
+            else
+              1000
+            end
+
           {%{
              model
              | modal_visible: true,
@@ -105,6 +118,8 @@ defmodule Caudata.UI.KeyHandler do
                settings_custom_log_idx: 0,
                settings_connection_focus_idx: 0,
                settings_connection_fields: connection_fields,
+               settings_global_focus_idx: 0,
+               settings_global_capacity: to_string(capacity),
                settings_input_active: false,
                settings_input_value: "",
                settings_status_msg: nil

@@ -33,7 +33,8 @@ defmodule Caudata.UI.Components.SettingsModal do
       {:servers, "Servers"},
       {:connection, "SSH Connection"},
       {:containers, "Docker Containers"},
-      {:custom_logs, "Custom Logs"}
+      {:custom_logs, "Custom Logs"},
+      {:general, "General"}
     ]
 
     tab_spans =
@@ -66,6 +67,9 @@ defmodule Caudata.UI.Components.SettingsModal do
 
         :custom_logs ->
           render_custom_logs_tab(state, profile, custom_logs)
+
+        :general ->
+          render_general_tab(state)
       end
 
     popup_widget = %Popup{
@@ -450,410 +454,432 @@ defmodule Caudata.UI.Components.SettingsModal do
         c.image == "file" or String.starts_with?(to_string(c.id), "file:")
       end)
 
-    if model.settings_focus == :connection do
-      handle_connection_key(key, key_data, model, profile)
-    else
-      if model.settings_input_active do
-        case key do
-          :escape ->
-            {%{model | settings_input_active: false, settings_status_msg: nil}, []}
+    cond do
+      model.settings_focus == :connection ->
+        handle_connection_key(key, key_data, model, profile)
 
-          :enter ->
-            path = String.trim(model.settings_input_value)
+      model.settings_focus == :general ->
+        handle_general_key(key, key_data, model)
 
-            cond do
-              path == "" ->
-                {%{model | settings_status_msg: "Error: Path cannot be empty"}, []}
+      true ->
+        if model.settings_input_active do
+          case key do
+            :escape ->
+              {%{model | settings_input_active: false, settings_status_msg: nil}, []}
 
-              path in custom_logs ->
-                {%{model | settings_status_msg: "Error: Path already added"}, []}
+            :enter ->
+              path = String.trim(model.settings_input_value)
 
-              true ->
-                ui_pid = self()
-                server_id = profile.id
+              cond do
+                path == "" ->
+                  {%{model | settings_status_msg: "Error: Path cannot be empty"}, []}
 
-                Task.start(fn ->
-                  result =
-                    case Caudata.ServerSupervisor.lookup_worker(server_id) do
-                      {:ok, pid} -> GenServer.call(pid, {:validate_path, path}, 5000)
-                      _ -> {:error, :not_connected}
-                    end
+                path in custom_logs ->
+                  {%{model | settings_status_msg: "Error: Path already added"}, []}
 
-                  send(ui_pid, {:validation_result, server_id, path, result})
-                end)
+                true ->
+                  ui_pid = self()
+                  server_id = profile.id
 
-                {%{
-                   model
-                   | settings_input_active: false,
-                     settings_status_msg: "Validating path \"#{path}\"..."
-                 }, []}
-            end
+                  Task.start(fn ->
+                    result =
+                      case Caudata.ServerSupervisor.lookup_worker(server_id) do
+                        {:ok, pid} -> GenServer.call(pid, {:validate_path, path}, 5000)
+                        _ -> {:error, :not_connected}
+                      end
 
-          :backspace ->
-            current = model.settings_input_value
-            new_val = String.slice(current, 0..-2//1)
-            {%{model | settings_input_value: new_val}, []}
-
-          :char ->
-            char = Map.get(key_data, :char, "")
-
-            if is_binary(char) and char != "" do
-              {%{model | settings_input_value: model.settings_input_value <> char}, []}
-            else
-              {model, []}
-            end
-
-          ch when is_binary(ch) and byte_size(ch) == 1 ->
-            {%{model | settings_input_value: model.settings_input_value <> ch}, []}
-
-          _ ->
-            {model, []}
-        end
-      else
-        norm_key = if key == :char, do: Map.get(key_data, :char), else: key
-
-        case norm_key do
-          k when k in [:tab, :right, "l"] ->
-            next_focus =
-              case model.settings_focus do
-                :servers -> :connection
-                :connection -> :containers
-                :containers -> :custom_logs
-                :custom_logs -> :servers
-              end
-
-            {%{model | settings_focus: next_focus, settings_status_msg: nil}, []}
-
-          k when k in [:left, "h"] ->
-            prev_focus =
-              case model.settings_focus do
-                :servers -> :custom_logs
-                :connection -> :servers
-                :containers -> :connection
-                :custom_logs -> :containers
-              end
-
-            {%{model | settings_focus: prev_focus, settings_status_msg: nil}, []}
-
-          k when k in [:up, "k"] ->
-            case model.settings_focus do
-              :servers ->
-                total = length(model.profiles)
-
-                new_idx =
-                  if total > 0,
-                    do: rem(model.settings_selected_profile_idx - 1 + total, total),
-                    else: 0
-
-                profile = Enum.at(model.profiles, new_idx)
-
-                connection_fields =
-                  if profile do
-                    %{
-                      "host_name" => profile.host_name || "",
-                      "port" => to_string(profile.port || 22),
-                      "user" => profile.user || "",
-                      "identity_file" => profile.identity_file || "",
-                      "password" => profile.password || ""
-                    }
-                  else
-                    %{}
-                  end
-
-                {%{
-                   model
-                   | settings_selected_profile_idx: new_idx,
-                     settings_container_idx: 0,
-                     settings_custom_log_idx: 0,
-                     settings_connection_focus_idx: 0,
-                     settings_connection_fields: connection_fields,
-                     settings_status_msg: nil
-                 }, []}
-
-              :containers ->
-                total = length(docker_only_containers)
-
-                new_idx =
-                  if total > 0, do: rem(model.settings_container_idx - 1 + total, total), else: 0
-
-                {%{model | settings_container_idx: new_idx, settings_status_msg: nil}, []}
-
-              :custom_logs ->
-                total = length(custom_logs)
-
-                new_idx =
-                  if total > 0, do: rem(model.settings_custom_log_idx - 1 + total, total), else: 0
-
-                {%{model | settings_custom_log_idx: new_idx, settings_status_msg: nil}, []}
-            end
-
-          k when k in [:down, "j"] ->
-            case model.settings_focus do
-              :servers ->
-                total = length(model.profiles)
-
-                new_idx =
-                  if total > 0, do: rem(model.settings_selected_profile_idx + 1, total), else: 0
-
-                profile = Enum.at(model.profiles, new_idx)
-
-                connection_fields =
-                  if profile do
-                    %{
-                      "host_name" => profile.host_name || "",
-                      "port" => to_string(profile.port || 22),
-                      "user" => profile.user || "",
-                      "identity_file" => profile.identity_file || "",
-                      "password" => profile.password || ""
-                    }
-                  else
-                    %{}
-                  end
-
-                {%{
-                   model
-                   | settings_selected_profile_idx: new_idx,
-                     settings_container_idx: 0,
-                     settings_custom_log_idx: 0,
-                     settings_connection_focus_idx: 0,
-                     settings_connection_fields: connection_fields,
-                     settings_status_msg: nil
-                 }, []}
-
-              :containers ->
-                total = length(docker_only_containers)
-                new_idx = if total > 0, do: rem(model.settings_container_idx + 1, total), else: 0
-                {%{model | settings_container_idx: new_idx, settings_status_msg: nil}, []}
-
-              :custom_logs ->
-                total = length(custom_logs)
-                new_idx = if total > 0, do: rem(model.settings_custom_log_idx + 1, total), else: 0
-                {%{model | settings_custom_log_idx: new_idx, settings_status_msg: nil}, []}
-            end
-
-          " " ->
-            cond do
-              model.settings_focus == :containers ->
-                container = Enum.at(docker_only_containers, model.settings_container_idx)
-
-                if container do
-                  disabled = Enum.map(profile.disabled_containers || [], &to_string/1)
-                  container_id = to_string(container.id)
-                  container_name = to_string(container.name)
-
-                  new_disabled =
-                    if container_id in disabled or container_name in disabled do
-                      disabled -- [container_id, container_name]
-                    else
-                      [container_name | disabled]
-                    end
-
-                  case Caudata.ConfigManager.update_profile(profile.id, %{
-                         disabled_containers: new_disabled
-                       }) do
-                    {:ok, updated_profile} ->
-                      new_profiles =
-                        Enum.map(model.profiles, fn p ->
-                          if p.id == profile.id, do: updated_profile, else: p
-                        end)
-
-                      {%{model | profiles: new_profiles}, []}
-
-                    {:error, reason} ->
-                      {%{
-                         model
-                         | settings_status_msg: "Error saving settings: #{inspect(reason)}"
-                       }, []}
-                  end
-                else
-                  {model, []}
-                end
-
-              model.settings_focus == :custom_logs ->
-                path = Enum.at(custom_logs, model.settings_custom_log_idx)
-
-                if path do
-                  disabled = Enum.map(profile.disabled_containers || [], &to_string/1)
-                  path_str = to_string(path)
-                  container_id = "file:#{path_str}"
-
-                  new_disabled =
-                    if container_id in disabled or path_str in disabled do
-                      disabled -- [container_id, path_str]
-                    else
-                      [container_id | disabled]
-                    end
-
-                  case Caudata.ConfigManager.update_profile(profile.id, %{
-                         disabled_containers: new_disabled
-                       }) do
-                    {:ok, updated_profile} ->
-                      new_profiles =
-                        Enum.map(model.profiles, fn p ->
-                          if p.id == profile.id, do: updated_profile, else: p
-                        end)
-
-                      {%{model | profiles: new_profiles}, []}
-
-                    {:error, reason} ->
-                      {%{
-                         model
-                         | settings_status_msg: "Error saving settings: #{inspect(reason)}"
-                       }, []}
-                  end
-                else
-                  {model, []}
-                end
-
-              model.settings_focus == :servers ->
-                new_enabled = not Map.get(profile, :enabled, true)
-                updated_profile = %{profile | enabled: new_enabled}
-
-                new_profiles =
-                  Enum.map(model.profiles, fn p ->
-                    if p.id == profile.id, do: updated_profile, else: p
+                    send(ui_pid, {:validation_result, server_id, path, result})
                   end)
 
-                Task.start(fn ->
-                  _ =
-                    Caudata.ConfigManager.update_profile(profile.id, %{
-                      enabled: new_enabled
-                    })
-                end)
+                  {%{
+                     model
+                     | settings_input_active: false,
+                       settings_status_msg: "Validating path \"#{path}\"..."
+                   }, []}
+              end
 
-                {%{model | profiles: new_profiles}, []}
+            :backspace ->
+              current = model.settings_input_value
+              new_val = String.slice(current, 0..-2//1)
+              {%{model | settings_input_value: new_val}, []}
 
-              true ->
+            :char ->
+              char = Map.get(key_data, :char, "")
+
+              if is_binary(char) and char != "" do
+                {%{model | settings_input_value: model.settings_input_value <> char}, []}
+              else
                 {model, []}
-            end
+              end
 
-          k when k in ["a", "A"] ->
-            if model.settings_focus == :custom_logs and profile do
-              {%{
-                 model
-                 | settings_input_active: true,
-                   settings_input_value: "",
-                   settings_status_msg: nil
-               }, []}
-            else
+            ch when is_binary(ch) and byte_size(ch) == 1 ->
+              {%{model | settings_input_value: model.settings_input_value <> ch}, []}
+
+            _ ->
               {model, []}
-            end
+          end
+        else
+          norm_key = if key == :char, do: Map.get(key_data, :char), else: key
 
-          k when k in ["d", "D", :backspace] ->
-            cond do
-              model.settings_focus == :custom_logs and profile ->
-                path_to_delete = Enum.at(custom_logs, model.settings_custom_log_idx)
+          case norm_key do
+            k when k in [:tab, :right, "l"] ->
+              next_focus =
+                case model.settings_focus do
+                  :servers -> :connection
+                  :connection -> :containers
+                  :containers -> :custom_logs
+                  :custom_logs -> :general
+                  :general -> :servers
+                end
 
-                if path_to_delete do
-                  new_custom_logs = custom_logs -- [path_to_delete]
+              {%{model | settings_focus: next_focus, settings_status_msg: nil}, []}
 
-                  case Caudata.ConfigManager.update_profile(profile.id, %{
-                         custom_logs: new_custom_logs
-                       }) do
-                    {:ok, updated_profile} ->
-                      new_profiles =
-                        Enum.map(model.profiles, fn p ->
-                          if p.id == profile.id, do: updated_profile, else: p
-                        end)
+            k when k in [:left, "h"] ->
+              prev_focus =
+                case model.settings_focus do
+                  :servers -> :general
+                  :connection -> :servers
+                  :containers -> :connection
+                  :custom_logs -> :containers
+                  :general -> :custom_logs
+                end
 
-                      new_idx =
-                        max(0, min(model.settings_custom_log_idx, length(new_custom_logs) - 1))
+              {%{model | settings_focus: prev_focus, settings_status_msg: nil}, []}
 
-                      {%{
-                         model
-                         | profiles: new_profiles,
-                           settings_custom_log_idx: new_idx,
-                           settings_status_msg: "Deleted \"#{path_to_delete}\""
-                       }, []}
+            k when k in [:up, "k"] ->
+              case model.settings_focus do
+                :servers ->
+                  total = length(model.profiles)
+
+                  new_idx =
+                    if total > 0,
+                      do: rem(model.settings_selected_profile_idx - 1 + total, total),
+                      else: 0
+
+                  profile = Enum.at(model.profiles, new_idx)
+
+                  connection_fields =
+                    if profile do
+                      %{
+                        "host_name" => profile.host_name || "",
+                        "port" => to_string(profile.port || 22),
+                        "user" => profile.user || "",
+                        "identity_file" => profile.identity_file || "",
+                        "password" => profile.password || ""
+                      }
+                    else
+                      %{}
+                    end
+
+                  {%{
+                     model
+                     | settings_selected_profile_idx: new_idx,
+                       settings_container_idx: 0,
+                       settings_custom_log_idx: 0,
+                       settings_connection_focus_idx: 0,
+                       settings_connection_fields: connection_fields,
+                       settings_status_msg: nil
+                   }, []}
+
+                :containers ->
+                  total = length(docker_only_containers)
+
+                  new_idx =
+                    if total > 0,
+                      do: rem(model.settings_container_idx - 1 + total, total),
+                      else: 0
+
+                  {%{model | settings_container_idx: new_idx, settings_status_msg: nil}, []}
+
+                :custom_logs ->
+                  total = length(custom_logs)
+
+                  new_idx =
+                    if total > 0,
+                      do: rem(model.settings_custom_log_idx - 1 + total, total),
+                      else: 0
+
+                  {%{model | settings_custom_log_idx: new_idx, settings_status_msg: nil}, []}
+              end
+
+            k when k in [:down, "j"] ->
+              case model.settings_focus do
+                :servers ->
+                  total = length(model.profiles)
+
+                  new_idx =
+                    if total > 0, do: rem(model.settings_selected_profile_idx + 1, total), else: 0
+
+                  profile = Enum.at(model.profiles, new_idx)
+
+                  connection_fields =
+                    if profile do
+                      %{
+                        "host_name" => profile.host_name || "",
+                        "port" => to_string(profile.port || 22),
+                        "user" => profile.user || "",
+                        "identity_file" => profile.identity_file || "",
+                        "password" => profile.password || ""
+                      }
+                    else
+                      %{}
+                    end
+
+                  {%{
+                     model
+                     | settings_selected_profile_idx: new_idx,
+                       settings_container_idx: 0,
+                       settings_custom_log_idx: 0,
+                       settings_connection_focus_idx: 0,
+                       settings_connection_fields: connection_fields,
+                       settings_status_msg: nil
+                   }, []}
+
+                :containers ->
+                  total = length(docker_only_containers)
+
+                  new_idx =
+                    if total > 0, do: rem(model.settings_container_idx + 1, total), else: 0
+
+                  {%{model | settings_container_idx: new_idx, settings_status_msg: nil}, []}
+
+                :custom_logs ->
+                  total = length(custom_logs)
+
+                  new_idx =
+                    if total > 0, do: rem(model.settings_custom_log_idx + 1, total), else: 0
+
+                  {%{model | settings_custom_log_idx: new_idx, settings_status_msg: nil}, []}
+              end
+
+            " " ->
+              cond do
+                model.settings_focus == :containers ->
+                  container = Enum.at(docker_only_containers, model.settings_container_idx)
+
+                  if container do
+                    disabled = Enum.map(profile.disabled_containers || [], &to_string/1)
+                    container_id = to_string(container.id)
+                    container_name = to_string(container.name)
+
+                    new_disabled =
+                      if container_id in disabled or container_name in disabled do
+                        disabled -- [container_id, container_name]
+                      else
+                        [container_name | disabled]
+                      end
+
+                    case Caudata.ConfigManager.update_profile(profile.id, %{
+                           disabled_containers: new_disabled
+                         }) do
+                      {:ok, updated_profile} ->
+                        new_profiles =
+                          Enum.map(model.profiles, fn p ->
+                            if p.id == profile.id, do: updated_profile, else: p
+                          end)
+
+                        {%{model | profiles: new_profiles}, []}
+
+                      {:error, reason} ->
+                        {%{
+                           model
+                           | settings_status_msg: "Error saving settings: #{inspect(reason)}"
+                         }, []}
+                    end
+                  else
+                    {model, []}
+                  end
+
+                model.settings_focus == :custom_logs ->
+                  path = Enum.at(custom_logs, model.settings_custom_log_idx)
+
+                  if path do
+                    disabled = Enum.map(profile.disabled_containers || [], &to_string/1)
+                    path_str = to_string(path)
+                    container_id = "file:#{path_str}"
+
+                    new_disabled =
+                      if container_id in disabled or path_str in disabled do
+                        disabled -- [container_id, path_str]
+                      else
+                        [container_id | disabled]
+                      end
+
+                    case Caudata.ConfigManager.update_profile(profile.id, %{
+                           disabled_containers: new_disabled
+                         }) do
+                      {:ok, updated_profile} ->
+                        new_profiles =
+                          Enum.map(model.profiles, fn p ->
+                            if p.id == profile.id, do: updated_profile, else: p
+                          end)
+
+                        {%{model | profiles: new_profiles}, []}
+
+                      {:error, reason} ->
+                        {%{
+                           model
+                           | settings_status_msg: "Error saving settings: #{inspect(reason)}"
+                         }, []}
+                    end
+                  else
+                    {model, []}
+                  end
+
+                model.settings_focus == :servers ->
+                  new_enabled = not Map.get(profile, :enabled, true)
+                  updated_profile = %{profile | enabled: new_enabled}
+
+                  new_profiles =
+                    Enum.map(model.profiles, fn p ->
+                      if p.id == profile.id, do: updated_profile, else: p
+                    end)
+
+                  Task.start(fn ->
+                    _ =
+                      Caudata.ConfigManager.update_profile(profile.id, %{
+                        enabled: new_enabled
+                      })
+                  end)
+
+                  {%{model | profiles: new_profiles}, []}
+
+                true ->
+                  {model, []}
+              end
+
+            k when k in ["a", "A"] ->
+              if model.settings_focus == :custom_logs and profile do
+                {%{
+                   model
+                   | settings_input_active: true,
+                     settings_input_value: "",
+                     settings_status_msg: nil
+                 }, []}
+              else
+                {model, []}
+              end
+
+            k when k in ["d", "D", :backspace] ->
+              cond do
+                model.settings_focus == :custom_logs and profile ->
+                  path_to_delete = Enum.at(custom_logs, model.settings_custom_log_idx)
+
+                  if path_to_delete do
+                    new_custom_logs = custom_logs -- [path_to_delete]
+
+                    case Caudata.ConfigManager.update_profile(profile.id, %{
+                           custom_logs: new_custom_logs
+                         }) do
+                      {:ok, updated_profile} ->
+                        new_profiles =
+                          Enum.map(model.profiles, fn p ->
+                            if p.id == profile.id, do: updated_profile, else: p
+                          end)
+
+                        new_idx =
+                          max(0, min(model.settings_custom_log_idx, length(new_custom_logs) - 1))
+
+                        {%{
+                           model
+                           | profiles: new_profiles,
+                             settings_custom_log_idx: new_idx,
+                             settings_status_msg: "Deleted \"#{path_to_delete}\""
+                         }, []}
+
+                      {:error, reason} ->
+                        {%{
+                           model
+                           | settings_status_msg: "Error saving settings: #{inspect(reason)}"
+                         }, []}
+                    end
+                  else
+                    {model, []}
+                  end
+
+                model.settings_focus == :servers and profile ->
+                  server_id_to_delete = profile.id
+
+                  case Caudata.ConfigManager.delete_profile(server_id_to_delete) do
+                    :ok ->
+                      new_profiles = Enum.reject(model.profiles, &(&1.id == server_id_to_delete))
+
+                      if length(new_profiles) == 0 do
+                        {%{
+                           model
+                           | profiles: [],
+                             selected_profile_id: nil,
+                             selected_container_id: nil,
+                             modal_visible: false,
+                             settings_selected_profile_idx: 0,
+                             settings_container_idx: 0,
+                             settings_custom_log_idx: 0
+                         }, []}
+                      else
+                        new_idx =
+                          max(
+                            0,
+                            min(model.settings_selected_profile_idx, length(new_profiles) - 1)
+                          )
+
+                        next_profile = Enum.at(new_profiles, new_idx)
+
+                        new_selected_profile_id =
+                          if model.selected_profile_id == server_id_to_delete do
+                            next_profile.id
+                          else
+                            model.selected_profile_id
+                          end
+
+                        new_selected_container_id =
+                          if model.selected_profile_id == server_id_to_delete do
+                            nil
+                          else
+                            model.selected_container_id
+                          end
+
+                        connection_fields =
+                          if next_profile do
+                            %{
+                              "host_name" => next_profile.host_name || "",
+                              "port" => to_string(next_profile.port || 22),
+                              "user" => next_profile.user || "",
+                              "identity_file" => next_profile.identity_file || "",
+                              "password" => next_profile.password || ""
+                            }
+                          else
+                            %{}
+                          end
+
+                        {%{
+                           model
+                           | profiles: new_profiles,
+                             selected_profile_id: new_selected_profile_id,
+                             selected_container_id: new_selected_container_id,
+                             settings_selected_profile_idx: new_idx,
+                             settings_container_idx: 0,
+                             settings_custom_log_idx: 0,
+                             settings_connection_focus_idx: 0,
+                             settings_connection_fields: connection_fields,
+                             settings_status_msg: "Deleted server \"#{server_id_to_delete}\""
+                         }, []}
+                      end
 
                     {:error, reason} ->
                       {%{
                          model
-                         | settings_status_msg: "Error saving settings: #{inspect(reason)}"
+                         | settings_status_msg: "Error deleting server: #{inspect(reason)}"
                        }, []}
                   end
-                else
+
+                true ->
                   {model, []}
-                end
+              end
 
-              model.settings_focus == :servers and profile ->
-                server_id_to_delete = profile.id
-
-                case Caudata.ConfigManager.delete_profile(server_id_to_delete) do
-                  :ok ->
-                    new_profiles = Enum.reject(model.profiles, &(&1.id == server_id_to_delete))
-
-                    if length(new_profiles) == 0 do
-                      {%{
-                         model
-                         | profiles: [],
-                           selected_profile_id: nil,
-                           selected_container_id: nil,
-                           modal_visible: false,
-                           settings_selected_profile_idx: 0,
-                           settings_container_idx: 0,
-                           settings_custom_log_idx: 0
-                       }, []}
-                    else
-                      new_idx =
-                        max(0, min(model.settings_selected_profile_idx, length(new_profiles) - 1))
-
-                      next_profile = Enum.at(new_profiles, new_idx)
-
-                      new_selected_profile_id =
-                        if model.selected_profile_id == server_id_to_delete do
-                          next_profile.id
-                        else
-                          model.selected_profile_id
-                        end
-
-                      new_selected_container_id =
-                        if model.selected_profile_id == server_id_to_delete do
-                          nil
-                        else
-                          model.selected_container_id
-                        end
-
-                      connection_fields =
-                        if next_profile do
-                          %{
-                            "host_name" => next_profile.host_name || "",
-                            "port" => to_string(next_profile.port || 22),
-                            "user" => next_profile.user || "",
-                            "identity_file" => next_profile.identity_file || "",
-                            "password" => next_profile.password || ""
-                          }
-                        else
-                          %{}
-                        end
-
-                      {%{
-                         model
-                         | profiles: new_profiles,
-                           selected_profile_id: new_selected_profile_id,
-                           selected_container_id: new_selected_container_id,
-                           settings_selected_profile_idx: new_idx,
-                           settings_container_idx: 0,
-                           settings_custom_log_idx: 0,
-                           settings_connection_focus_idx: 0,
-                           settings_connection_fields: connection_fields,
-                           settings_status_msg: "Deleted server \"#{server_id_to_delete}\""
-                       }, []}
-                    end
-
-                  {:error, reason} ->
-                    {%{model | settings_status_msg: "Error deleting server: #{inspect(reason)}"},
-                     []}
-                end
-
-              true ->
-                {model, []}
-            end
-
-          _ ->
-            {model, []}
+            _ ->
+              {model, []}
+          end
         end
-      end
     end
   end
 
@@ -1014,6 +1040,176 @@ defmodule Caudata.UI.Components.SettingsModal do
           {:error, reason} ->
             {%{model | settings_status_msg: "Error saving: #{inspect(reason)}"}, []}
         end
+    end
+  end
+
+  defp render_general_tab(state) do
+    # Only 1 field: capacity
+    active_idx = state.settings_global_focus_idx || 0
+
+    prefix = if active_idx == 0, do: "> ", else: "  "
+    label_color = if active_idx == 0, do: :cyan, else: :white
+    value_color = if active_idx == 0, do: :green, else: :white
+
+    value = state.settings_global_capacity || "1000"
+    display_value = if active_idx == 0, do: value <> "█", else: value
+
+    form_lines = [
+      Line.new([
+        Span.new(prefix),
+        Span.new("Global Log Capacity (lines):", style: %Style{fg: label_color})
+      ]),
+      Line.new([
+        Span.new("    "),
+        Span.new(display_value, style: %Style{fg: value_color})
+      ])
+    ]
+
+    save_active = active_idx == 1
+    cancel_active = active_idx == 2
+
+    buttons_line =
+      Line.new([
+        Span.new(
+          if(save_active,
+            do: "> [ Save General Settings ]   ",
+            else: "  [ Save General Settings ]   "
+          ),
+          style: %Style{fg: if(save_active, do: :green, else: :white)}
+        ),
+        Span.new(if(cancel_active, do: "> [ Cancel ]", else: "  [ Cancel ]"),
+          style: %Style{fg: if(cancel_active, do: :red, else: :white)}
+        )
+      ])
+
+    status_lines =
+      if state.settings_status_msg do
+        color =
+          if String.starts_with?(state.settings_status_msg, "Error"), do: :red, else: :yellow
+
+        [
+          Line.new([]),
+          Line.new([
+            Span.new("  ℹ ", style: %Style{fg: color}),
+            Span.new(state.settings_status_msg, style: %Style{fg: color})
+          ])
+        ]
+      else
+        []
+      end
+
+    [Line.new([])] ++ form_lines ++ [Line.new([]), buttons_line] ++ status_lines
+  end
+
+  defp handle_general_key(key, key_data, model) do
+    # fields are: "capacity" (idx 0), :save (idx 1), :cancel (idx 2)
+    active_idx = model.settings_global_focus_idx || 0
+    num_fields = 3
+
+    case key do
+      :down ->
+        new_focus = rem(active_idx + 1, num_fields)
+        {%{model | settings_global_focus_idx: new_focus, settings_status_msg: nil}, []}
+
+      :up ->
+        new_focus = rem(active_idx - 1 + num_fields, num_fields)
+        {%{model | settings_global_focus_idx: new_focus, settings_status_msg: nil}, []}
+
+      k when k in [:tab, :right] ->
+        {%{model | settings_focus: :servers, settings_status_msg: nil}, []}
+
+      :left ->
+        {%{model | settings_focus: :custom_logs, settings_status_msg: nil}, []}
+
+      :enter ->
+        case active_idx do
+          # cancel
+          2 ->
+            # Revert capacity to config value and switch to servers
+            capacity =
+              if Process.whereis(Caudata.ConfigStore) do
+                Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :global, :capacity, 1000)
+              else
+                1000
+              end
+
+            {%{
+               model
+               | settings_focus: :servers,
+                 settings_global_focus_idx: 0,
+                 settings_global_capacity: to_string(capacity),
+                 settings_status_msg: nil
+             }, []}
+
+          # save
+          1 ->
+            save_general_settings(model)
+
+          # capacity input
+          0 ->
+            # Enter key on input moves down to Save
+            {%{model | settings_global_focus_idx: 1}, []}
+        end
+
+      _ ->
+        if active_idx == 0 do
+          case key do
+            :backspace ->
+              current_val = model.settings_global_capacity || ""
+              new_val = String.slice(current_val, 0..-2//1)
+              {%{model | settings_global_capacity: new_val}, []}
+
+            :char ->
+              char = Map.get(key_data, :char, "")
+
+              if is_binary(char) and char =~ ~r/^\d$/ do
+                current_val = model.settings_global_capacity || ""
+                new_val = current_val <> char
+                {%{model | settings_global_capacity: new_val}, []}
+              else
+                {model, []}
+              end
+
+            ch when is_binary(ch) and byte_size(ch) == 1 ->
+              if ch =~ ~r/^\d$/ do
+                current_val = model.settings_global_capacity || ""
+                new_val = current_val <> ch
+                {%{model | settings_global_capacity: new_val}, []}
+              else
+                {model, []}
+              end
+
+            _ ->
+              {model, []}
+          end
+        else
+          {model, []}
+        end
+    end
+  end
+
+  defp save_general_settings(model) do
+    capacity_str = String.trim(model.settings_global_capacity || "")
+
+    case Integer.parse(capacity_str) do
+      {capacity, ""} when capacity > 0 ->
+        # Save to ConfigStore
+        if Process.whereis(Caudata.ConfigStore) do
+          Caudata.ConfigStore.put_setting(Caudata.ConfigStore, :global, :capacity, capacity)
+        end
+
+        # Update LogStore capacity dynamically
+        if Process.whereis(Caudata.LogStore) do
+          Caudata.LogStore.set_capacity(Caudata.LogStore, capacity)
+        end
+
+        {%{
+           model
+           | settings_status_msg: "Successfully saved log capacity: #{capacity}"
+         }, []}
+
+      _ ->
+        {%{model | settings_status_msg: "Error: Capacity must be a positive integer"}, []}
     end
   end
 end

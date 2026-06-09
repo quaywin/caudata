@@ -77,10 +77,38 @@ defmodule Caudata.UI.Renderer do
         base_widgets
       end
 
+    # Notification toast overlay in top-right corner
+    notification_widget =
+      case Map.get(state, :notification) do
+        {msg, _ticks} ->
+          # Calculate notification dimensions
+          text = " ℹ #{msg} "
+          text_len = String.length(text)
+          notif_width = min(text_len, frame.width - 2)
+          notif_x = max(0, frame.width - notif_width - 1)
+
+          notif_area = %Rect{x: notif_x, y: 1, width: notif_width, height: 1}
+
+          notif_paragraph = %Paragraph{
+            text: [
+              ExRatatui.Text.Line.new([
+                ExRatatui.Text.Span.new(text,
+                  style: %Style{fg: :black, bg: :green, modifiers: [:bold]}
+                )
+              ])
+            ]
+          }
+
+          [{notif_paragraph, notif_area}]
+
+        _ ->
+          []
+      end
+
     main_widgets ++
       [
         {divider_widget, divider_area},
         {footer_widget, footer_area}
-      ]
+      ] ++ notification_widget
   end
 end

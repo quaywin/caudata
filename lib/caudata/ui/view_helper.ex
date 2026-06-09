@@ -102,6 +102,56 @@ defmodule Caudata.UI.ViewHelper do
   end
 
   @doc """
+  Copies the given text to the system clipboard using native OS commands.
+  Returns `:ok` on success or `{:error, reason}` on failure.
+  """
+  def copy_to_clipboard(text) when is_binary(text) do
+    case :os.type() do
+      {:unix, :darwin} ->
+        try_port("pbcopy", [], text)
+
+      {:unix, :linux} ->
+        cond do
+          System.find_executable("xclip") ->
+            try_port("xclip", ["-selection", "clipboard"], text)
+
+          System.find_executable("xsel") ->
+            try_port("xsel", ["--clipboard", "--input"], text)
+
+          System.find_executable("wl-copy") ->
+            try_port("wl-copy", [], text)
+
+          true ->
+            {:error, :no_clipboard_tool}
+        end
+
+      {:win32, _} ->
+        try_port("clip", [], text)
+
+      _ ->
+        {:error, :unsupported_os}
+    end
+  end
+
+  defp try_port(cmd, args, input) do
+    case System.find_executable(cmd) do
+      nil ->
+        {:error, :command_not_found}
+
+      path ->
+        try do
+          port = Port.open({:spawn_executable, path}, [:binary, {:args, args}])
+          Port.command(port, input)
+          Port.close(port)
+          :ok
+        rescue
+          _ ->
+            {:error, :port_failed}
+        end
+    end
+  end
+
+  @doc """
   Starts a server worker for a profile if one is not already running.
   """
   def start_worker_if_needed(profile) do
@@ -122,4 +172,62 @@ defmodule Caudata.UI.ViewHelper do
       end
     end
   end
+
+  @doc """
+  Finds the index in `old_logs` where the overlap with `new_logs` starts.
+  Specifically, it finds the smallest index `i` such that the suffix of `old_logs`
+  starting at `i` is a prefix of `new_logs`.
+  Returns `nil` if there is no overlap or if list is empty.
+  """
+  def find_overlap_index(old_logs, new_logs) do
+    do_find_overlap_index(old_logs, new_logs, 0)
+  end
+
+  defp do_find_overlap_index([], _new_logs, _i), do: nil
+
+  defp do_find_overlap_index(old_logs, new_logs, i) do
+    if List.starts_with?(new_logs, old_logs) do
+      i
+    else
+      do_find_overlap_index(tl(old_logs), new_logs, i + 1)
+    end
+  end
+
+  @doc """
+  Calculates the scroll adjustment when the logs snapshot shifts.
+  Computes how many wrapped lines of `old_logs` were dropped from the beginning
+  in `new_logs`.
+  """
+  def calculate_scroll_shift(old_logs, new_logs, inner_width) do
+    case find_overlap_index(old_logs, new_logs) do
+      nil ->
+        0
+
+      idx ->
+        old_logs
+        |> Enum.take(idx)
+        |> count_wrapped_lines(inner_width)
+    end
+  end
+
+  @doc """
+  Computes the inner width of the logs pane based on fullscreen state.
+  """
+  def get_logs_inner_width(model) do
+    if Map.get(model, :logs_full_screen, false) do
+      max(0, model.width - 2)
+    else
+      max(0, model.width - 40)
+    end
+  end
+
+  @doc """
+  Computes the selection range for selecting/visual mode.
+  """
+  def get_selection_range(%{mode: :selecting, visual_anchor: anchor, visual_cursor: cursor})
+      when is_integer(anchor) and is_integer(cursor) do
+    if anchor <= cursor, do: anchor..cursor, else: cursor..anchor
+  end
+
+  def get_selection_range(_state), do: nil
 end

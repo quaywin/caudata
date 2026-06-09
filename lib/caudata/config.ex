@@ -58,12 +58,9 @@ defmodule Caudata.Config do
 
     profile =
       case profile_attrs do
-        %Caudata.Profile{} -> profile_attrs
+        %Caudata.Profile{} -> Caudata.Profile.ensure_struct_fields(profile_attrs)
         _ -> Caudata.Profile.new(profile_attrs)
       end
-
-    # Ensure enabled defaults to true
-    profile = Map.put(profile, :enabled, Map.get(profile, :enabled, true))
 
     :ets.insert(tab, {{:profile, profile.id}, profile})
     res = :ets.tab2file(tab, char_path)
@@ -126,12 +123,10 @@ defmodule Caudata.Config do
     Enum.each(profiles, fn p ->
       profile_struct =
         case p do
-          %Caudata.Profile{} -> p
+          %Caudata.Profile{} -> Caudata.Profile.ensure_struct_fields(p)
           _ -> Caudata.Profile.new(p)
         end
 
-      # Ensure enabled defaults to true
-      profile_struct = Map.put(profile_struct, :enabled, Map.get(profile_struct, :enabled, true))
       :ets.insert(tab, {{:profile, profile_struct.id}, profile_struct})
     end)
 
@@ -192,8 +187,7 @@ defmodule Caudata.Config do
     profiles =
       :ets.match_object(tab, {{:profile, :_}, :_})
       |> Enum.map(fn {_, profile} ->
-        # Ensure enabled defaults to true
-        Map.put(profile, :enabled, Map.get(profile, :enabled, true))
+        Caudata.Profile.ensure_struct_fields(profile)
       end)
 
     %{
@@ -252,11 +246,10 @@ defmodule Caudata.Config do
     Enum.each(profiles, fn p ->
       profile_struct =
         case p do
-          %Caudata.Profile{} -> p
+          %Caudata.Profile{} -> Caudata.Profile.ensure_struct_fields(p)
           _ -> Caudata.Profile.new(p)
         end
 
-      profile_struct = Map.put(profile_struct, :enabled, Map.get(profile_struct, :enabled, true))
       :ets.insert(tab, {{:profile, profile_struct.id}, profile_struct})
     end)
   end

@@ -149,65 +149,66 @@ defmodule Caudata.UI.AppTest do
   test "handle_event/2 wrap-around navigation in servers and containers lists" do
     {:ok, state} = App.mount([])
 
-    if length(state.profiles) > 1 do
-      [p1, p2 | _] = state.profiles
+    # Use exactly 2 mock profiles to guarantee deterministic wrap-around behavior
+    p1 = %{id: "wrap-p1", host_name: "server-1", disabled_containers: []}
+    p2 = %{id: "wrap-p2", host_name: "server-2", disabled_containers: []}
 
-      state = %{
-        state
-        | containers: %{
-            p1.id => [
-              %{id: "c1", name: "container-1"},
-              %{id: "c2", name: "container-2"}
-            ],
-            p2.id => [
-              %{id: "c3", name: "container-3"}
-            ]
-          },
-          selected_profile_id: p2.id,
-          selected_container_id: "c3",
-          sidebar_focus: :servers
-      }
+    state = %{
+      state
+      | profiles: [p1, p2],
+        containers: %{
+          p1.id => [
+            %{id: "c1", name: "container-1"},
+            %{id: "c2", name: "container-2"}
+          ],
+          p2.id => [
+            %{id: "c3", name: "container-3"}
+          ]
+        },
+        selected_profile_id: p2.id,
+        selected_container_id: "c3",
+        sidebar_focus: :servers
+    }
 
-      event_down = %ExRatatui.Event.Key{code: "down", modifiers: []}
-      event_up = %ExRatatui.Event.Key{code: "up", modifiers: []}
+    event_down = %ExRatatui.Event.Key{code: "down", modifiers: []}
+    event_up = %ExRatatui.Event.Key{code: "up", modifiers: []}
 
-      # 1. Servers wrap-around:
-      # Currently at the last server (p2). Down should wrap around to the first server (p1).
-      assert {:noreply, state_wrap_down_server} = App.handle_event(event_down, state)
-      assert state_wrap_down_server.selected_profile_id == p1.id
-      assert state_wrap_down_server.selected_container_id == "c1"
+    # 1. Servers wrap-around:
+    # Currently at the last server (p2). Down should wrap around to the first server (p1).
+    assert {:noreply, state_wrap_down_server} = App.handle_event(event_down, state)
+    assert state_wrap_down_server.selected_profile_id == p1.id
+    assert state_wrap_down_server.selected_container_id == "c1"
 
-      # Set to the first server (p1). Up should wrap around to the last server (p2).
-      state_at_first_server = %{state | selected_profile_id: p1.id, selected_container_id: "c1"}
-      assert {:noreply, state_wrap_up_server} = App.handle_event(event_up, state_at_first_server)
-      assert state_wrap_up_server.selected_profile_id == p2.id
-      assert state_wrap_up_server.selected_container_id == "c3"
+    # Set to the first server (p1). Up should wrap around to the last server (p2).
+    state_at_first_server = %{state | selected_profile_id: p1.id, selected_container_id: "c1"}
+    assert {:noreply, state_wrap_up_server} = App.handle_event(event_up, state_at_first_server)
+    assert state_wrap_up_server.selected_profile_id == p2.id
+    assert state_wrap_up_server.selected_container_id == "c3"
 
-      # 2. Containers wrap-around:
-      # Focus containers for p1 (which has "c1" and "c2")
-      state_containers_focus = %{
-        state
-        | selected_profile_id: p1.id,
-          selected_container_id: "c2",
-          sidebar_focus: :containers
-      }
+    # 2. Containers wrap-around:
+    # Focus containers for p1 (which has "c1" and "c2")
+    state_containers_focus = %{
+      state
+      | selected_profile_id: p1.id,
+        selected_container_id: "c2",
+        sidebar_focus: :containers
+    }
 
-      # Currently at last container (c2). Down should wrap around to the first container (c1).
-      assert {:noreply, state_wrap_down_container} =
-               App.handle_event(event_down, state_containers_focus)
+    # Currently at last container (c2). Down should wrap around to the first container (c1).
+    assert {:noreply, state_wrap_down_container} =
+             App.handle_event(event_down, state_containers_focus)
 
-      assert state_wrap_down_container.selected_profile_id == p1.id
-      assert state_wrap_down_container.selected_container_id == "c1"
+    assert state_wrap_down_container.selected_profile_id == p1.id
+    assert state_wrap_down_container.selected_container_id == "c1"
 
-      # Set to the first container (c1). Up should wrap around to the last container (c2).
-      state_containers_focus_first = %{state_containers_focus | selected_container_id: "c1"}
+    # Set to the first container (c1). Up should wrap around to the last container (c2).
+    state_containers_focus_first = %{state_containers_focus | selected_container_id: "c1"}
 
-      assert {:noreply, state_wrap_up_container} =
-               App.handle_event(event_up, state_containers_focus_first)
+    assert {:noreply, state_wrap_up_container} =
+             App.handle_event(event_up, state_containers_focus_first)
 
-      assert state_wrap_up_container.selected_profile_id == p1.id
-      assert state_wrap_up_container.selected_container_id == "c2"
-    end
+    assert state_wrap_up_container.selected_profile_id == p1.id
+    assert state_wrap_up_container.selected_container_id == "c2"
   end
 
   test "handle_event/2 handles keyboard events for search mode state machine transitions" do
@@ -395,6 +396,82 @@ defmodule Caudata.UI.AppTest do
     assert state_j3.logs_scroll_y == :bottom
   end
 
+  test "handle_event/2 accelerates scroll speed when holding/pressing j or k repeatedly" do
+    {:ok, state} = App.mount([])
+
+    # Setup some test logs (100 lines) and standard viewport height (24 lines)
+    # Visible height is 20, max_scroll = 100 - 20 = 80.
+    logs = Enum.map(1..100, &"line #{&1}")
+
+    state = %{
+      state
+      | logs: logs,
+        height: 24,
+        selected_profile_id: "test-server",
+        selected_container_id: "container-1"
+    }
+
+    # Start scroll position at 70 (scrolled up somewhat, so we have room to go up or down)
+    state = %{state | logs_scroll_y: 70}
+
+    event_k = %ExRatatui.Event.Key{code: "k", modifiers: []}
+
+    # 1. First press of "k" - step size should be 3
+    assert {:noreply, state_1} = App.handle_event(event_k, state)
+    assert state_1.consecutive_key_count == 1
+    # 70 - 3 = 67
+    assert state_1.logs_scroll_y == 67
+
+    # 2. Press "k" 4 more times (total 5 presses). All should use step size of 3.
+    state_5 =
+      Enum.reduce(1..4, state_1, fn _, acc_state ->
+        {:noreply, next_state} = App.handle_event(event_k, acc_state)
+        next_state
+      end)
+
+    assert state_5.consecutive_key_count == 5
+    # 67 - (4 * 3) = 55
+    assert state_5.logs_scroll_y == 55
+
+    # 3. 6th press of "k" should trigger acceleration step size of 6
+    assert {:noreply, state_6} = App.handle_event(event_k, state_5)
+    assert state_6.consecutive_key_count == 6
+    # 55 - 6 = 49
+    assert state_6.logs_scroll_y == 49
+
+    # 4. Press "k" 9 more times (total 15 presses).
+    state_15 =
+      Enum.reduce(1..9, state_6, fn _, acc_state ->
+        {:noreply, next_state} = App.handle_event(event_k, acc_state)
+        next_state
+      end)
+
+    assert state_15.consecutive_key_count == 15
+    # To test further acceleration, let's reset scroll position in state_15 before the 16th press
+    state_15 = %{state_15 | logs_scroll_y: 50}
+
+    # 5. 16th press of "k" should trigger maximum acceleration step size of 15
+    assert {:noreply, state_16} = App.handle_event(event_k, state_15)
+    assert state_16.consecutive_key_count == 16
+    # 50 - 15 = 35
+    assert state_16.logs_scroll_y == 35
+
+    # 6. Pressing a different key (like "j") should reset consecutive count
+    event_j = %ExRatatui.Event.Key{code: "j", modifiers: []}
+    assert {:noreply, state_j} = App.handle_event(event_j, state_16)
+    assert state_j.consecutive_key_count == 1
+    # 35 + 3 = 38
+    assert state_j.logs_scroll_y == 38
+
+    # 7. Pressing after a delay should reset consecutive count
+    # Simulate a delay by setting last_key_time to 5 seconds ago
+    state_delayed = %{state_j | last_key_time: System.monotonic_time(:millisecond) - 5000}
+    assert {:noreply, state_j_delayed} = App.handle_event(event_j, state_delayed)
+    assert state_j_delayed.consecutive_key_count == 1
+    # 38 + 3 = 41
+    assert state_j_delayed.logs_scroll_y == 41
+  end
+
   test "scrolling up when all logs fit in the viewport keeps logs_scroll_y as :bottom" do
     {:ok, state} = App.mount([])
 
@@ -418,7 +495,11 @@ defmodule Caudata.UI.AppTest do
   end
 
   test "handle_info/2 logs_updated adjusts logs_scroll_y by drop count difference when scrolled up" do
-    profile_id = "drop-test-server"
+    profile_id = "drop-test-server-#{System.unique_integer([:positive])}"
+    source_id = profile_id
+    Caudata.LogStore.clear_logs(source_id)
+
+    initial_logs = Enum.map(1..10, &"log line #{&1}")
 
     {:ok, state} = App.mount([])
 
@@ -427,20 +508,88 @@ defmodule Caudata.UI.AppTest do
       state
       | selected_profile_id: profile_id,
         selected_container_id: nil,
+        logs: initial_logs,
         logs_scroll_y: 5,
+        logs_fetch_limit: 10,
         drop_counts: %{profile_id => 0}
     }
 
+    # Now, the LogStore gets updated with new logs, shifting the window
+    new_store_logs = Enum.map(4..13, &"log line #{&1}")
+    Caudata.LogStore.append_logs(source_id, new_store_logs)
+    :sys.get_state(Caudata.LogStore)
+
     # Simulate receiving logs_updated PubSub event
-    msg = {:logs_updated, profile_id, %{size: 1000, drop_count: 3}}
+    msg = {:logs_updated, profile_id, %{size: 10, drop_count: 3}}
     assert {:noreply, updated_state} = App.handle_info(msg, state)
 
-    # The drop difference is 3 - 0 = 3.
-    # The scroll position should be adjusted: 5 - 3 = 2.
-    assert updated_state.logs_scroll_y == 2
+    # At this point (before tick), logs_scroll_y is still 5
+    assert updated_state.logs_scroll_y == 5
     assert updated_state.drop_counts[profile_id] == 3
-    assert updated_state.buffer_sizes[profile_id] == 1000
+    assert updated_state.buffer_sizes[profile_id] == 10
     assert updated_state.logs_dirty == true
+
+    # Now simulate the :tick event
+    assert {:noreply, ticked_state} = App.handle_info(:tick, updated_state)
+
+    # The first 3 logs are dropped from the snapshot, so scroll position is adjusted: 5 - 3 = 2
+    assert ticked_state.logs_scroll_y == 2
+    assert ticked_state.logs == new_store_logs
+  end
+
+  test "when scrolled up, receiving new logs does not auto-scroll and keeps viewport stable" do
+    profile_id = "stable-test-server-#{System.unique_integer([:positive])}"
+    container_id = "container-1"
+    source_id = "#{profile_id}/#{container_id}"
+    Caudata.LogStore.clear_logs(source_id)
+
+    # Initial logs: 15 lines. Capped at 15 fetch limit.
+    initial_logs = Enum.map(1..15, &"log line #{&1}")
+    Caudata.LogStore.append_logs(source_id, initial_logs)
+    :sys.get_state(Caudata.LogStore)
+
+    {:ok, state} = App.mount([])
+
+    state = %{
+      state
+      | selected_profile_id: profile_id,
+        selected_container_id: container_id,
+        logs_fetch_limit: 15,
+        logs_scroll_y: :bottom
+    }
+
+    # 1. First tick to populate logs
+    assert {:noreply, state1} = App.handle_info(:tick, state)
+    assert state1.logs == initial_logs
+    assert state1.logs_scroll_y == :bottom
+
+    # 2. Scroll up by 3 lines (simulating pressing 'k')
+    # logs_height = 10 - 4 = 6
+    state1 = %{state1 | height: 10}
+    event_k = %ExRatatui.Event.Key{code: "k", modifiers: []}
+    assert {:noreply, state_scrolled} = App.handle_event(event_k, state1)
+    # max_scroll is 15 - 6 = 9. Scrolling up by 3 steps should set it to 9 - 3 = 6.
+    assert state_scrolled.logs_scroll_y == 6
+
+    # 3. Now 5 new logs are appended to LogStore (total 20 logs).
+    # Since logs_fetch_limit is 15, the new snapshot will be lines 6 to 20.
+    new_store_logs = Enum.map(6..20, &"log line #{&1}")
+    Caudata.LogStore.clear_logs(source_id)
+    Caudata.LogStore.append_logs(source_id, new_store_logs)
+    :sys.get_state(Caudata.LogStore)
+
+    # PubSub message
+    msg = {:logs_updated, source_id, %{size: 15, drop_count: 5}}
+    assert {:noreply, state_msg} = App.handle_info(msg, state_scrolled)
+    # remains 6 before tick
+    assert state_msg.logs_scroll_y == 6
+
+    # 4. Handle tick
+    assert {:noreply, state_ticked} = App.handle_info(:tick, state_msg)
+
+    # Since the first 5 logs were dropped, logs_scroll_y should be adjusted: 6 - 5 = 1.
+    assert state_ticked.logs == new_store_logs
+    assert state_ticked.logs_scroll_y == 1
   end
 
   test "handle_event/2 handles loading older logs when scrolling up with k" do
@@ -458,15 +607,15 @@ defmodule Caudata.UI.AppTest do
 
     {:ok, state} = App.mount([])
 
-    # Setup initial state with only the last 20 logs loaded, representing fetch limit of 20
-    initial_logs = Enum.take(logs_history, -20)
+    # Setup initial state with 25 logs loaded (more than the viewport of 20), scroll at top
+    initial_logs = Enum.take(logs_history, -25)
 
     state = %{
       state
       | selected_profile_id: profile_id,
         selected_container_id: "container-1",
         logs: initial_logs,
-        logs_fetch_limit: 20,
+        logs_fetch_limit: 25,
         # scroll position is at the top of loaded logs
         logs_scroll_y: 0,
         # pane height is 24 - 4 = 20
@@ -475,18 +624,73 @@ defmodule Caudata.UI.AppTest do
 
     # Verify that scroll position is 0
     assert state.logs_scroll_y == 0
-    assert length(state.logs) == 20
+    assert length(state.logs) == 25
 
-    # Pressing "k" (scroll up) when effective_scroll is 0 should NOT trigger loading more logs
+    # Pressing "k" (scroll up) when effective_scroll is 0 should trigger loading more logs
     event_k = %ExRatatui.Event.Key{code: "k", modifiers: []}
     assert {:noreply, updated_state} = App.handle_event(event_k, state)
 
-    # Assert that fetch limit remained unchanged
-    assert updated_state.logs_fetch_limit == 20
-    # Assert logs length is still 20
-    assert length(updated_state.logs) == 20
-    # Assert scroll position is still 0
-    assert updated_state.logs_scroll_y == 0
+    # Assert that fetch limit increased by 100 (capped at 1000)
+    assert updated_state.logs_fetch_limit == 125
+    # Assert logs now contain all 35 lines from LogStore
+    assert length(updated_state.logs) == 35
+    # Assert loading_history is reset to false
+    assert updated_state.loading_history == false
+    # Assert scroll is adjusted to keep the view stable (10 new lines above the original 25)
+    # m = 35 - 25 = 10, displayed = 35, height = 20, max_scroll = 15, scroll = min(15, 9) = 9
+    assert updated_state.logs_scroll_y == 9
+  end
+
+  test "handle_event/2 handles loading older logs when scrolling up with k in selecting mode" do
+    profile_id = "test-history-server-select"
+    container_id = "container-1"
+    source_id = "#{profile_id}/#{container_id}"
+    Caudata.LogStore.clear_logs(source_id)
+
+    # Append 35 logs to LogStore
+    logs_history = Enum.map(1..35, &"historical line #{&1}")
+    Caudata.LogStore.append_logs(source_id, logs_history)
+
+    # Let the GenServer process the cast
+    Process.sleep(50)
+
+    {:ok, state} = App.mount([])
+
+    # Setup initial state with 25 logs loaded (more than the viewport of 20), scroll at top
+    initial_logs = Enum.take(logs_history, -25)
+
+    state = %{
+      state
+      | selected_profile_id: profile_id,
+        selected_container_id: "container-1",
+        logs: initial_logs,
+        logs_fetch_limit: 25,
+        # scroll position is at the top of loaded logs
+        logs_scroll_y: 0,
+        # pane height is 24 - 4 = 20
+        height: 24,
+        mode: :selecting,
+        visual_cursor: 0,
+        visual_anchor: nil
+    }
+
+    # Verify that scroll position is 0
+    assert state.logs_scroll_y == 0
+    assert length(state.logs) == 25
+
+    # Pressing "k" (scroll up) when effective_scroll is 0 should trigger loading more logs
+    event_k = %ExRatatui.Event.Key{code: "k", modifiers: []}
+    assert {:noreply, updated_state} = App.handle_event(event_k, state)
+
+    # Assert logs now contain all 35 lines from LogStore
+    assert length(updated_state.logs) == 35
+    # Assert loading_history is reset to false
+    assert updated_state.loading_history == false
+    # Assert scroll is adjusted to keep the view stable (10 new lines above the original 25)
+    assert updated_state.logs_scroll_y == 9
+    # Assert visual_cursor shifted from 0 to 10
+    assert updated_state.visual_cursor == 10
+    assert updated_state.visual_anchor == nil
   end
 
   test "handle_event/2 handles keyboard events in settings modal" do
@@ -522,9 +726,13 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, state_tab2} = App.handle_event(event_tab, state_tab1)
     assert state_tab2.settings_focus == :custom_logs
 
-    # Tab 4: :custom_logs -> :servers
+    # Tab 4: :custom_logs -> :general
     assert {:noreply, state_tab3} = App.handle_event(event_tab, state_tab2)
-    assert state_tab3.settings_focus == :servers
+    assert state_tab3.settings_focus == :general
+
+    # Tab 5: :general -> :servers
+    assert {:noreply, state_tab4} = App.handle_event(event_tab, state_tab3)
+    assert state_tab4.settings_focus == :servers
 
     # Verify down/up key modifies profile selection when focus is :servers
     event_down = %ExRatatui.Event.Key{code: "down", modifiers: []}
@@ -831,5 +1039,213 @@ defmodule Caudata.UI.AppTest do
     event_esc = %ExRatatui.Event.Key{code: "escape", modifiers: []}
     assert {:noreply, state_esc} = App.handle_event(event_esc, state_F1)
     assert state_esc.logs_full_screen == false
+  end
+
+  test "handle_info/2 logs_updated stores stats under correct container source_id" do
+    u_id = System.unique_integer([:positive])
+    profile_id = "test-server-#{u_id}"
+    container_id = "test-container-#{u_id}"
+    source_id = "#{profile_id}/#{container_id}"
+    Caudata.LogStore.clear_logs(source_id)
+
+    initial_logs = Enum.map(1..15, &"log line #{&1}")
+
+    {:ok, state} = App.mount([])
+
+    state = %{
+      state
+      | selected_profile_id: profile_id,
+        selected_container_id: container_id,
+        logs: initial_logs,
+        logs_scroll_y: 10,
+        logs_fetch_limit: 15,
+        drop_counts: %{source_id => 0}
+    }
+
+    # Append new logs shifting the window by 5
+    new_store_logs = Enum.map(6..20, &"log line #{&1}")
+    Caudata.LogStore.append_logs(source_id, new_store_logs)
+    :sys.get_state(Caudata.LogStore)
+
+    # Simulate receiving logs_updated PubSub event for the container source
+    msg = {:logs_updated, source_id, %{size: 250, drop_count: 5}}
+    assert {:noreply, updated_state} = App.handle_info(msg, state)
+
+    # Scroll remains 10 before tick
+    assert updated_state.logs_scroll_y == 10
+    assert updated_state.drop_counts[source_id] == 5
+    assert updated_state.buffer_sizes[source_id] == 250
+    assert updated_state.logs_dirty == true
+
+    # Simulate :tick
+    assert {:noreply, ticked_state} = App.handle_info(:tick, updated_state)
+
+    # Scroll is adjusted by 5: 10 - 5 = 5
+    assert ticked_state.logs_scroll_y == 5
+    assert ticked_state.logs == new_store_logs
+  end
+
+  test "handle_info/2 container_rebuilt updates selected container ID and log subscription" do
+    server_id = "test-server-rebuilt"
+    old_id = "container-old"
+    new_id = "container-new"
+    source_id = "#{server_id}/#{new_id}"
+
+    Caudata.LogStore.clear_logs(source_id)
+    new_logs = ["new log 1", "new log 2"]
+    Caudata.LogStore.append_logs(source_id, new_logs)
+    :sys.get_state(Caudata.LogStore)
+
+    {:ok, state} = App.mount([])
+
+    state = %{
+      state
+      | selected_profile_id: server_id,
+        selected_container_id: old_id,
+        logs: ["old log line 1", "old log line 2"]
+    }
+
+    # Simulate container rebuild event
+    msg = {:container_rebuilt, server_id, old_id, new_id}
+    assert {:noreply, updated_state} = App.handle_info(msg, state)
+
+    assert updated_state.selected_container_id == new_id
+    assert updated_state.logs_dirty == true
+    assert updated_state.logs == new_logs
+  end
+
+  test "General settings tab handles keyboard events and saves global log capacity" do
+    {:ok, state} = App.mount([])
+
+    state = %{
+      state
+      | modal_visible: true,
+        modal_type: :settings,
+        settings_focus: :general,
+        settings_global_focus_idx: 0,
+        settings_global_capacity: "1000",
+        settings_status_msg: nil
+    }
+
+    # Type an extra digit "5" (representing character typing)
+    event_5 = %ExRatatui.Event.Key{code: "5", modifiers: []}
+    assert {:noreply, state_typed} = App.handle_event(event_5, state)
+    assert state_typed.settings_global_capacity == "10005"
+
+    # Press backspace to delete the "5"
+    event_bs = %ExRatatui.Event.Key{code: "backspace", modifiers: []}
+    assert {:noreply, state_bs} = App.handle_event(event_bs, state_typed)
+    assert state_bs.settings_global_capacity == "1000"
+
+    # Type a non-digit character like "a", it should be ignored since we pattern match for digits
+    event_a = %ExRatatui.Event.Key{code: "a", modifiers: []}
+    assert {:noreply, state_ignored} = App.handle_event(event_a, state_bs)
+    assert state_ignored.settings_global_capacity == "1000"
+
+    # Navigate down to "Save" button
+    event_down = %ExRatatui.Event.Key{code: "down", modifiers: []}
+    assert {:noreply, state_focused_save} = App.handle_event(event_down, state_bs)
+    assert state_focused_save.settings_global_focus_idx == 1
+
+    # Press enter to save
+    event_enter = %ExRatatui.Event.Key{code: "enter", modifiers: []}
+    assert {:noreply, state_saved} = App.handle_event(event_enter, state_focused_save)
+    assert state_saved.settings_status_msg =~ "Successfully saved log capacity: 1000"
+  end
+
+  describe "visual select & copy all" do
+    test "pressing 'v' enters visual select mode" do
+      {:ok, state} = App.mount([])
+
+      state = %{
+        state
+        | selected_profile_id: "test-server",
+          selected_container_id: "container-1",
+          logs: ["line 1", "line 2", "line 3"]
+      }
+
+      event_v = %ExRatatui.Event.Key{code: "v", modifiers: []}
+      assert {:noreply, visual_state} = App.handle_event(event_v, state)
+      assert visual_state.mode == :selecting
+      assert visual_state.visual_anchor == nil
+      assert visual_state.visual_cursor == 2
+    end
+
+    test "pressing 'y' in normal mode copies all logs and sets notification" do
+      {:ok, state} = App.mount([])
+
+      state = %{
+        state
+        | selected_profile_id: "test-server",
+          selected_container_id: "container-1",
+          logs: ["line 1", "line 2", "line 3"]
+      }
+
+      event_y = %ExRatatui.Event.Key{code: "y", modifiers: []}
+      assert {:noreply, copy_state} = App.handle_event(event_y, state)
+
+      {msg, ticks} = copy_state.notification
+      assert msg =~ "Copied 3 log lines"
+      assert ticks == 25
+    end
+
+    test "pressing 'y' with no logs shows 'no logs' notification" do
+      {:ok, state} = App.mount([])
+
+      state = %{state | selected_profile_id: "test-server", selected_container_id: nil}
+
+      event_y = %ExRatatui.Event.Key{code: "y", modifiers: []}
+      assert {:noreply, copy_state} = App.handle_event(event_y, state)
+
+      {msg, _ticks} = copy_state.notification
+      assert msg =~ "No logs to copy"
+    end
+
+    test "escape exits visual select mode" do
+      {:ok, state} = App.mount([])
+
+      state = %{
+        state
+        | selected_profile_id: "test-server",
+          selected_container_id: "container-1",
+          logs: ["line 1", "line 2"],
+          mode: :selecting,
+          visual_anchor: 1,
+          visual_cursor: 0
+      }
+
+      event_esc = %ExRatatui.Event.Key{code: "escape", modifiers: []}
+      assert {:noreply, escaped_state} = App.handle_event(event_esc, state)
+      assert escaped_state.mode == :browsing
+      assert escaped_state.visual_anchor == nil
+      assert escaped_state.visual_cursor == nil
+    end
+
+    test "pressing 'v' with no logs shows 'no logs to select' notification" do
+      {:ok, state} = App.mount([])
+
+      state = %{state | selected_profile_id: "test-server", selected_container_id: nil}
+
+      event_v = %ExRatatui.Event.Key{code: "v", modifiers: []}
+      assert {:noreply, nope_state} = App.handle_event(event_v, state)
+
+      {msg, _ticks} = nope_state.notification
+      assert msg =~ "No logs to select"
+      assert nope_state.mode == :browsing
+    end
+
+    test "notification decrements on tick" do
+      {:ok, state} = App.mount([])
+
+      state = %{state | notification: {"Test message", 3}}
+      assert {:noreply, tick1} = App.handle_info(:tick, state)
+      assert tick1.notification == {"Test message", 2}
+
+      assert {:noreply, tick2} = App.handle_info(:tick, tick1)
+      assert tick2.notification == {"Test message", 1}
+
+      assert {:noreply, tick3} = App.handle_info(:tick, tick2)
+      assert tick3.notification == nil
+    end
   end
 end

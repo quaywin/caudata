@@ -9,6 +9,7 @@ defmodule Caudata.ContainerWorkerTest do
 
   setup do
     set_mox_global()
+    Caudata.LogStore.clear_logs("my-server/container123")
     :ok
   end
 
@@ -28,7 +29,7 @@ defmodule Caudata.ContainerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_channel,
-                        "sh -c 'docker logs --follow --tail 1000 container123 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 1000 container123 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->
@@ -106,7 +107,7 @@ defmodule Caudata.ContainerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn,
                         :dummy_channel,
-                        "sh -c 'docker logs --follow --tail 1000 container123 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+                        "sh -c 'docker logs --follow --tail 1000 container123 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->
@@ -128,6 +129,54 @@ defmodule Caudata.ContainerWorkerTest do
     assert_receive {:container_log_disconnected, "my-server", "container123", "Channel closed"},
                    1000
 
+    stop_supervised(ContainerWorker)
+  end
+
+  test "redirected stderr and stdout logs are streamed and processed sequentially in order" do
+    container = %{
+      id: "container123",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 3 hours",
+      state: "running"
+    }
+
+    Mock
+    |> expect(:open_channel, fn :dummy_conn ->
+      {:ok, :dummy_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_channel, cmd ->
+      assert String.contains?(cmd, "2>&1")
+      :ok
+    end)
+    |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->
+      :ok
+    end)
+
+    opts = [ssh_client: Mock]
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
+
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+
+    # Subscribe to LogStore updates
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "logs:my-server/container123")
+
+    # Simulate sequential data sent over stdout stream (stream_id = 0)
+    send(
+      pid,
+      {:ssh_cm, :dummy_conn, {:data, :dummy_channel, 0, "stderr line 1\nstdout line 1\n"}}
+    )
+
+    # Expect log updates in LogStore
+    assert_receive {:logs_updated, "my-server/container123", _}, 1000
+
+    Process.sleep(120)
+    snapshot = LogStore.get_snapshot("my-server/container123")
+
+    # The lines should be separated correctly without corruption
+    assert snapshot == ["stderr line 1", "stdout line 1"]
+
+    assert :ok = ContainerWorker.stop_streaming(pid)
     stop_supervised(ContainerWorker)
   end
 end

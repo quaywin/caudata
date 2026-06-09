@@ -173,22 +173,15 @@ defmodule Caudata.ContainerWorker do
 
   # Handle SSH incoming messages
   @impl true
-  def handle_info({:ssh_cm, conn_ref, {:data, channel_id, stream_id, chunk}}, state) do
+  def handle_info({:ssh_cm, conn_ref, {:data, channel_id, _stream_id, chunk}}, state) do
     if conn_ref == state.conn_ref && channel_id == state.channel_id do
       chunk_str = to_string(chunk)
       {lines, new_buffer} = process_chunk(chunk_str, state.buffer)
 
       state =
         if length(lines) > 0 do
-          processed_lines =
-            if stream_id == 1 do
-              Enum.map(lines, fn line -> "[stderr] " <> line end)
-            else
-              lines
-            end
-
           # Accumulate logs to be flushed in batch
-          new_pending_logs = state.pending_logs ++ processed_lines
+          new_pending_logs = state.pending_logs ++ lines
 
           # Lazy-start the timer to flush pending logs after 100ms
           if is_nil(state.flush_timer) do
@@ -310,11 +303,11 @@ defmodule Caudata.ContainerWorker do
             "file:" <> path = state.container_id
             escaped_path = String.replace(path, "'", "'\\''")
 
-            "sh -c 'tail -n #{state.tail_limit || 100} -F \"#{escaped_path}\" & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
+            "sh -c 'tail -n #{state.tail_limit || 100} -F \"#{escaped_path}\" 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
           else
             escaped_container_id = String.replace(state.container_id, "'", "'\\''")
 
-            "sh -c 'docker logs --follow --tail #{state.tail_limit || 1000} #{escaped_container_id} & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
+            "sh -c 'docker logs --follow --tail #{state.tail_limit || 1000} #{escaped_container_id} 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
           end
 
         case state.ssh_client.exec(conn_ref, channel_id, log_cmd) do

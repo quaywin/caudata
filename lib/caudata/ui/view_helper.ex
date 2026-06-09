@@ -3,6 +3,7 @@ defmodule Caudata.UI.ViewHelper do
   Shared helper functions for calculations and state lookup in the UI layer.
   """
   alias ExRatatui.Layout.Rect
+  alias ExRatatui.Text.Span
 
   @doc """
   Computes the inner rectangle for a widget pane by subtracting borders.
@@ -99,6 +100,42 @@ defmodule Caudata.UI.ViewHelper do
   defp do_wrap_text(line, width, acc) do
     {chunk, rest} = String.split_at(line, width)
     do_wrap_text(rest, width, [chunk | acc])
+  end
+
+  @doc """
+  Pre-wraps a list of structured spans into multiple lines of spans of a given maximum width.
+  """
+  def wrap_spans(spans, width) do
+    w = max(1, width)
+    do_wrap_spans(spans, w, w, [], [])
+  end
+
+  defp do_wrap_spans([], _max_w, _rem_w, current_line, acc) do
+    case current_line do
+      [] -> Enum.reverse(acc)
+      _ -> Enum.reverse([Enum.reverse(current_line) | acc])
+    end
+  end
+
+  defp do_wrap_spans([%Span{content: ""} = span | rest_spans], max_w, rem_w, current_line, acc) do
+    do_wrap_spans(rest_spans, max_w, rem_w, [span | current_line], acc)
+  end
+
+  defp do_wrap_spans([span | rest_spans], max_w, rem_w, current_line, acc) do
+    len = String.length(span.content)
+
+    cond do
+      len <= rem_w ->
+        do_wrap_spans(rest_spans, max_w, rem_w - len, [span | current_line], acc)
+
+      true ->
+        {chunk_str, rest_str} = String.split_at(span.content, rem_w)
+        chunk_span = %{span | content: chunk_str}
+        rest_span = %{span | content: rest_str}
+
+        new_line = Enum.reverse([chunk_span | current_line])
+        do_wrap_spans([rest_span | rest_spans], max_w, max_w, [], [new_line | acc])
+    end
   end
 
   @doc """

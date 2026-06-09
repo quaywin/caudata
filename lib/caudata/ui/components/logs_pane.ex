@@ -90,7 +90,9 @@ defmodule Caudata.UI.Components.LogsPane do
       displayed_logs
       |> Enum.with_index()
       |> Enum.flat_map(fn {line, idx} ->
-        ViewHelper.wrap_text(line, inner_width)
+        spans = LogFormatter.format_line(line)
+
+        ViewHelper.wrap_spans(spans, inner_width)
         |> Enum.map(fn w -> {w, idx} end)
       end)
 
@@ -154,7 +156,7 @@ defmodule Caudata.UI.Components.LogsPane do
   end
 
   defp build_log_lines(wrapped_with_indices, state, selection_range) do
-    Enum.map(wrapped_with_indices, fn {line, raw_idx} ->
+    Enum.map(wrapped_with_indices, fn {spans, raw_idx} ->
       is_cursor = state.mode == :selecting and raw_idx == state.visual_cursor
 
       is_selected =
@@ -167,7 +169,6 @@ defmodule Caudata.UI.Components.LogsPane do
           true -> %Style{}
         end
 
-      spans = LogFormatter.format_line(line)
       Line.new(spans, style: line_style)
     end)
   end

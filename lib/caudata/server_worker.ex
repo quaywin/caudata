@@ -478,7 +478,7 @@ defmodule Caudata.ServerWorker do
   # Handle SSH incoming messages
   @impl true
   def handle_info(
-        {:ssh_cm, conn_ref, {:data, channel_id, stream_id, chunk}},
+        {:ssh_cm, conn_ref, {:data, channel_id, _stream_id, chunk}},
         state
       ) do
     cond do
@@ -498,16 +498,8 @@ defmodule Caudata.ServerWorker do
 
         if length(lines) > 0 do
           source_id = state.profile.id
-
-          processed_lines =
-            if stream_id == 1 do
-              Enum.map(lines, fn line -> "[stderr] " <> line end)
-            else
-              lines
-            end
-
           # Batch insert to LogStore
-          LogStore.append_logs(source_id, processed_lines)
+          LogStore.append_logs(source_id, lines)
         end
 
         {:noreply, %{state | buffer: new_buffer}}
@@ -809,7 +801,7 @@ defmodule Caudata.ServerWorker do
     escaped_log_cmd = String.replace(log_cmd, "'", "'\\''")
 
     wrapped_log_cmd =
-      "sh -c '#{escaped_log_cmd} & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
+      "sh -c '#{escaped_log_cmd} 2>&1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
 
     Logger.info("Streaming server logs via: #{wrapped_log_cmd} on #{state.profile.id}...")
 

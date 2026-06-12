@@ -752,4 +752,123 @@ defmodule Caudata.ServerWorkerTest do
 
     stop_supervised(ServerWorker)
   end
+
+  test "preserves container ordering and custom logs position during rebuild and new additions" do
+    profile =
+      Profile.new(%{
+        id: "order-test-server",
+        host_pattern: "order-server",
+        host_name: "10.0.0.10",
+        user: "root",
+        port: 22,
+        custom_logs: ["/var/log/app.log"]
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, fn "10.0.0.10", 22, _ -> {:ok, :dummy_conn} end)
+    # Docker ps channel
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_list_channel)
+      {:ok, :dummy_list_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
+      :ok
+    end)
+    # Docker events channel
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_events_channel)
+      {:ok, :dummy_events_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_events_channel, cmd ->
+      assert String.starts_with?(cmd, "docker events")
+      :ok
+    end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    # Subscribe to status changes
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    # Start the worker with the Mock client and enable_events
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: true}})
+
+    assert_receive :opened_list_channel, 1000
+
+    # 1. Bootstrap: send two docker containers
+    containers_json =
+      "{\"ID\":\"c1\",\"Names\":\"web-container\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n" <>
+        "{\"ID\":\"c2\",\"Names\":\"db-container\",\"Image\":\"postgres\",\"Status\":\"Up\",\"State\":\"running\"}\n"
+
+    send(
+      worker_pid,
+      {:ssh_cm, :dummy_conn, {:data, :dummy_list_channel, 0, containers_json}}
+    )
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_list_channel}})
+
+    assert_receive {:status_updated, "order-test-server", :connected}, 1000
+    assert_receive :opened_events_channel, 1000
+
+    # Verify initial containers list: web, db, then file logs
+    initial_conts = ServerWorker.get_containers(worker_pid)
+    assert length(initial_conts) == 3
+    assert Enum.at(initial_conts, 0).id == "c1"
+    assert Enum.at(initial_conts, 0).name == "web-container"
+    assert Enum.at(initial_conts, 1).id == "c2"
+    assert Enum.at(initial_conts, 1).name == "db-container"
+    assert Enum.at(initial_conts, 2).id == "file:/var/log/app.log"
+    assert Enum.at(initial_conts, 2).name == "/var/log/app.log"
+
+    # 2. Simulate rebuilding: c1 (web-container) dies and is destroyed
+    die_event =
+      "{\"status\":\"die\",\"id\":\"c1\",\"Actor\":{\"Attributes\":{\"name\":\"web-container\"}}}\n"
+
+    destroy_event =
+      "{\"status\":\"destroy\",\"id\":\"c1\",\"Actor\":{\"Attributes\":{\"name\":\"web-container\"}}}\n"
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, die_event}})
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, destroy_event}})
+
+    Process.sleep(50)
+
+    # Rebuilt container start: web-container gets new ID c3
+    start_event =
+      "{\"status\":\"start\",\"id\":\"c3\",\"Actor\":{\"Attributes\":{\"name\":\"web-container\",\"image\":\"nginx\"}}}\n"
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, start_event}})
+
+    Process.sleep(50)
+
+    # Verify that the order is preserved: web-container (now c3) is still at Index 0, and log file is still at Index 2
+    rebuilt_conts = ServerWorker.get_containers(worker_pid)
+    assert length(rebuilt_conts) == 3
+    assert Enum.at(rebuilt_conts, 0).id == "c3"
+    assert Enum.at(rebuilt_conts, 0).name == "web-container"
+    assert Enum.at(rebuilt_conts, 1).id == "c2"
+    assert Enum.at(rebuilt_conts, 1).name == "db-container"
+    assert Enum.at(rebuilt_conts, 2).id == "file:/var/log/app.log"
+
+    # 3. Add a new container: mail-container (c4) starts
+    new_start_event =
+      "{\"status\":\"start\",\"id\":\"c4\",\"Actor\":{\"Attributes\":{\"name\":\"mail-container\",\"image\":\"mail\"}}}\n"
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, new_start_event}})
+
+    Process.sleep(50)
+
+    # Verify that the new container is added at the end of the Docker section (Index 2),
+    # and the custom log file is shifted down to the bottom (Index 3).
+    final_conts = ServerWorker.get_containers(worker_pid)
+    assert length(final_conts) == 4
+    assert Enum.at(final_conts, 0).name == "web-container"
+    assert Enum.at(final_conts, 1).name == "db-container"
+    assert Enum.at(final_conts, 2).name == "mail-container"
+    assert Enum.at(final_conts, 2).id == "c4"
+    assert Enum.at(final_conts, 3).id == "file:/var/log/app.log"
+
+    stop_supervised(ServerWorker)
+  end
 end

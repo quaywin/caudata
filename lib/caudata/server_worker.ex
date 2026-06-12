@@ -27,6 +27,7 @@ defmodule Caudata.ServerWorker do
     :metrics_channel_id,
     :enable_metrics,
     :metrics,
+    container_order: [],
     metrics_buffer: "",
     events_buffer: "",
     validation_channels: %{},
@@ -109,7 +110,8 @@ defmodule Caudata.ServerWorker do
       metrics_buffer: "",
       enable_metrics:
         Keyword.get(opts, :enable_metrics, Application.get_env(:caudata, :env) != :test),
-      metrics: nil
+      metrics: nil,
+      container_order: []
     }
 
     # Broadcast initial connecting status
@@ -546,6 +548,11 @@ defmodule Caudata.ServerWorker do
           end)
 
         all_containers = containers ++ custom_containers
+
+        # Reset the stable order when refreshing the full list
+        order = Enum.map(all_containers, &container_order_key/1)
+        state = %{state | container_order: order}
+
         state = sync_container_workers(state, all_containers)
 
         state =
@@ -1172,10 +1179,47 @@ defmodule Caudata.ServerWorker do
     )
   end
 
+  defp container_order_key(container) do
+    if container.image == "file" or String.starts_with?(to_string(container.id), "file:") do
+      to_string(container.id)
+    else
+      to_string(container.name)
+    end
+  end
+
+  defp add_to_container_order(order, new_key) do
+    if new_key in order do
+      order
+    else
+      first_file_idx = Enum.find_index(order, &String.starts_with?(&1, "file:"))
+
+      if is_nil(first_file_idx) do
+        order ++ [new_key]
+      else
+        List.insert_at(order, first_file_idx, new_key)
+      end
+    end
+  end
+
   defp sync_container_workers(state, new_containers) do
-    # Preserve cpu_text and ram_text from old containers if they exist
-    new_containers =
-      Enum.map(new_containers, fn new_c ->
+    # 1. Ensure all new containers have their keys in the state.container_order list
+    new_keys = Enum.map(new_containers, &container_order_key/1)
+
+    updated_order =
+      Enum.reduce(new_keys, state.container_order || [], fn key, acc ->
+        add_to_container_order(acc, key)
+      end)
+
+    # 2. Sort the containers according to the container_order
+    sorted_containers =
+      Enum.sort_by(new_containers, fn c ->
+        key = container_order_key(c)
+        Enum.find_index(updated_order, &(&1 == key)) || length(updated_order)
+      end)
+
+    # 3. Preserve cpu_text and ram_text from old containers if they exist
+    sorted_containers =
+      Enum.map(sorted_containers, fn new_c ->
         case Enum.find(state.containers, &(&1.id == new_c.id)) do
           nil ->
             new_c
@@ -1187,7 +1231,7 @@ defmodule Caudata.ServerWorker do
         end
       end)
 
-    new_ids = MapSet.new(Enum.map(new_containers, & &1.id))
+    new_ids = MapSet.new(Enum.map(sorted_containers, & &1.id))
 
     # Stop and remove workers for containers that no longer exist
     {remaining_pids, _stopped_pids} =
@@ -1202,7 +1246,7 @@ defmodule Caudata.ServerWorker do
 
     # Start or update workers for new/existing containers
     updated_pids =
-      Enum.reduce(new_containers, remaining_pids, fn container, acc ->
+      Enum.reduce(sorted_containers, remaining_pids, fn container, acc ->
         case Map.fetch(acc, container.id) do
           {:ok, pid} ->
             if Process.alive?(pid) do
@@ -1231,8 +1275,13 @@ defmodule Caudata.ServerWorker do
         end
       end)
 
-    broadcast_containers(state.profile.id, new_containers)
+    broadcast_containers(state.profile.id, sorted_containers)
 
-    %{state | containers: new_containers, container_pids: updated_pids}
+    %{
+      state
+      | containers: sorted_containers,
+        container_pids: updated_pids,
+        container_order: updated_order
+    }
   end
 end

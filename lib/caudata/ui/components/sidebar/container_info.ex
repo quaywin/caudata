@@ -68,27 +68,31 @@ defmodule Caudata.UI.Components.Sidebar.ContainerInfo do
           ]
 
           cpu_lines =
-            if Map.has_key?(container, :cpu_text) do
-              [
-                Line.new([
-                  Span.new(" CPU:    ", style: %Style{fg: :dark_gray}),
-                  Span.new(container.cpu_text, style: %Style{fg: :yellow})
-                ])
-              ]
-            else
-              []
+            case Map.get(container, :cpu_text) do
+              nil ->
+                []
+
+              cpu_text ->
+                [
+                  Line.new([
+                    Span.new(" CPU:    ", style: %Style{fg: :dark_gray}),
+                    Span.new(cpu_text, style: %Style{fg: :yellow})
+                  ])
+                ]
             end
 
           ram_lines =
-            if Map.has_key?(container, :ram_text) do
-              [
-                Line.new([
-                  Span.new(" RAM:    ", style: %Style{fg: :dark_gray}),
-                  Span.new(container.ram_text, style: %Style{fg: :yellow})
-                ])
-              ]
-            else
-              []
+            case Map.get(container, :ram_text) do
+              nil ->
+                []
+
+              ram_text ->
+                [
+                  Line.new([
+                    Span.new(" RAM:    ", style: %Style{fg: :dark_gray}),
+                    Span.new(ram_text, style: %Style{fg: :yellow})
+                  ])
+                ]
             end
 
           base_lines ++ cpu_lines ++ ram_lines

@@ -284,7 +284,7 @@ defmodule Caudata.ServerWorker do
           case state.ssh_client.exec(
                  state.conn_ref,
                  list_channel_id,
-                 "docker ps --format '{{json .}}'"
+                 "docker ps --no-trunc --format '{{json .}}'"
                ) do
             :ok ->
               {:noreply,
@@ -365,7 +365,11 @@ defmodule Caudata.ServerWorker do
 
     case state.ssh_client.open_channel(conn_ref) do
       {:ok, list_channel_id} ->
-        case state.ssh_client.exec(conn_ref, list_channel_id, "docker ps --format '{{json .}}'") do
+        case state.ssh_client.exec(
+               conn_ref,
+               list_channel_id,
+               "docker ps --no-trunc --format '{{json .}}'"
+             ) do
           :ok ->
             {:noreply,
              %{
@@ -787,8 +791,19 @@ defmodule Caudata.ServerWorker do
   end
 
   defp start_docker_events_listener(state) do
-    state = close_events_channel(state)
+    # Only start the listener if it isn't already running. Each container
+    # rebuild triggers a full list refresh, which flows through the closed-list
+    # channel handler and reaches here. Restarting the events stream on every
+    # refresh would close the long-lived `docker events` channel and could drop
+    # events that arrive during the restart window.
+    if state.events_channel_id do
+      state
+    else
+      start_docker_events_listener!(state)
+    end
+  end
 
+  defp start_docker_events_listener!(state) do
     if state.enable_events && state.conn_ref do
       Logger.info("Starting docker events listener for #{state.profile.id}...")
 
@@ -830,8 +845,16 @@ defmodule Caudata.ServerWorker do
   end
 
   defp start_metrics_streaming(state) do
-    state = close_metrics_channel(state)
+    # Only start the metrics stream if it isn't already running, to avoid
+    # restarting the (expensive) remote metrics loop on every list refresh.
+    if state.metrics_channel_id do
+      state
+    else
+      start_metrics_streaming!(state)
+    end
+  end
 
+  defp start_metrics_streaming!(state) do
     if state.enable_metrics && state.conn_ref do
       Logger.info("Starting real-time metrics collector for #{state.profile.id}...")
 
@@ -1017,28 +1040,15 @@ defmodule Caudata.ServerWorker do
     end
   end
 
-  defp process_parsed_event(state, "start", id, name, image) do
-    # Check if this new container has the same name as the active container (rebuilt)
-    rebuilt? = state.active_container_name == name && state.active_container_id != id
-    old_active_id = state.active_container_id
-
-    new_container = %{
-      id: id,
-      name: name,
-      image: image,
-      status: "Up",
-      state: "running"
-    }
-
-    # Reject old containers with the same name or ID, then add the new one
-    updated_containers =
-      state.containers
-      |> Enum.reject(fn c -> c.name == name || c.id == id end)
-      |> Kernel.++([new_container])
-
-    # If it is rebuilt, transition active_container_id and broadcast rebuilt event
+  defp process_parsed_event(state, "start", id, name, _image) do
+    # If the rebuilt container is the one currently being viewed, transition the
+    # active container id so log streaming follows the new container. The full
+    # list refresh triggered below will resume streaming for it once `docker ps`
+    # confirms the new container exists.
     state =
-      if rebuilt? do
+      if state.active_container_name == name && state.active_container_id != id do
+        old_active_id = state.active_container_id
+
         Logger.info("Docker container rebuilt: #{old_active_id} -> #{id} for name: #{name}")
 
         Phoenix.PubSub.broadcast(
@@ -1047,29 +1057,27 @@ defmodule Caudata.ServerWorker do
           {:container_rebuilt, state.profile.id, old_active_id, id}
         )
 
+        source_id = "#{state.profile.id}/#{id}"
+
+        if Process.whereis(Caudata.LogStore) do
+          Caudata.LogStore.clear_logs(source_id)
+        end
+
         %{state | active_container_id: id}
       else
         state
       end
 
-    # Sync container workers
-    state = sync_container_workers(state, updated_containers)
-
-    # Resume log streaming if this container is now active
-    if state.active_container_id == id do
-      case Map.fetch(state.container_pids, id) do
-        {:ok, pid} ->
-          source_id = "#{state.profile.id}/#{id}"
-          Caudata.LogStore.clear_logs(source_id)
-
-          _ = Caudata.ContainerWorker.start_streaming(pid, state.conn_ref)
-          :ok
-
-        :error ->
-          :ok
-      end
-    end
-
+    # Always reload the authoritative container list (re-runs `docker ps` and
+    # re-merges custom file logs) instead of incrementally patching it. A rebuild
+    # changes the container id, and an incremental patch can leave the sidebar out
+    # of sync (e.g. file log entries becoming unselectable afterwards). The full
+    # refresh guarantees a consistent list.
+    #
+    # Overlapping refreshes are safe: each refresh closes the previous list
+    # channel and opens a new one, and the channel-id guard in handle_info only
+    # processes data for the latest channel.
+    GenServer.cast(self(), :refresh_containers)
     state
   end
 
@@ -1201,6 +1209,10 @@ defmodule Caudata.ServerWorker do
     end
   end
 
+  defp maybe_put(map, source, key) do
+    if Map.has_key?(source, key), do: Map.put(map, key, Map.get(source, key)), else: map
+  end
+
   defp sync_container_workers(state, new_containers) do
     # 1. Ensure all new containers have their keys in the state.container_order list
     new_keys = Enum.map(new_containers, &container_order_key/1)
@@ -1217,7 +1229,10 @@ defmodule Caudata.ServerWorker do
         Enum.find_index(updated_order, &(&1 == key)) || length(updated_order)
       end)
 
-    # 3. Preserve cpu_text and ram_text from old containers if they exist
+    # 3. Preserve cpu_text and ram_text from old containers if they exist.
+    # Only copy a field when the old container actually has it, otherwise we'd
+    # inject `cpu_text: nil` (key present, value nil), which crashes the info pane
+    # (Span.new/2 rejects nil). This runs on every list refresh, so it matters.
     sorted_containers =
       Enum.map(sorted_containers, fn new_c ->
         case Enum.find(state.containers, &(&1.id == new_c.id)) do
@@ -1226,8 +1241,8 @@ defmodule Caudata.ServerWorker do
 
           old_c ->
             new_c
-            |> Map.put(:cpu_text, Map.get(old_c, :cpu_text))
-            |> Map.put(:ram_text, Map.get(old_c, :ram_text))
+            |> maybe_put(old_c, :cpu_text)
+            |> maybe_put(old_c, :ram_text)
         end
       end)
 

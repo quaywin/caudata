@@ -37,7 +37,7 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     |> expect(:open_channel, fn :dummy_conn ->
@@ -142,7 +142,7 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel1)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Then log stream channel open
@@ -157,7 +157,7 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel2)
       {:ok, :dummy_list_channel2}
     end)
-    |> expect(:exec, fn :dummy_conn2, :dummy_list_channel2, "docker ps --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn2, :dummy_list_channel2, "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Cleanup calls
@@ -222,7 +222,7 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Refresh 1:
@@ -230,7 +230,7 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel2)
       {:ok, :dummy_list_channel2}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel2, "docker ps --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel2, "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Refresh 2 (closes channel 2, opens channel 3):
@@ -242,7 +242,7 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel3)
       {:ok, :dummy_list_channel3}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel3, "docker ps --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel3, "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Terminate:
@@ -307,7 +307,7 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel1)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Then log stream channel open
@@ -322,7 +322,7 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel2)
       {:ok, :dummy_list_channel2}
     end)
-    |> expect(:exec, fn :dummy_conn2, :dummy_list_channel2, "docker ps --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn2, :dummy_list_channel2, "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Expect resuming log streaming on the new connection!
@@ -405,7 +405,7 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Validation channel expectations
@@ -466,7 +466,7 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
 
@@ -557,7 +557,7 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # 2. Docker events channel (opened after list channel closes)
@@ -577,7 +577,15 @@ defmodule Caudata.ServerWorkerTest do
       assert String.contains?(cmd, "docker logs")
       :ok
     end)
-    # 4. Stream logs for container2 (after rebuild)
+    # 4. Refresh ps channel (the rebuild `start` event triggers a full refresh)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_refresh_channel)
+      {:ok, :dummy_refresh_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_refresh_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+      :ok
+    end)
+    # 5. Stream logs for container2 (resumed by the refresh's closed-list handler)
     |> expect(:open_channel, fn :dummy_conn ->
       send(test_pid, :opened_log_channel_2)
       {:ok, :dummy_log_channel_2}
@@ -586,7 +594,7 @@ defmodule Caudata.ServerWorkerTest do
       assert String.contains?(cmd, "docker logs")
       :ok
     end)
-    # 5. Cleanup calls
+    # 6. Cleanup calls
     |> stub(:close_channel, fn _conn, _chan -> :ok end)
     |> stub(:close, fn _conn -> :ok end)
 
@@ -629,11 +637,25 @@ defmodule Caudata.ServerWorkerTest do
     # Wait for status sync
     Process.sleep(50)
 
-    # Now container2 starts (rebuilt)
+    # Now container2 starts (rebuilt). This triggers a full list refresh; the
+    # refresh's closed-list handler resumes streaming for the new container id.
     start_event =
       "{\"status\":\"start\",\"id\":\"container2\",\"Actor\":{\"Attributes\":{\"name\":\"test-container\",\"image\":\"nginx\"}}}\n"
 
     send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, start_event}})
+
+    # Feed the authoritative `docker ps` result (container2 replaces container1)
+    assert_receive :opened_refresh_channel, 1000
+
+    refresh_ps =
+      "{\"ID\":\"container2\",\"Names\":\"test-container\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n"
+
+    send(
+      worker_pid,
+      {:ssh_cm, :dummy_conn, {:data, :dummy_refresh_channel, 0, refresh_ps}}
+    )
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_refresh_channel}})
 
     # We expect to receive :opened_log_channel_2 as it auto-reconnects logs stream
     assert_receive :opened_log_channel_2, 1000
@@ -663,7 +685,7 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # 2. Docker events channel (opened after list channel closes)
@@ -684,7 +706,15 @@ defmodule Caudata.ServerWorkerTest do
       assert String.contains?(cmd, "docker logs")
       :ok
     end)
-    # 4. Stream logs for container1 (after restart, same ID)
+    # 4. Refresh ps channel (the `start` event triggers a full refresh)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_refresh_channel)
+      {:ok, :dummy_refresh_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_refresh_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+      :ok
+    end)
+    # 5. Stream logs for container1 (resumed by the refresh's closed-list handler)
     |> expect(:open_channel, fn :dummy_conn ->
       send(test_pid, :opened_log_channel_1_again)
       {:ok, :dummy_log_channel_1_again}
@@ -693,7 +723,7 @@ defmodule Caudata.ServerWorkerTest do
       assert String.contains?(cmd, "docker logs")
       :ok
     end)
-    # 5. Cleanup calls
+    # 6. Cleanup calls
     |> stub(:close_channel, fn _conn, _chan -> :ok end)
     |> stub(:close, fn _conn -> :ok end)
 
@@ -737,11 +767,25 @@ defmodule Caudata.ServerWorkerTest do
     assert ServerWorker.get_containers(worker_pid)
            |> Enum.find(&(&1.id == "container1" && &1.status == "Exited"))
 
-    # Now container1 starts again (restart)
+    # Now container1 starts again (restart). This triggers a full list refresh;
+    # the refresh's closed-list handler resumes streaming for container1.
     start_event =
       "{\"status\":\"start\",\"id\":\"container1\",\"Actor\":{\"Attributes\":{\"name\":\"test-container\",\"image\":\"nginx\"}}}\n"
 
     send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, start_event}})
+
+    # Feed the authoritative `docker ps` result (container1 back to running)
+    assert_receive :opened_refresh_channel, 1000
+
+    refresh_ps =
+      "{\"ID\":\"container1\",\"Names\":\"test-container\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n"
+
+    send(
+      worker_pid,
+      {:ssh_cm, :dummy_conn, {:data, :dummy_refresh_channel, 0, refresh_ps}}
+    )
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_refresh_channel}})
 
     # We expect to receive :opened_log_channel_1_again as it auto-reconnects logs stream
     assert_receive :opened_log_channel_1_again, 1000
@@ -768,12 +812,12 @@ defmodule Caudata.ServerWorkerTest do
 
     Mock
     |> expect(:connect, fn "10.0.0.10", 22, _ -> {:ok, :dummy_conn} end)
-    # Docker ps channel
+    # Docker ps channel (initial discovery)
     |> expect(:open_channel, fn :dummy_conn ->
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Docker events channel
@@ -783,6 +827,26 @@ defmodule Caudata.ServerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn, :dummy_events_channel, cmd ->
       assert String.starts_with?(cmd, "docker events")
+      :ok
+    end)
+    # Refresh ps channel (triggered by the rebuild `start` event)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_refresh_channel_1)
+      {:ok, :dummy_refresh_channel_1}
+    end)
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_refresh_channel_1,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
+      :ok
+    end)
+    # Refresh ps channel (triggered by the new-container `start` event)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_refresh_channel_2)
+      {:ok, :dummy_refresh_channel_2}
+    end)
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_refresh_channel_2,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     |> stub(:close_channel, fn _conn, _chan -> :ok end)
@@ -834,11 +898,25 @@ defmodule Caudata.ServerWorkerTest do
 
     Process.sleep(50)
 
-    # Rebuilt container start: web-container gets new ID c3
+    # Rebuilt container start: web-container gets new ID c3. This triggers a
+    # full list refresh, so we feed back the authoritative `docker ps` output.
     start_event =
       "{\"status\":\"start\",\"id\":\"c3\",\"Actor\":{\"Attributes\":{\"name\":\"web-container\",\"image\":\"nginx\"}}}\n"
 
     send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, start_event}})
+
+    assert_receive :opened_refresh_channel_1, 1000
+
+    rebuilt_ps =
+      "{\"ID\":\"c3\",\"Names\":\"web-container\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n" <>
+        "{\"ID\":\"c2\",\"Names\":\"db-container\",\"Image\":\"postgres\",\"Status\":\"Up\",\"State\":\"running\"}\n"
+
+    send(
+      worker_pid,
+      {:ssh_cm, :dummy_conn, {:data, :dummy_refresh_channel_1, 0, rebuilt_ps}}
+    )
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_refresh_channel_1}})
 
     Process.sleep(50)
 
@@ -851,11 +929,27 @@ defmodule Caudata.ServerWorkerTest do
     assert Enum.at(rebuilt_conts, 1).name == "db-container"
     assert Enum.at(rebuilt_conts, 2).id == "file:/var/log/app.log"
 
-    # 3. Add a new container: mail-container (c4) starts
+    # 3. Add a new container: mail-container (c4) starts. Again triggers a refresh.
     new_start_event =
       "{\"status\":\"start\",\"id\":\"c4\",\"Actor\":{\"Attributes\":{\"name\":\"mail-container\",\"image\":\"mail\"}}}\n"
 
-    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, new_start_event}})
+    send(
+      worker_pid,
+      {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, new_start_event}}
+    )
+
+    assert_receive :opened_refresh_channel_2, 1000
+
+    final_ps =
+      rebuilt_ps <>
+        "{\"ID\":\"c4\",\"Names\":\"mail-container\",\"Image\":\"mail\",\"Status\":\"Up\",\"State\":\"running\"}\n"
+
+    send(
+      worker_pid,
+      {:ssh_cm, :dummy_conn, {:data, :dummy_refresh_channel_2, 0, final_ps}}
+    )
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_refresh_channel_2}})
 
     Process.sleep(50)
 
@@ -868,6 +962,97 @@ defmodule Caudata.ServerWorkerTest do
     assert Enum.at(final_conts, 2).name == "mail-container"
     assert Enum.at(final_conts, 2).id == "c4"
     assert Enum.at(final_conts, 3).id == "file:/var/log/app.log"
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "refreshing containers does not inject nil cpu_text/ram_text" do
+    # Regression: sync_container_workers preserved cpu_text/ram_text via
+    # Map.put(:cpu_text, Map.get(old_c, :cpu_text)), which injects `cpu_text: nil`
+    # (key present, value nil) when the old container had no metrics yet. That
+    # nil then crashed the info pane (Span.new/2 rejects nil) after every rebuild.
+    profile =
+      Profile.new(%{
+        id: "metrics-regression-server",
+        host_pattern: "metrics-regression",
+        host_name: "10.0.0.20",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, fn "10.0.0.20", 22, _ -> {:ok, :dummy_conn} end)
+    # Initial docker ps channel
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_list_channel)
+      {:ok, :dummy_list_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+      :ok
+    end)
+    # Docker events channel
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_events_channel)
+      {:ok, :dummy_events_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_events_channel, cmd ->
+      assert String.starts_with?(cmd, "docker events")
+      :ok
+    end)
+    # Refresh ps channel (triggered by the rebuild `start` event)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_refresh_channel)
+      {:ok, :dummy_refresh_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_refresh_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+      :ok
+    end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: true}})
+
+    assert_receive :opened_list_channel, 1000
+
+    # Bootstrap with a single container (no metrics, so no cpu_text/ram_text yet)
+    bootstrap_ps =
+      "{\"ID\":\"c1\",\"Names\":\"web\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n"
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_list_channel, 0, bootstrap_ps}})
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_list_channel}})
+
+    assert_receive {:status_updated, "metrics-regression-server", :connected}, 1000
+    assert_receive :opened_events_channel, 1000
+
+    [initial] = ServerWorker.get_containers(worker_pid)
+    refute Map.has_key?(initial, :cpu_text)
+    refute Map.has_key?(initial, :ram_text)
+
+    # A start event triggers a full refresh. Feed back the same container.
+    start_event =
+      "{\"status\":\"start\",\"id\":\"c1\",\"Actor\":{\"Attributes\":{\"name\":\"web\",\"image\":\"nginx\"}}}\n"
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_events_channel, 0, start_event}})
+    assert_receive :opened_refresh_channel, 1000
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_refresh_channel, 0, bootstrap_ps}})
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_refresh_channel}})
+
+    Process.sleep(50)
+
+    # After the refresh, cpu_text/ram_text must NOT be injected as nil keys.
+    [refreshed] = ServerWorker.get_containers(worker_pid)
+
+    refute Map.has_key?(refreshed, :cpu_text),
+           "refresh must not inject cpu_text: nil (crashes the info pane)"
+
+    refute Map.has_key?(refreshed, :ram_text),
+           "refresh must not inject ram_text: nil (crashes the info pane)"
 
     stop_supervised(ServerWorker)
   end

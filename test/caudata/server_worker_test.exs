@@ -37,7 +37,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_list_channel,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     |> expect(:open_channel, fn :dummy_conn ->
@@ -142,7 +144,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel1)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_list_channel,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Then log stream channel open
@@ -157,7 +161,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel2)
       {:ok, :dummy_list_channel2}
     end)
-    |> expect(:exec, fn :dummy_conn2, :dummy_list_channel2, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn2,
+                        :dummy_list_channel2,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Cleanup calls
@@ -222,7 +228,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_list_channel,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Refresh 1:
@@ -230,7 +238,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel2)
       {:ok, :dummy_list_channel2}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel2, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_list_channel2,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Refresh 2 (closes channel 2, opens channel 3):
@@ -242,7 +252,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel3)
       {:ok, :dummy_list_channel3}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel3, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_list_channel3,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Terminate:
@@ -307,7 +319,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel1)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_list_channel,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Then log stream channel open
@@ -322,7 +336,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel2)
       {:ok, :dummy_list_channel2}
     end)
-    |> expect(:exec, fn :dummy_conn2, :dummy_list_channel2, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn2,
+                        :dummy_list_channel2,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Expect resuming log streaming on the new connection!
@@ -405,7 +421,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_list_channel,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Validation channel expectations
@@ -466,7 +484,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_list_channel,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
 
@@ -557,7 +577,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_list_channel,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # 2. Docker events channel (opened after list channel closes)
@@ -582,7 +604,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_refresh_channel)
       {:ok, :dummy_refresh_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_refresh_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_refresh_channel,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # 5. Stream logs for container2 (resumed by the refresh's closed-list handler)
@@ -685,7 +709,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_list_channel,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # 2. Docker events channel (opened after list channel closes)
@@ -711,7 +737,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_refresh_channel)
       {:ok, :dummy_refresh_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_refresh_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_refresh_channel,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # 5. Stream logs for container1 (resumed by the refresh's closed-list handler)
@@ -817,7 +845,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_list_channel,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Docker events channel
@@ -989,7 +1019,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_list_channel,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     # Docker events channel
@@ -1006,7 +1038,9 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_refresh_channel)
       {:ok, :dummy_refresh_channel}
     end)
-    |> expect(:exec, fn :dummy_conn, :dummy_refresh_channel, "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn,
+                        :dummy_refresh_channel,
+                        "docker ps --no-trunc --format '{{json .}}'" ->
       :ok
     end)
     |> stub(:close_channel, fn _conn, _chan -> :ok end)
@@ -1053,6 +1087,67 @@ defmodule Caudata.ServerWorkerTest do
 
     refute Map.has_key?(refreshed, :ram_text),
            "refresh must not inject ram_text: nil (crashes the info pane)"
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "macOS/Linux metrics line parsing and broadcasting" do
+    profile =
+      Profile.new(%{
+        id: "metrics-test-server",
+        host_pattern: "metrics-test",
+        host_name: "10.0.0.30",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, fn "10.0.0.30", 22, _ -> {:ok, :dummy_conn} end)
+    # Container list channel
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_list_channel)
+      {:ok, :dummy_list_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, _cmd ->
+      :ok
+    end)
+    # Metrics channel
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_metrics_channel)
+      {:ok, :dummy_metrics_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_metrics_channel, cmd ->
+      assert String.contains?(cmd, "METRICS:")
+      assert String.contains?(cmd, "is_darwin")
+      :ok
+    end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised(
+        {ServerWorker, {profile, ssh_client: Mock, enable_metrics: true, enable_events: false}}
+      )
+
+    assert_receive :opened_list_channel, 1000
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_list_channel}})
+
+    assert_receive :opened_metrics_channel, 1000
+
+    metrics_data = "METRICS: 15 50 8388608 4194304 104857600 20971520 20\n"
+
+    send(
+      worker_pid,
+      {:ssh_cm, :dummy_conn, {:data, :dummy_metrics_channel, 0, metrics_data}}
+    )
+
+    expected_metrics = {15, 50, 4.0, 8.0, 20, 20.0, 100}
+
+    assert_receive {:metrics_updated, "metrics-test-server", ^expected_metrics}, 1000
 
     stop_supervised(ServerWorker)
   end

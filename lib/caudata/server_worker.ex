@@ -862,75 +862,119 @@ defmodule Caudata.ServerWorker do
         {:ok, metrics_channel_id} ->
           # Run the metrics loop
           metrics_cmd = """
+          if command -v docker >/dev/null 2>&1; then
+            docker stats --format 'CONTAINER_METRICS: {{.ID}} {{.CPUPerc}} {{.MemUsage}}' 2>/dev/null &
+            docker_pid=$!
+          fi
+
+          # Clean up background docker stats process when this script exits
+          trap '[ -n "$docker_pid" ] && kill "$docker_pid" 2>/dev/null' EXIT HUP INT TERM
+
           prev_total=0
           prev_idle=0
+          disk_info="0 0 0"
+          disk_counter=0
+
+          is_darwin=0
+          if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+            is_darwin=1
+          fi
+
           while true; do
-            # CPU
-            if [ -f /proc/stat ]; then
-              user=0; nice=0; system=0; idle=0; iowait=0; irq=0; softirq=0; steal=0
-              read -r _ user nice system idle iowait irq softirq steal _ < /proc/stat
-              total=$((${user:-0} + ${nice:-0} + ${system:-0} + ${idle:-0} + ${iowait:-0} + ${irq:-0} + ${softirq:-0} + ${steal:-0}))
-              diff_idle=$((${idle:-0} - ${prev_idle:-0}))
-              diff_total=$((${total:-0} - ${prev_total:-0}))
-              if [ "${prev_total:-0}" -gt 0 ] && [ "${diff_total:-0}" -gt 0 ]; then
-                cpu_pct=$((100 - (diff_idle * 100) / diff_total))
+
+            if [ "$is_darwin" -eq 1 ]; then
+              # macOS CPU
+              cpu_pct=$(top -l 1 -n 0 2>/dev/null | awk '/CPU usage/ {printf "%.0f\\n", $3+$5}')
+              cpu_pct=${cpu_pct:-0}
+
+              # macOS RAM
+              page_size=$(vm_stat 2>/dev/null | awk '/page size of/ {print $8}' | tr -d ' bytes)')
+              page_size=${page_size:-16384}
+              active=$(vm_stat 2>/dev/null | awk '/Pages active/ {print $3}' | tr -d '.')
+              wired=$(vm_stat 2>/dev/null | awk '/Pages wired/ {print $4}' | tr -d '.')
+              compressed=$(vm_stat 2>/dev/null | awk '/occupied by compressor/ {print $5}' | tr -d '.')
+              active=${active:-0}
+              wired=${wired:-0}
+              compressed=${compressed:-0}
+
+              ram_used=$(( (active + wired + compressed) * page_size / 1024 ))
+              ram_total=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1024 ))
+              if [ "$ram_total" -gt 0 ]; then
+                ram_pct=$(( ram_used * 100 / ram_total ))
+              else
+                ram_pct=0
+              fi
+            else
+              # Linux CPU
+              if [ -f /proc/stat ]; then
+                user=0; nice=0; system=0; idle=0; iowait=0; irq=0; softirq=0; steal=0
+                read -r _ user nice system idle iowait irq softirq steal _ < /proc/stat
+                total=$((${user:-0} + ${nice:-0} + ${system:-0} + ${idle:-0} + ${iowait:-0} + ${irq:-0} + ${softirq:-0} + ${steal:-0}))
+                diff_idle=$((${idle:-0} - ${prev_idle:-0}))
+                diff_total=$((${total:-0} - ${prev_total:-0}))
+                if [ "${prev_total:-0}" -gt 0 ] && [ "${diff_total:-0}" -gt 0 ]; then
+                  cpu_pct=$((100 - (diff_idle * 100) / diff_total))
+                else
+                  cpu_pct=0
+                fi
+                prev_total=$total
+                prev_idle=$idle
               else
                 cpu_pct=0
               fi
-              prev_total=$total
-              prev_idle=$idle
-            else
-              cpu_pct=0
-            fi
 
-            # RAM
-            ram_total=0
-            ram_used=0
-            ram_pct=0
-            if [ -f /proc/meminfo ]; then
-              mem_total=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-              mem_avail=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
-              mem_total=${mem_total:-0}
-              mem_avail=${mem_avail:-0}
-              if [ "$mem_avail" -eq 0 ]; then
-                mem_free=$(grep MemFree /proc/meminfo | awk '{print $2}')
-                mem_cached=$(grep ^Cached /proc/meminfo | awk '{print $2}')
-                mem_buffers=$(grep Buffers /proc/meminfo | awk '{print $2}')
-                mem_free=${mem_free:-0}
-                mem_cached=${mem_cached:-0}
-                mem_buffers=${mem_buffers:-0}
-                mem_avail=$((${mem_free:-0} + ${mem_cached:-0} + ${mem_buffers:-0}))
-              fi
-              if [ "${mem_total:-0}" -gt 0 ]; then
-                ram_total=$mem_total
-                ram_used=$((mem_total - mem_avail))
-                ram_pct=$((ram_used * 100 / mem_total))
-              fi
-            elif command -v free >/dev/null 2>&1; then
-              ram_info=$(free -k | awk '/Mem:/ {print $2" "$3}')
-              ram_total=$(echo "$ram_info" | awk '{print $1}')
-              ram_used=$(echo "$ram_info" | awk '{print $2}')
-              ram_total=${ram_total:-0}
-              ram_used=${ram_used:-0}
-              if [ "${ram_total:-0}" -gt 0 ]; then
-                ram_pct=$((ram_used * 100 / ram_total))
+              # Linux RAM
+              ram_total=0
+              ram_used=0
+              ram_pct=0
+              if [ -f /proc/meminfo ]; then
+                mem_total=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+                mem_avail=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
+                mem_total=${mem_total:-0}
+                mem_avail=${mem_avail:-0}
+                if [ "$mem_avail" -eq 0 ]; then
+                  mem_free=$(grep MemFree /proc/meminfo | awk '{print $2}')
+                  mem_cached=$(grep ^Cached /proc/meminfo | awk '{print $2}')
+                  mem_buffers=$(grep Buffers /proc/meminfo | awk '{print $2}')
+                  mem_free=${mem_free:-0}
+                  mem_cached=${mem_cached:-0}
+                  mem_buffers=${mem_buffers:-0}
+                  mem_avail=$((${mem_free:-0} + ${mem_cached:-0} + ${mem_buffers:-0}))
+                fi
+                if [ "${mem_total:-0}" -gt 0 ]; then
+                  ram_total=$mem_total
+                  ram_used=$((mem_total - mem_avail))
+                  ram_pct=$((ram_used * 100 / mem_total))
+                fi
+              elif command -v free >/dev/null 2>&1; then
+                ram_info=$(free -k | awk '/Mem:/ {print $2" "$3}')
+                ram_total=$(echo "$ram_info" | awk '{print $1}')
+                ram_used=$(echo "$ram_info" | awk '{print $2}')
+                ram_total=${ram_total:-0}
+                ram_used=${ram_used:-0}
+                if [ "${ram_total:-0}" -gt 0 ]; then
+                  ram_pct=$((ram_used * 100 / ram_total))
+                fi
               fi
             fi
 
-            # Disk
-            disk_info=$(df -k -P / | awk 'NR==2 {print $2" "$3" "$5}' | tr -d '%')
-            if [ -z "$disk_info" ]; then
-              disk_info="0 0 0"
+            # Disk - check once every 60 seconds (when disk_counter == 0)
+            if [ "$disk_counter" -eq 0 ]; then
+              if [ "$is_darwin" -eq 1 ]; then
+                target_dir="$HOME"
+              else
+                target_dir="/"
+              fi
+              curr_disk_info=$(df -k -P "$target_dir" | awk 'NR==2 {print $2" "$3" "$5}' | tr -d '%')
+              if [ -n "$curr_disk_info" ]; then
+                disk_info=$curr_disk_info
+              fi
             fi
+            disk_counter=$(( (disk_counter + 1) % 60 ))
 
             echo "METRICS: $cpu_pct $ram_pct $ram_total $ram_used $disk_info"
 
-            # Container stats
-            if command -v docker >/dev/null 2>&1; then
-              docker stats --no-stream --format 'CONTAINER_METRICS: {{.ID}} {{.CPUPerc}} {{.MemUsage}}' 2>/dev/null
-            fi
-
-            sleep 5
+            sleep 1
           done
           """
 
@@ -963,17 +1007,23 @@ defmodule Caudata.ServerWorker do
 
   defp handle_metrics_line(line, state) do
     case String.split(line, " ", trim: true) do
-      ["METRICS:", cpu, ram, total_ram, used_ram, total_disk_kb, used_disk_kb, disk_pct] ->
+      ["METRICS:", cpu, ram, total_ram, used_ram, total_disk_kb, used_disk_kb, _disk_pct] ->
         try do
           cpu_val = String.to_integer(cpu)
           ram_val = String.to_integer(ram)
-          disk_val = String.to_integer(disk_pct)
 
           total_ram_val = String.to_integer(total_ram)
           used_ram_val = String.to_integer(used_ram)
 
           total_disk_val = String.to_integer(total_disk_kb)
           used_disk_val = String.to_integer(used_disk_kb)
+
+          disk_val =
+            if total_disk_val > 0 do
+              round(used_disk_val * 100 / total_disk_val)
+            else
+              0
+            end
 
           # Convert KB to GB
           total_ram_gb = Float.round(total_ram_val / (1024 * 1024), 1)

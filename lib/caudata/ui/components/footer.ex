@@ -59,6 +59,12 @@ defmodule Caudata.UI.Components.Footer do
                         Span.new("[Space] Toggle Container ", style: %Style{fg: :green})
                       ]
 
+                    :services ->
+                      [
+                        Span.new("[⇅/j/k] Select Service ", style: %Style{fg: :cyan}),
+                        Span.new("[Space] Toggle Service ", style: %Style{fg: :green})
+                      ]
+
                     :custom_logs ->
                       [
                         Span.new("[⇅/j/k] Select Path ", style: %Style{fg: :cyan}),

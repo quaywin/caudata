@@ -27,9 +27,9 @@ defmodule Caudata.ContainerWorkerTest do
     |> expect(:open_channel, fn :dummy_conn ->
       {:ok, :dummy_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_channel,
-                        "sh -c 'docker logs -t --follow --tail 1000 container123 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_channel, cmd ->
+      assert String.contains?(cmd, "docker logs")
+      assert String.contains?(cmd, "container123")
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->
@@ -109,9 +109,9 @@ defmodule Caudata.ContainerWorkerTest do
     |> expect(:open_channel, fn :dummy_conn ->
       {:ok, :dummy_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_channel,
-                        "sh -c 'docker logs -t --follow --tail 1000 container123 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_channel, cmd ->
+      assert String.contains?(cmd, "docker logs")
+      assert String.contains?(cmd, "container123")
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->

@@ -14,6 +14,7 @@ defmodule Caudata.Profile do
     port: 22,
     disabled_containers: [],
     custom_logs: [],
+    enabled_services: [],
     enabled: true
   ]
 
@@ -27,6 +28,7 @@ defmodule Caudata.Profile do
           password: String.t() | nil,
           disabled_containers: [String.t()],
           custom_logs: [String.t()],
+          enabled_services: [String.t()],
           enabled: boolean()
         }
 
@@ -56,6 +58,7 @@ defmodule Caudata.Profile do
           port: 22,
           disabled_containers: [],
           custom_logs: [],
+          enabled_services: [],
           enabled: true
         },
         clean_attrs

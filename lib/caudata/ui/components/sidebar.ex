@@ -128,12 +128,7 @@ defmodule Caudata.UI.Components.Sidebar do
   def list_visible_items(model) do
     Enum.flat_map(model.profiles, fn profile ->
       containers = Map.get(model.containers, profile.id, [])
-
-      enabled_containers =
-        Enum.filter(containers, fn c ->
-          c.id not in profile.disabled_containers and c.name not in profile.disabled_containers
-        end)
-
+      enabled_containers = ViewHelper.get_enabled_containers(profile, containers)
       Enum.map(enabled_containers, fn c -> {:container, profile.id, c.id, c.name} end)
     end)
   end
@@ -222,17 +217,9 @@ defmodule Caudata.UI.Components.Sidebar do
   end
 
   def select_server(server_id, model) do
-    containers = Map.get(model.containers, server_id, [])
     profile = Enum.find(model.profiles, &(&1.id == server_id))
-
-    enabled_containers =
-      if profile do
-        Enum.filter(containers, fn c ->
-          c.id not in profile.disabled_containers and c.name not in profile.disabled_containers
-        end)
-      else
-        []
-      end
+    containers = Map.get(model.containers, server_id, [])
+    enabled_containers = ViewHelper.get_enabled_containers(profile, containers)
 
     case enabled_containers do
       [first_container | _] ->
@@ -371,12 +358,7 @@ defmodule Caudata.UI.Components.Sidebar do
 
       profile ->
         containers = Map.get(model.containers, profile_id, [])
-        disabled_containers = Enum.map(profile.disabled_containers || [], &to_string/1)
-
-        Enum.filter(containers, fn c ->
-          to_string(c.id) not in disabled_containers and
-            to_string(c.name) not in disabled_containers
-        end)
+        ViewHelper.get_enabled_containers(profile, containers)
     end
   end
 end

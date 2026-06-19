@@ -13,12 +13,7 @@ defmodule Caudata.UI.Components.Sidebar.ContainerInfo do
 
     enabled_containers =
       if selected_profile do
-        containers = Map.get(state.containers, selected_profile.id, [])
-
-        Enum.filter(containers, fn c ->
-          c.id not in selected_profile.disabled_containers and
-            c.name not in selected_profile.disabled_containers
-        end)
+        Caudata.UI.ViewHelper.get_enabled_containers(selected_profile, Map.get(state.containers, selected_profile.id, []))
       else
         []
       end

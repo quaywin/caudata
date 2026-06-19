@@ -8,6 +8,8 @@ defmodule Caudata.ServerWorker do
   @health_check_interval 15_000
   @activity_timeout 30_000
 
+    @discovery_cmd "echo '===DOCKER==='; docker ps --no-trunc --format '{{json .}}' 2>/dev/null; echo '===OS==='; uname -s; echo '===SYSTEMD==='; if command -v systemctl >/dev/null 2>&1; then systemctl list-units --type=service --no-legend --no-pager 2>/dev/null; fi; echo '===LAUNCHD==='; if command -v launchctl >/dev/null 2>&1; then launchctl list 2>/dev/null; for dir in '/Library/LaunchDaemons' '/Library/LaunchAgents' \"\$HOME/Library/LaunchAgents\"; do if [ -d \"\$dir\" ]; then find \"\$dir\" -name '*.plist' -maxdepth 1 2>/dev/null | while read -r plist; do label=\$(basename \"\$plist\" .plist); echo \"- 0 \$label\"; done; fi; done; fi"
+
   defstruct [
     :profile,
     :status,
@@ -147,8 +149,9 @@ defmodule Caudata.ServerWorker do
         {:ok, channel_id} ->
           escaped_path = String.replace(path, "\"", "\\\"")
           cmd = "if [ -r \"#{escaped_path}\" ]; then echo \"valid\"; else echo \"invalid\"; fi"
+          wrapped_cmd = wrap_sudo(cmd, state.profile.password)
 
-          case state.ssh_client.exec(state.conn_ref, channel_id, cmd) do
+          case state.ssh_client.exec(state.conn_ref, channel_id, wrapped_cmd) do
             :ok ->
               new_validations = Map.put(state.validation_channels, channel_id, {from, ""})
               {:noreply, %{state | validation_channels: new_validations}}
@@ -281,10 +284,11 @@ defmodule Caudata.ServerWorker do
 
       case state.ssh_client.open_channel(state.conn_ref) do
         {:ok, list_channel_id} ->
+          wrapped_cmd = wrap_sudo(@discovery_cmd, state.profile.password)
           case state.ssh_client.exec(
                  state.conn_ref,
                  list_channel_id,
-                 "docker ps --no-trunc --format '{{json .}}'"
+                 wrapped_cmd
                ) do
             :ok ->
               {:noreply,
@@ -365,10 +369,11 @@ defmodule Caudata.ServerWorker do
 
     case state.ssh_client.open_channel(conn_ref) do
       {:ok, list_channel_id} ->
+        wrapped_cmd = wrap_sudo(@discovery_cmd, state.profile.password)
         case state.ssh_client.exec(
                conn_ref,
                list_channel_id,
-               "docker ps --no-trunc --format '{{json .}}'"
+               wrapped_cmd
              ) do
           :ok ->
             {:noreply,
@@ -526,8 +531,8 @@ defmodule Caudata.ServerWorker do
         {:noreply, %{state | validation_channels: remaining_validations}}
 
       conn_ref == state.conn_ref && channel_id == state.list_channel_id ->
-        containers = parse_docker_ps_output(state.list_buffer)
-        Logger.info("Discovered #{length(containers)} docker containers for #{state.profile.id}")
+        containers = parse_discovery_output(state.list_buffer)
+        Logger.info("Discovered #{length(containers)} containers/services for #{state.profile.id}")
 
         broadcast_status(state.profile.id, :connected)
 
@@ -588,6 +593,10 @@ defmodule Caudata.ServerWorker do
         Logger.info("SSH Channel closed for metrics on #{state.profile.id}")
         {:noreply, %{state | metrics_channel_id: nil}}
 
+      conn_ref == state.conn_ref && channel_id == state.events_channel_id ->
+        Logger.info("SSH Channel closed for docker events on #{state.profile.id}")
+        {:noreply, %{state | events_channel_id: nil}}
+
       conn_ref == state.conn_ref && channel_id == conn_ref ->
         Logger.info("SSH Connection closed for #{state.profile.id}")
         handle_disconnect(state, "Connection closed")
@@ -620,11 +629,20 @@ defmodule Caudata.ServerWorker do
         last = state.last_activity_at || now
 
         if now - last > @activity_timeout do
-          Logger.warning(
-            "No SSH activity for #{@activity_timeout}ms on #{state.profile.id}, treating as disconnected"
-          )
+          # No activity for timeout period, but perform an active check to verify
+          # if the connection is actually dead before we initiate disconnect/reconnect.
+          case state.ssh_client.open_channel(state.conn_ref) do
+            {:ok, temp_channel} ->
+              state.ssh_client.close_channel(state.conn_ref, temp_channel)
+              schedule_health_check_reschedule(%{state | last_activity_at: now})
 
-          handle_disconnect(state, "Health check: no activity for #{@activity_timeout}ms")
+            {:error, reason} ->
+              Logger.warning(
+                "No SSH activity for #{@activity_timeout}ms on #{state.profile.id} and active check failed: #{inspect(reason)}, treating as disconnected"
+              )
+
+              handle_disconnect(state, "Health check: no activity for #{@activity_timeout}ms")
+          end
         else
           schedule_health_check_reschedule(state)
         end
@@ -811,8 +829,9 @@ defmodule Caudata.ServerWorker do
         {:ok, events_channel_id} ->
           event_cmd =
             "docker events --filter 'type=container' --filter 'event=start' --filter 'event=die' --filter 'event=destroy' --format '{{json .}}'"
+          wrapped_cmd = wrap_sudo(event_cmd, state.profile.password)
 
-          case state.ssh_client.exec(state.conn_ref, events_channel_id, event_cmd) do
+          case state.ssh_client.exec(state.conn_ref, events_channel_id, wrapped_cmd) do
             :ok ->
               %{state | events_channel_id: events_channel_id, events_buffer: ""}
 
@@ -863,7 +882,7 @@ defmodule Caudata.ServerWorker do
           # Run the metrics loop
           metrics_cmd = """
           if command -v docker >/dev/null 2>&1; then
-            docker stats --format 'CONTAINER_METRICS: {{.ID}} {{.CPUPerc}} {{.MemUsage}}' 2>/dev/null &
+            (sudo -n docker stats --format "CONTAINER_METRICS: {{.ID}} {{.CPUPerc}} {{.MemUsage}}" || docker stats --format "CONTAINER_METRICS: {{.ID}} {{.CPUPerc}} {{.MemUsage}}") 2>/dev/null &
             docker_pid=$!
           fi
 
@@ -1175,28 +1194,135 @@ defmodule Caudata.ServerWorker do
     state
   end
 
-  defp parse_docker_ps_output(output) do
-    output
-    |> String.split(["\r\n", "\n"])
-    |> Enum.map(&String.trim/1)
-    |> Enum.filter(&(&1 != ""))
-    |> Enum.flat_map(fn line ->
-      case Jason.decode(line) do
-        {:ok, %{"ID" => id, "Names" => names} = map} ->
-          [
-            %{
-              id: id,
-              name: names,
-              image: Map.get(map, "Image", ""),
-              status: Map.get(map, "Status", ""),
-              state: Map.get(map, "State", "")
-            }
-          ]
+  defp parse_discovery_output(buffer) do
+    lines = String.split(buffer, ["\r\n", "\n"])
 
-        _ ->
-          []
-      end
+    has_headers = Enum.any?(lines, fn line ->
+      trimmed = String.trim(line)
+      trimmed in ["===DOCKER===", "===OS===", "===SYSTEMD===", "===LAUNCHD==="]
     end)
+
+    if has_headers do
+      initial_state = %{
+      section: nil,
+      docker_lines: [],
+      os: nil,
+      systemd_lines: [],
+      launchd_lines: []
+    }
+
+    parsed =
+      Enum.reduce(lines, initial_state, fn line, acc ->
+        trimmed = String.trim(line)
+
+        case trimmed do
+          "===DOCKER===" -> %{acc | section: :docker}
+          "===OS===" -> %{acc | section: :os}
+          "===SYSTEMD===" -> %{acc | section: :systemd}
+          "===LAUNCHD===" -> %{acc | section: :launchd}
+          "" -> acc
+          other ->
+            case acc.section do
+              :docker -> %{acc | docker_lines: [other | acc.docker_lines]}
+              :os -> %{acc | os: other}
+              :systemd -> %{acc | systemd_lines: [other | acc.systemd_lines]}
+              :launchd -> %{acc | launchd_lines: [other | acc.launchd_lines]}
+              _ -> acc
+            end
+        end
+      end)
+
+    docker_containers =
+      parsed.docker_lines
+      |> Enum.reverse()
+      |> Enum.flat_map(fn line ->
+        case Jason.decode(line) do
+          {:ok, %{"ID" => id, "Names" => names} = map} ->
+            [
+              %{
+                id: id,
+                name: names,
+                image: Map.get(map, "Image", ""),
+                status: Map.get(map, "Status", ""),
+                state: Map.get(map, "State", "")
+              }
+            ]
+
+          _ ->
+            []
+        end
+      end)
+
+    systemd_services =
+      parsed.systemd_lines
+      |> Enum.reverse()
+      |> Enum.flat_map(fn line ->
+        parts = String.split(line, ~r/\s+/, trim: true)
+        case parts do
+          [service_name | _] ->
+            if String.ends_with?(service_name, ".service") do
+              [
+                %{
+                  id: "systemd:#{service_name}",
+                  name: service_name,
+                  image: "systemd",
+                  status: "active",
+                  state: "running"
+                }
+              ]
+            else
+              []
+            end
+          _ ->
+            []
+        end
+      end)
+
+    launchd_services =
+      parsed.launchd_lines
+      |> Enum.reverse()
+      |> Enum.flat_map(fn line ->
+        parts = String.split(line, ~r/\s+/, trim: true)
+        case parts do
+          [_pid, _status, label] ->
+            if label != "Label" do
+              [
+                %{
+                  id: "launchd:#{label}",
+                  name: label,
+                  image: "launchd",
+                  status: "active",
+                  state: "running"
+                }
+              ]
+            else
+              []
+            end
+          _ ->
+            []
+        end
+      end)
+
+    Enum.uniq_by(docker_containers ++ systemd_services ++ launchd_services, & &1.id)
+    else
+      Enum.flat_map(lines, fn line ->
+        trimmed = String.trim(line)
+        case Jason.decode(trimmed) do
+          {:ok, %{"ID" => id, "Names" => names} = map} ->
+            [
+              %{
+                id: id,
+                name: names,
+                image: Map.get(map, "Image", ""),
+                status: Map.get(map, "Status", ""),
+                state: Map.get(map, "State", "")
+              }
+            ]
+          _ ->
+            []
+        end
+      end)
+    end
   end
 
   defp cancel_reconnect_timer(state) do
@@ -1322,7 +1448,8 @@ defmodule Caudata.ServerWorker do
                 Caudata.ServerSupervisor.start_container_worker(
                   state.profile.id,
                   container,
-                  ssh_client: state.ssh_client
+                  ssh_client: state.ssh_client,
+                  password: Map.get(state.profile, :password)
                 )
 
               Map.put(acc, container.id, new_pid)
@@ -1333,7 +1460,8 @@ defmodule Caudata.ServerWorker do
               Caudata.ServerSupervisor.start_container_worker(
                 state.profile.id,
                 container,
-                ssh_client: state.ssh_client
+                ssh_client: state.ssh_client,
+                password: Map.get(state.profile, :password)
               )
 
             Map.put(acc, container.id, new_pid)
@@ -1348,5 +1476,16 @@ defmodule Caudata.ServerWorker do
         container_pids: updated_pids,
         container_order: updated_order
     }
+  end
+
+  defp wrap_sudo(cmd, password) do
+    escaped_cmd = String.replace(cmd, "'", "'\\''")
+    cond do
+      password && password != "" ->
+        escaped_password = String.replace(password, "'", "'\\''")
+        "if command -v sudo >/dev/null 2>&1; then exec 3<&0; echo '#{escaped_password}' | sudo -S -p '' sh -c 'exec 0<&3 3<&-; #{escaped_cmd}'; else sh -c '#{escaped_cmd}'; fi"
+      true ->
+        "if command -v sudo >/dev/null 2>&1; then sudo -n sh -c '#{escaped_cmd}' || sh -c '#{escaped_cmd}'; else sh -c '#{escaped_cmd}'; fi"
+    end
   end
 end

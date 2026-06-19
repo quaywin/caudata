@@ -33,6 +33,7 @@ defmodule Caudata.UI.Components.SettingsModal do
       {:servers, "Servers"},
       {:connection, "SSH Connection"},
       {:containers, "Docker Containers"},
+      {:services, "System Services"},
       {:custom_logs, "Custom Logs"},
       {:general, "General"}
     ]
@@ -65,6 +66,9 @@ defmodule Caudata.UI.Components.SettingsModal do
         :containers ->
           render_containers_tab(state, profile, containers)
 
+        :services ->
+          render_services_tab(state, profile, containers)
+
         :custom_logs ->
           render_custom_logs_tab(state, profile, custom_logs)
 
@@ -82,7 +86,7 @@ defmodule Caudata.UI.Components.SettingsModal do
         border_type: :rounded
       },
       percent_width: 80,
-      percent_height: 80
+      percent_height: 90
     }
 
     [popup_widget]
@@ -97,7 +101,7 @@ defmodule Caudata.UI.Components.SettingsModal do
         ])
       ]
     else
-      display_rows_limit = 10
+      display_rows_limit = max(3, div(state.height * 90, 100) - 9)
 
       start_row =
         if state.settings_selected_profile_idx >= display_rows_limit,
@@ -261,10 +265,12 @@ defmodule Caudata.UI.Components.SettingsModal do
         Span.new(profile.id, style: %Style{fg: :yellow})
       ])
 
-    # Filter out virtual file containers representing custom logs
+    # Filter out virtual file containers, systemd, and launchd services
     docker_only_containers =
       Enum.reject(containers, fn c ->
-        c.image == "file" or String.starts_with?(to_string(c.id), "file:")
+        c.image == "file" or String.starts_with?(to_string(c.id), "file:") or
+          c.image == "systemd" or String.starts_with?(to_string(c.id), "systemd:") or
+          c.image == "launchd" or String.starts_with?(to_string(c.id), "launchd:")
       end)
 
     list_rows =
@@ -278,7 +284,7 @@ defmodule Caudata.UI.Components.SettingsModal do
           ])
         ]
       else
-        display_rows_limit = 10
+        display_rows_limit = max(2, div(state.height * 90, 100) - 11)
 
         start_row =
           if state.settings_container_idx >= display_rows_limit,
@@ -303,6 +309,88 @@ defmodule Caudata.UI.Components.SettingsModal do
             Span.new(c.name,
               style: %Style{fg: color, modifiers: if(selected, do: [:bold], else: [])}
             )
+          ])
+        end)
+      end
+
+    status_lines =
+      if state.settings_status_msg do
+        color =
+          if String.starts_with?(state.settings_status_msg, "Error"), do: :red, else: :yellow
+
+        [
+          Line.new([]),
+          Line.new([
+            Span.new("  ℹ ", style: %Style{fg: color}),
+            Span.new(state.settings_status_msg, style: %Style{fg: color})
+          ])
+        ]
+      else
+        []
+      end
+
+    [info_line, Line.new([]) | list_rows] ++ status_lines
+  end
+
+  defp render_services_tab(_state, nil, _containers) do
+    [
+      Line.new([]),
+      Line.new([Span.new("  No server selected.", style: %Style{fg: :yellow})])
+    ]
+  end
+
+  defp render_services_tab(state, profile, containers) do
+    info_line =
+      Line.new([
+        Span.new("  Server: ", style: %Style{fg: :cyan}),
+        Span.new(profile.id, style: %Style{fg: :yellow})
+      ])
+
+    # Filter only systemd and launchd services
+    services =
+      Enum.filter(containers, fn c ->
+        c.image == "systemd" or String.starts_with?(to_string(c.id), "systemd:") or
+          c.image == "launchd" or String.starts_with?(to_string(c.id), "launchd:")
+      end)
+
+    list_rows =
+      if Enum.empty?(services) do
+        [
+          Line.new([]),
+          Line.new([
+            Span.new("  No system services found or server is disconnected.",
+              style: %Style{fg: :dark_gray}
+            )
+          ])
+        ]
+      else
+        display_rows_limit = max(2, div(state.height * 90, 100) - 11)
+
+        start_row =
+          if state.settings_service_idx >= display_rows_limit,
+            do: state.settings_service_idx - display_rows_limit + 1,
+            else: 0
+
+        services
+        |> Enum.with_index()
+        |> Enum.slice(start_row, display_rows_limit)
+        |> Enum.map(fn {service, idx} ->
+          selected = idx == state.settings_service_idx
+          cursor = if selected, do: " > ", else: "   "
+          color = if selected, do: :green, else: :white
+
+          enabled_services = Map.get(profile, :enabled_services) || []
+          enabled = service.id in enabled_services or service.name in enabled_services
+          checkbox = if enabled, do: "[X] ", else: "[ ] "
+
+          Line.new([
+            Span.new(cursor, style: %Style{fg: :green}),
+            Span.new(checkbox, style: %Style{fg: if(enabled, do: :green, else: :dark_gray)}),
+            Span.new(String.pad_trailing(service.name, 40), style: %Style{fg: color}),
+            Span.new(" "),
+            Span.new(String.pad_trailing(service.image, 15), style: %Style{fg: :dark_gray}),
+            Span.new(" "),
+            Span.new(service.status, style: %Style{fg: :dark_gray})
           ])
         end)
       end
@@ -351,7 +439,7 @@ defmodule Caudata.UI.Components.SettingsModal do
           ])
         ]
       else
-        display_rows_limit = 8
+        display_rows_limit = max(2, div(state.height * 90, 100) - 11)
 
         start_row =
           if state.settings_custom_log_idx >= display_rows_limit,
@@ -451,7 +539,15 @@ defmodule Caudata.UI.Components.SettingsModal do
     # Filtered containers to match UI
     docker_only_containers =
       Enum.reject(containers, fn c ->
-        c.image == "file" or String.starts_with?(to_string(c.id), "file:")
+        c.image == "file" or String.starts_with?(to_string(c.id), "file:") or
+          c.image == "systemd" or String.starts_with?(to_string(c.id), "systemd:") or
+          c.image == "launchd" or String.starts_with?(to_string(c.id), "launchd:")
+      end)
+
+    services_only =
+      Enum.filter(containers, fn c ->
+        c.image == "systemd" or String.starts_with?(to_string(c.id), "systemd:") or
+          c.image == "launchd" or String.starts_with?(to_string(c.id), "launchd:")
       end)
 
     cond do
@@ -527,7 +623,8 @@ defmodule Caudata.UI.Components.SettingsModal do
                 case model.settings_focus do
                   :servers -> :connection
                   :connection -> :containers
-                  :containers -> :custom_logs
+                  :containers -> :services
+                  :services -> :custom_logs
                   :custom_logs -> :general
                   :general -> :servers
                 end
@@ -540,7 +637,8 @@ defmodule Caudata.UI.Components.SettingsModal do
                   :servers -> :general
                   :connection -> :servers
                   :containers -> :connection
-                  :custom_logs -> :containers
+                  :services -> :containers
+                  :custom_logs -> :services
                   :general -> :custom_logs
                 end
 
@@ -575,6 +673,7 @@ defmodule Caudata.UI.Components.SettingsModal do
                      model
                      | settings_selected_profile_idx: new_idx,
                        settings_container_idx: 0,
+                       settings_service_idx: 0,
                        settings_custom_log_idx: 0,
                        settings_connection_focus_idx: 0,
                        settings_connection_fields: connection_fields,
@@ -590,6 +689,16 @@ defmodule Caudata.UI.Components.SettingsModal do
                       else: 0
 
                   {%{model | settings_container_idx: new_idx, settings_status_msg: nil}, []}
+
+                :services ->
+                  total = length(services_only)
+
+                  new_idx =
+                    if total > 0,
+                      do: rem(model.settings_service_idx - 1 + total, total),
+                      else: 0
+
+                  {%{model | settings_service_idx: new_idx, settings_status_msg: nil}, []}
 
                 :custom_logs ->
                   total = length(custom_logs)
@@ -629,6 +738,7 @@ defmodule Caudata.UI.Components.SettingsModal do
                      model
                      | settings_selected_profile_idx: new_idx,
                        settings_container_idx: 0,
+                       settings_service_idx: 0,
                        settings_custom_log_idx: 0,
                        settings_connection_focus_idx: 0,
                        settings_connection_fields: connection_fields,
@@ -643,6 +753,14 @@ defmodule Caudata.UI.Components.SettingsModal do
 
                   {%{model | settings_container_idx: new_idx, settings_status_msg: nil}, []}
 
+                :services ->
+                  total = length(services_only)
+
+                  new_idx =
+                    if total > 0, do: rem(model.settings_service_idx + 1, total), else: 0
+
+                  {%{model | settings_service_idx: new_idx, settings_status_msg: nil}, []}
+
                 :custom_logs ->
                   total = length(custom_logs)
 
@@ -654,6 +772,41 @@ defmodule Caudata.UI.Components.SettingsModal do
 
             " " ->
               cond do
+                model.settings_focus == :services ->
+                  service = Enum.at(services_only, model.settings_service_idx)
+
+                  if service do
+                    enabled_services = Enum.map(Map.get(profile, :enabled_services) || [], &to_string/1)
+                    service_id = to_string(service.id)
+
+                    new_enabled_services =
+                      if service_id in enabled_services do
+                        enabled_services -- [service_id]
+                      else
+                        [service_id | enabled_services]
+                      end
+
+                    case Caudata.ConfigManager.update_profile(profile.id, %{
+                           enabled_services: new_enabled_services
+                         }) do
+                      {:ok, updated_profile} ->
+                        new_profiles =
+                          Enum.map(model.profiles, fn p ->
+                            if p.id == profile.id, do: updated_profile, else: p
+                          end)
+
+                        {%{model | profiles: new_profiles}, []}
+
+                      {:error, reason} ->
+                        {%{
+                           model
+                           | settings_status_msg: "Error saving settings: #{inspect(reason)}"
+                         }, []}
+                    end
+                  else
+                    {model, []}
+                  end
+
                 model.settings_focus == :containers ->
                   container = Enum.at(docker_only_containers, model.settings_container_idx)
 
@@ -813,6 +966,7 @@ defmodule Caudata.UI.Components.SettingsModal do
                              modal_visible: false,
                              settings_selected_profile_idx: 0,
                              settings_container_idx: 0,
+                             settings_service_idx: 0,
                              settings_custom_log_idx: 0
                          }, []}
                       else
@@ -858,6 +1012,7 @@ defmodule Caudata.UI.Components.SettingsModal do
                              selected_container_id: new_selected_container_id,
                              settings_selected_profile_idx: new_idx,
                              settings_container_idx: 0,
+                             settings_service_idx: 0,
                              settings_custom_log_idx: 0,
                              settings_connection_focus_idx: 0,
                              settings_connection_fields: connection_fields,

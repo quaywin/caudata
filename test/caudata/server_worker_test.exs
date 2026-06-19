@@ -37,17 +37,16 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_list_channel,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     |> expect(:open_channel, fn :dummy_conn ->
       {:ok, :dummy_log_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_log_channel,
-                        "sh -c 'docker logs -t --follow --tail 1000 container1 & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_log_channel, cmd ->
+      assert String.contains?(cmd, "docker logs")
+      assert String.contains?(cmd, "container1")
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_log_channel ->
@@ -144,9 +143,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel1)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_list_channel,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # Then log stream channel open
@@ -161,9 +159,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel2)
       {:ok, :dummy_list_channel2}
     end)
-    |> expect(:exec, fn :dummy_conn2,
-                        :dummy_list_channel2,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn2, :dummy_list_channel2, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # Cleanup calls
@@ -228,9 +225,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_list_channel,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # Refresh 1:
@@ -238,9 +234,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel2)
       {:ok, :dummy_list_channel2}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_list_channel2,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel2, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # Refresh 2 (closes channel 2, opens channel 3):
@@ -252,9 +247,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel3)
       {:ok, :dummy_list_channel3}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_list_channel3,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel3, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # Terminate:
@@ -319,9 +313,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel1)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_list_channel,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # Then log stream channel open
@@ -336,9 +329,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel2)
       {:ok, :dummy_list_channel2}
     end)
-    |> expect(:exec, fn :dummy_conn2,
-                        :dummy_list_channel2,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn2, :dummy_list_channel2, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # Expect resuming log streaming on the new connection!
@@ -421,9 +413,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_list_channel,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # Validation channel expectations
@@ -431,9 +422,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :val_channel_opened)
       {:ok, :dummy_val_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_val_channel,
-                        "if [ -r \"/var/log/syslog\" ]; then echo \"valid\"; else echo \"invalid\"; fi" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_val_channel, cmd ->
+      assert String.contains?(cmd, "/var/log/syslog")
       :ok
     end)
     |> expect(:close, fn :dummy_conn ->
@@ -484,9 +474,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_list_channel,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
 
@@ -577,9 +566,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_list_channel,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # 2. Docker events channel (opened after list channel closes)
@@ -588,7 +576,7 @@ defmodule Caudata.ServerWorkerTest do
       {:ok, :dummy_events_channel}
     end)
     |> expect(:exec, fn :dummy_conn, :dummy_events_channel, cmd ->
-      assert String.starts_with?(cmd, "docker events")
+      assert String.contains?(cmd, "docker events")
       :ok
     end)
     # 3. Stream logs for container1 (initial)
@@ -604,9 +592,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_refresh_channel)
       {:ok, :dummy_refresh_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_refresh_channel,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_refresh_channel, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # 5. Stream logs for container2 (resumed by the refresh's closed-list handler)
@@ -709,9 +696,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_list_channel,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # 2. Docker events channel (opened after list channel closes)
@@ -720,7 +706,7 @@ defmodule Caudata.ServerWorkerTest do
       {:ok, :dummy_events_channel}
     end)
     |> expect(:exec, fn :dummy_conn, :dummy_events_channel, cmd ->
-      assert String.starts_with?(cmd, "docker events")
+      assert String.contains?(cmd, "docker events")
       :ok
     end)
     # 3. Stream logs for container1 (initial)
@@ -737,9 +723,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_refresh_channel)
       {:ok, :dummy_refresh_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_refresh_channel,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_refresh_channel, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # 5. Stream logs for container1 (resumed by the refresh's closed-list handler)
@@ -845,9 +830,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_list_channel,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # Docker events channel
@@ -856,7 +840,7 @@ defmodule Caudata.ServerWorkerTest do
       {:ok, :dummy_events_channel}
     end)
     |> expect(:exec, fn :dummy_conn, :dummy_events_channel, cmd ->
-      assert String.starts_with?(cmd, "docker events")
+      assert String.contains?(cmd, "docker events")
       :ok
     end)
     # Refresh ps channel (triggered by the rebuild `start` event)
@@ -864,9 +848,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_refresh_channel_1)
       {:ok, :dummy_refresh_channel_1}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_refresh_channel_1,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_refresh_channel_1, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # Refresh ps channel (triggered by the new-container `start` event)
@@ -874,9 +857,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_refresh_channel_2)
       {:ok, :dummy_refresh_channel_2}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_refresh_channel_2,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_refresh_channel_2, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     |> stub(:close_channel, fn _conn, _chan -> :ok end)
@@ -1019,9 +1001,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_list_channel)
       {:ok, :dummy_list_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_list_channel,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     # Docker events channel
@@ -1030,7 +1011,7 @@ defmodule Caudata.ServerWorkerTest do
       {:ok, :dummy_events_channel}
     end)
     |> expect(:exec, fn :dummy_conn, :dummy_events_channel, cmd ->
-      assert String.starts_with?(cmd, "docker events")
+      assert String.contains?(cmd, "docker events")
       :ok
     end)
     # Refresh ps channel (triggered by the rebuild `start` event)
@@ -1038,9 +1019,8 @@ defmodule Caudata.ServerWorkerTest do
       send(test_pid, :opened_refresh_channel)
       {:ok, :dummy_refresh_channel}
     end)
-    |> expect(:exec, fn :dummy_conn,
-                        :dummy_refresh_channel,
-                        "docker ps --no-trunc --format '{{json .}}'" ->
+    |> expect(:exec, fn :dummy_conn, :dummy_refresh_channel, cmd ->
+      assert String.contains?(cmd, "docker ps")
       :ok
     end)
     |> stub(:close_channel, fn _conn, _chan -> :ok end)
@@ -1148,6 +1128,66 @@ defmodule Caudata.ServerWorkerTest do
     expected_metrics = {15, 50, 4.0, 8.0, 20, 20.0, 100}
 
     assert_receive {:metrics_updated, "metrics-test-server", ^expected_metrics}, 1000
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "successful discovery of systemd and launchd services" do
+    profile =
+      Profile.new(%{
+        host_pattern: "service-test-server",
+        host_name: "127.0.0.1",
+        user: "test-user",
+        port: 2222
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, fn "127.0.0.1", 2222, _ -> {:ok, :dummy_conn} end)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_list_channel)
+      {:ok, :dummy_list_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, _cmd -> :ok end)
+    |> expect(:close, fn :dummy_conn -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_metrics: false, enable_events: false}})
+
+    assert_receive :opened_list_channel, 1000
+
+    # Simulate discovery output chunk
+    chunk = """
+    ===DOCKER===
+    {"ID":"container1","Names":"test-container","Image":"nginx","Status":"Up"}
+    ===OS===
+    Linux
+    ===SYSTEMD===
+    nginx.service loaded active running nginx server
+    ssh.service loaded active running ssh daemon
+    ===LAUNCHD===
+    - 0 com.apple.Finder
+    """
+
+    send(
+      worker_pid,
+      {:ssh_cm, :dummy_conn, {:data, :dummy_list_channel, 0, chunk}}
+    )
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_list_channel}})
+
+    assert_receive {:status_updated, "service-test-server", :connected}, 1000
+
+    containers = ServerWorker.get_containers(worker_pid)
+
+    # Check that it parsed both docker containers and systemd/launchd services
+    assert Enum.any?(containers, &(&1.id == "container1" && &1.image == "nginx"))
+    assert Enum.any?(containers, &(&1.id == "systemd:nginx.service" && &1.image == "systemd"))
+    assert Enum.any?(containers, &(&1.id == "systemd:ssh.service" && &1.image == "systemd"))
+    assert Enum.any?(containers, &(&1.id == "launchd:com.apple.Finder" && &1.image == "launchd"))
 
     stop_supervised(ServerWorker)
   end

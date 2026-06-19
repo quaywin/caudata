@@ -97,6 +97,7 @@ defmodule Caudata.UI.App do
       settings_selected_profile_idx: 0,
       settings_focus: :servers,
       settings_container_idx: 0,
+      settings_service_idx: 0,
       settings_custom_log_idx: 0,
       settings_connection_focus_idx: 0,
       settings_connection_fields: %{},
@@ -317,11 +318,8 @@ defmodule Caudata.UI.App do
               []
 
             profile ->
-              Map.get(state.containers, profile.id, [])
-              |> Enum.filter(fn c ->
-                c.id not in profile.disabled_containers and
-                  c.name not in profile.disabled_containers
-              end)
+              containers = Map.get(state.containers, profile.id, [])
+              Caudata.UI.ViewHelper.get_enabled_containers(profile, containers)
           end
 
         # Auto-select first container of selected profile if none selected

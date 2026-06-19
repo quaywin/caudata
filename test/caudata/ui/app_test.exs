@@ -726,8 +726,12 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, state_tab1} = App.handle_event(event_tab, state_tab0)
     assert state_tab1.settings_focus == :containers
 
-    # Tab 3: :containers -> :custom_logs
-    assert {:noreply, state_tab2} = App.handle_event(event_tab, state_tab1)
+    # Tab 2b: :containers -> :services
+    assert {:noreply, state_tab1b} = App.handle_event(event_tab, state_tab1)
+    assert state_tab1b.settings_focus == :services
+
+    # Tab 3: :services -> :custom_logs
+    assert {:noreply, state_tab2} = App.handle_event(event_tab, state_tab1b)
     assert state_tab2.settings_focus == :custom_logs
 
     # Tab 4: :custom_logs -> :general
@@ -816,6 +820,59 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, state_enabled} = App.handle_event(event_space, state_toggled)
     profile_enabled = Enum.find(state_enabled.profiles, &(&1.id == "toggle-logs-server"))
     refute "file:/var/log/syslog" in profile_enabled.disabled_containers
+  end
+
+  test "handle_event/2 handles services toggling in settings modal" do
+    {:ok, state} = App.mount([])
+
+    profile = %Caudata.Profile{
+      id: "toggle-logs-server",
+      host_name: "4.4.4.4",
+      host_pattern: "toggle-logs-server",
+      enabled_services: []
+    }
+
+    _ =
+      Caudata.ConfigManager.add_manual_profile(%{
+        id: "toggle-logs-server",
+        host_pattern: "toggle-logs-server"
+      })
+
+    on_exit(fn ->
+      _ = Caudata.ConfigManager.delete_profile("toggle-logs-server")
+    end)
+
+    state = %{
+      state
+      | profiles: [profile],
+        modal_visible: true,
+        modal_type: :settings,
+        settings_selected_profile_idx: 0,
+        settings_focus: :services,
+        settings_service_idx: 0,
+        containers: %{
+          "toggle-logs-server" => [
+            %{
+              id: "systemd:nginx.service",
+              name: "nginx.service",
+              image: "systemd",
+              status: "active",
+              state: "running"
+            }
+          ]
+        }
+    }
+
+    # Space key to enable the service
+    event_space = %ExRatatui.Event.Key{code: " ", modifiers: []}
+    assert {:noreply, state_toggled} = App.handle_event(event_space, state)
+    profile_toggled = Enum.find(state_toggled.profiles, &(&1.id == "toggle-logs-server"))
+    assert "systemd:nginx.service" in profile_toggled.enabled_services
+
+    # Space key again to disable it
+    assert {:noreply, state_enabled} = App.handle_event(event_space, state_toggled)
+    profile_enabled = Enum.find(state_enabled.profiles, &(&1.id == "toggle-logs-server"))
+    refute "systemd:nginx.service" in profile_enabled.enabled_services
   end
 
   test "handle_info/2 handles validation result with connection errors by saving the path anyway" do

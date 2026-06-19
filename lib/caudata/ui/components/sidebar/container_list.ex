@@ -14,12 +14,7 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
 
     enabled_containers =
       if selected_profile do
-        containers = Map.get(state.containers, selected_profile.id, [])
-
-        Enum.filter(containers, fn c ->
-          c.id not in selected_profile.disabled_containers and
-            c.name not in selected_profile.disabled_containers
-        end)
+        Caudata.UI.ViewHelper.get_enabled_containers(selected_profile, Map.get(state.containers, selected_profile.id, []))
       else
         []
       end
@@ -46,8 +41,20 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
             is_file =
               container.image == "file" or String.starts_with?(to_string(container.id), "file:")
 
-            icon = if is_file, do: "📄 ", else: "🐳 "
-            icon_color = if is_file, do: :yellow, else: :cyan
+            container_image = Map.get(container, :image)
+            is_systemd =
+              container_image == "systemd" or String.starts_with?(to_string(container.id), "systemd:")
+
+            is_launchd =
+              container_image == "launchd" or String.starts_with?(to_string(container.id), "launchd:")
+
+            {icon, icon_color} =
+              cond do
+                is_file -> {"📄 ", :yellow}
+                is_systemd -> {"⚙ ", :magenta}
+                is_launchd -> {"⚙ ", :light_blue}
+                true -> {"🐳 ", :cyan}
+              end
 
             fg_color =
               cond do
@@ -91,7 +98,7 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
       text: container_rows,
       scroll: {scroll_y, 0},
       block: %Block{
-        title: " Containers ",
+        title: " Containers / Services ",
         borders: [:all],
         border_type: :rounded,
         border_style: %Style{fg: border_color}

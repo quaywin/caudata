@@ -284,6 +284,33 @@ defmodule Caudata.UI.ViewHelper do
   end
 
   @doc """
+  Gets the list of enabled containers and services for a profile.
+  """
+  def get_enabled_containers(profile, containers) do
+    if is_nil(profile) or is_nil(containers) do
+      []
+    else
+      disabled_containers = Enum.map(profile.disabled_containers || [], &to_string/1)
+      enabled_services = Map.get(profile, :enabled_services) || []
+
+      Enum.filter(containers, fn c ->
+        id_str = to_string(c.id)
+        image = Map.get(c, :image)
+        is_service = image in ["systemd", "launchd"] or
+          String.starts_with?(id_str, "systemd:") or
+          String.starts_with?(id_str, "launchd:")
+
+        if is_service do
+          id_str in enabled_services or to_string(c.name) in enabled_services
+        else
+          id_str not in disabled_containers and
+            to_string(c.name) not in disabled_containers
+        end
+      end)
+    end
+  end
+
+  @doc """
   Computes the selection range for selecting/visual mode.
   """
   def get_selection_range(%{mode: :selecting, visual_anchor: anchor, visual_cursor: cursor})

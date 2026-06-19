@@ -18,7 +18,8 @@ defmodule Caudata.ContainerWorker do
     :tail_limit,
     :channel_opened_at,
     :pending_logs,
-    :flush_timer
+    :flush_timer,
+    :password
   ]
 
   # Client API
@@ -78,7 +79,8 @@ defmodule Caudata.ContainerWorker do
       tail_limit: 1000,
       channel_opened_at: nil,
       pending_logs: [],
-      flush_timer: nil
+      flush_timer: nil,
+      password: Keyword.get(opts, :password)
     }
 
     {:ok, state}
@@ -326,15 +328,25 @@ defmodule Caudata.ContainerWorker do
     case state.ssh_client.open_channel(conn_ref) do
       {:ok, channel_id} ->
         log_cmd =
-          if String.starts_with?(state.container_id, "file:") do
-            "file:" <> path = state.container_id
-            escaped_path = String.replace(path, "'", "'\\''")
+          cond do
+            String.starts_with?(state.container_id, "file:") ->
+              "file:" <> path = state.container_id
+              escaped_path = String.replace(path, "'", "'\\\'\''")
+              build_log_cmd("tail -n #{state.tail_limit || 100} -F \"#{escaped_path}\"", state.password)
 
-            "sh -c 'tail -n #{state.tail_limit || 100} -F \"#{escaped_path}\" & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
-          else
-            escaped_container_id = String.replace(state.container_id, "'", "'\\''")
+            String.starts_with?(state.container_id, "systemd:") ->
+              "systemd:" <> service_name = state.container_id
+              escaped_service = String.replace(service_name, "'", "'\\\'\''")
+              build_log_cmd("journalctl -u \"#{escaped_service}\" -f -n #{state.tail_limit || 100}", state.password)
 
-            "sh -c 'docker logs -t --follow --tail #{state.tail_limit || 1000} #{escaped_container_id} & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
+            String.starts_with?(state.container_id, "launchd:") ->
+              "launchd:" <> service_name = state.container_id
+              escaped_service = String.replace(service_name, "'", "'\\\'\''")
+              build_log_cmd("log stream --predicate \"process == \\\"#{escaped_service}\\\"\"", state.password)
+
+            true ->
+              escaped_container_id = String.replace(state.container_id, "'", "'\\\'\''")
+              build_log_cmd("docker logs -t --follow --tail #{state.tail_limit || 1000} #{escaped_container_id}", state.password)
           end
 
         case state.ssh_client.exec(conn_ref, channel_id, log_cmd) do
@@ -351,7 +363,7 @@ defmodule Caudata.ContainerWorker do
 
           {:error, reason} ->
             Logger.info(
-              "Failed to execute docker logs for #{state.container_id}: #{inspect(reason)}"
+              "Failed to execute log streaming for #{state.container_id}: #{inspect(reason)}"
             )
 
             {:error, reason}
@@ -402,6 +414,19 @@ defmodule Caudata.ContainerWorker do
       %{state | flush_timer: nil}
     else
       state
+    end
+  end
+
+  defp build_log_cmd(base_cmd, password) do
+    cond do
+      password && password != "" ->
+        escaped_password = String.replace(password, "'", "'\\\'\''")
+        escaped_cmd = String.replace(base_cmd, "'", "'\\\'\''")
+        "sh -c '''exec 3<&0; echo '\''" <> escaped_password <> "'\'' | sudo -S -p \"\" sh -c '\''exec 0<&3 3<&-; " <> escaped_cmd <> "'\'' & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'''"
+
+      true ->
+        escaped_cmd = String.replace(base_cmd, "'", "'\\\'\''")
+        "sh -c '''if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then exec sudo -n " <> escaped_cmd <> "; else exec " <> escaped_cmd <> "; fi & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'''"
     end
   end
 end

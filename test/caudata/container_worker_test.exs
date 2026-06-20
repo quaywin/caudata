@@ -136,7 +136,7 @@ defmodule Caudata.ContainerWorkerTest do
     stop_supervised(ContainerWorker)
   end
 
-  test "concurrent stdout and stderr logs are sorted chronologically by Docker timestamps" do
+  test "concurrent stdout and stderr logs are stored in chronological receipt order" do
     container = %{
       id: "container123",
       name: "my-nginx",
@@ -190,17 +190,17 @@ defmodule Caudata.ContainerWorkerTest do
     Process.sleep(120)
     snapshot = LogStore.get_snapshot("my-server/container123")
 
-    # Verify that the logs are sorted by their Docker timestamp correctly!
+    # Verify that the logs are stored in the order they are received!
     assert snapshot == [
-             %{
-               timestamp: "2026-06-08T12:00:00.000000000Z",
-               stream: :stdout,
-               message: "stdout line"
-             },
              %{
                timestamp: "2026-06-08T12:00:01.000000000Z",
                stream: :stderr,
                message: "stderr line"
+             },
+             %{
+               timestamp: "2026-06-08T12:00:00.000000000Z",
+               stream: :stdout,
+               message: "stdout line"
              }
            ]
 

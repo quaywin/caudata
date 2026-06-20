@@ -17,8 +17,7 @@ defmodule Caudata.UI.App do
 
   @impl true
   def mount(opts) do
-    # Start the tick timer
-    {:ok, _} = :timer.send_interval(100, :tick)
+    # No interval timer. Tick is scheduled on-demand.
 
     # Subscribe to static updates if PubSub is running
     if Process.whereis(Caudata.PubSub) do
@@ -114,7 +113,8 @@ defmodule Caudata.UI.App do
       consecutive_key_count: 0,
       visual_anchor: nil,
       visual_cursor: nil,
-      notification: nil
+      notification: nil,
+      tick_scheduled: false
     }
 
     state = adjust_log_subscription(nil, state)
@@ -311,6 +311,7 @@ defmodule Caudata.UI.App do
          }}
 
       :tick ->
+        state = %{state | tick_scheduled: false}
         # Get the enabled containers for the selected profile
         enabled_conts_for_profile =
           case Enum.find(state.profiles, &(&1.id == state.selected_profile_id)) do
@@ -534,11 +535,23 @@ defmodule Caudata.UI.App do
         {:noreply, new_state}
 
       {:logs_updated, source_id, %{size: size, drop_count: drops}} ->
+        current_src = current_source_id(state)
+        logs_dirty = state.logs_dirty || source_id == current_src
+
+        tick_scheduled =
+          if logs_dirty and not state.freeze and not Map.get(state, :tick_scheduled, false) do
+            Process.send_after(self(), :tick, 100)
+            true
+          else
+            Map.get(state, :tick_scheduled, false)
+          end
+
         new_state = %{
           state
           | buffer_sizes: Map.put(state.buffer_sizes, source_id, size),
             drop_counts: Map.put(state.drop_counts, source_id, drops),
-            logs_dirty: state.logs_dirty || source_id == current_source_id(state)
+            logs_dirty: logs_dirty,
+            tick_scheduled: tick_scheduled
         }
 
         {:noreply, new_state}

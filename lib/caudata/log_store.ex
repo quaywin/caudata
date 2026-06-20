@@ -132,14 +132,7 @@ defmodule Caudata.LogStore do
 
       source_state ->
         lines = :queue.to_list(source_state.queue)
-
-        sorted_lines =
-          Enum.sort_by(lines, fn
-            %{timestamp: ts} when is_binary(ts) -> ts
-            _ -> ""
-          end)
-
-        tail_lines = Enum.take(sorted_lines, -limit)
+        tail_lines = Enum.take(lines, -limit)
         {:reply, tail_lines, state}
     end
   end

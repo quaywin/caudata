@@ -236,18 +236,23 @@ defmodule Caudata.UI.ViewHelper do
   starting at `i` is a prefix of `new_logs`.
   Returns `nil` if there is no overlap or if list is empty.
   """
+  def find_overlap_index([], _new_logs), do: nil
+  def find_overlap_index(_old_logs, []), do: nil
+
   def find_overlap_index(old_logs, new_logs) do
-    do_find_overlap_index(old_logs, new_logs, 0)
-  end
+    first_new = hd(new_logs)
 
-  defp do_find_overlap_index([], _new_logs, _i), do: nil
-
-  defp do_find_overlap_index(old_logs, new_logs, i) do
-    if List.starts_with?(new_logs, old_logs) do
-      i
-    else
-      do_find_overlap_index(tl(old_logs), new_logs, i + 1)
-    end
+    old_logs
+    |> Stream.with_index()
+    |> Stream.filter(fn {item, _idx} -> item == first_new end)
+    |> Enum.find_value(fn {_item, idx} ->
+      remaining_old = Enum.drop(old_logs, idx)
+      if List.starts_with?(new_logs, remaining_old) do
+        idx
+      else
+        nil
+      end
+    end)
   end
 
   @doc """

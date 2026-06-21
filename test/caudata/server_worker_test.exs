@@ -888,13 +888,13 @@ defmodule Caudata.ServerWorkerTest do
     assert_receive {:status_updated, "order-test-server", :connected}, 1000
     assert_receive :opened_events_channel, 1000
 
-    # Verify initial containers list: web, db, then file logs
+    # Verify initial containers list: sorted alphabetically (db-container, web-container), then file logs
     initial_conts = ServerWorker.get_containers(worker_pid)
     assert length(initial_conts) == 3
-    assert Enum.at(initial_conts, 0).id == "c1"
-    assert Enum.at(initial_conts, 0).name == "web-container"
-    assert Enum.at(initial_conts, 1).id == "c2"
-    assert Enum.at(initial_conts, 1).name == "db-container"
+    assert Enum.at(initial_conts, 0).id == "c2"
+    assert Enum.at(initial_conts, 0).name == "db-container"
+    assert Enum.at(initial_conts, 1).id == "c1"
+    assert Enum.at(initial_conts, 1).name == "web-container"
     assert Enum.at(initial_conts, 2).id == "file:/var/log/app.log"
     assert Enum.at(initial_conts, 2).name == "/var/log/app.log"
 
@@ -932,13 +932,13 @@ defmodule Caudata.ServerWorkerTest do
 
     Process.sleep(50)
 
-    # Verify that the order is preserved: web-container (now c3) is still at Index 0, and log file is still at Index 2
+    # Verify that the order is sorted alphabetically: db-container (c2) at Index 0, web-container (now c3) at Index 1, and log file at Index 2
     rebuilt_conts = ServerWorker.get_containers(worker_pid)
     assert length(rebuilt_conts) == 3
-    assert Enum.at(rebuilt_conts, 0).id == "c3"
-    assert Enum.at(rebuilt_conts, 0).name == "web-container"
-    assert Enum.at(rebuilt_conts, 1).id == "c2"
-    assert Enum.at(rebuilt_conts, 1).name == "db-container"
+    assert Enum.at(rebuilt_conts, 0).id == "c2"
+    assert Enum.at(rebuilt_conts, 0).name == "db-container"
+    assert Enum.at(rebuilt_conts, 1).id == "c3"
+    assert Enum.at(rebuilt_conts, 1).name == "web-container"
     assert Enum.at(rebuilt_conts, 2).id == "file:/var/log/app.log"
 
     # 3. Add a new container: mail-container (c4) starts. Again triggers a refresh.
@@ -965,14 +965,14 @@ defmodule Caudata.ServerWorkerTest do
 
     Process.sleep(50)
 
-    # Verify that the new container is added at the end of the Docker section (Index 2),
-    # and the custom log file is shifted down to the bottom (Index 3).
+    # Verify that the containers are sorted alphabetically: db-container, mail-container, web-container, and custom log file at the bottom
     final_conts = ServerWorker.get_containers(worker_pid)
     assert length(final_conts) == 4
-    assert Enum.at(final_conts, 0).name == "web-container"
-    assert Enum.at(final_conts, 1).name == "db-container"
-    assert Enum.at(final_conts, 2).name == "mail-container"
-    assert Enum.at(final_conts, 2).id == "c4"
+    assert Enum.at(final_conts, 0).name == "db-container"
+    assert Enum.at(final_conts, 1).name == "mail-container"
+    assert Enum.at(final_conts, 1).id == "c4"
+    assert Enum.at(final_conts, 2).name == "web-container"
+    assert Enum.at(final_conts, 2).id == "c3"
     assert Enum.at(final_conts, 3).id == "file:/var/log/app.log"
 
     stop_supervised(ServerWorker)
@@ -1188,6 +1188,13 @@ defmodule Caudata.ServerWorkerTest do
     assert Enum.any?(containers, &(&1.id == "systemd:nginx.service" && &1.image == "systemd"))
     assert Enum.any?(containers, &(&1.id == "systemd:ssh.service" && &1.image == "systemd"))
     assert Enum.any?(containers, &(&1.id == "launchd:com.apple.Finder" && &1.image == "launchd"))
+
+    # Verify sorting order: Docker containers first, then services
+    assert length(containers) == 4
+    assert Enum.at(containers, 0).id == "container1"
+    assert Enum.at(containers, 1).id == "launchd:com.apple.Finder"
+    assert Enum.at(containers, 2).id == "systemd:nginx.service"
+    assert Enum.at(containers, 3).id == "systemd:ssh.service"
 
     stop_supervised(ServerWorker)
   end

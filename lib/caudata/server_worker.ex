@@ -201,19 +201,16 @@ defmodule Caudata.ServerWorker do
               |> Enum.reject(&is_nil/1)
 
             if length(active_streams) >= @max_active_streams do
-              sorted_streams =
-                Enum.sort_by(active_streams, fn {_id, _c_pid, opened_at} -> opened_at end)
+              case Enum.min_by(active_streams, fn {_id, _c_pid, opened_at} -> opened_at end, fn -> nil end) do
+                nil ->
+                  :ok
 
-              case sorted_streams do
-                [{old_id, old_pid, _opened_at} | _] ->
+                {old_id, old_pid, _opened_at} ->
                   Logger.info(
                     "Max active channels (#{@max_active_streams}) reached. Closing oldest channel for container #{old_id} to make room."
                   )
 
                   Caudata.ContainerWorker.stop_streaming(old_pid)
-
-                [] ->
-                  :ok
               end
             end
           end
@@ -557,10 +554,6 @@ defmodule Caudata.ServerWorker do
           end)
 
         all_containers = containers ++ custom_containers
-
-        # Reset the stable order when refreshing the full list
-        order = Enum.map(all_containers, &container_order_key/1)
-        state = %{state | container_order: order}
 
         state = sync_container_workers(state, all_containers)
 
@@ -1363,52 +1356,28 @@ defmodule Caudata.ServerWorker do
     )
   end
 
-  defp container_order_key(container) do
-    if container.image == "file" or String.starts_with?(to_string(container.id), "file:") do
-      to_string(container.id)
-    else
-      to_string(container.name)
-    end
-  end
-
-  defp add_to_container_order(order, new_key) do
-    if new_key in order do
-      order
-    else
-      first_file_idx = Enum.find_index(order, &String.starts_with?(&1, "file:"))
-
-      if is_nil(first_file_idx) do
-        order ++ [new_key]
-      else
-        List.insert_at(order, first_file_idx, new_key)
-      end
-    end
-  end
 
   defp maybe_put(map, source, key) do
     if Map.has_key?(source, key), do: Map.put(map, key, Map.get(source, key)), else: map
   end
 
   defp sync_container_workers(state, new_containers) do
-    # 1. Ensure all new containers have their keys in the state.container_order list
-    new_keys = Enum.map(new_containers, &container_order_key/1)
-
-    updated_order =
-      Enum.reduce(new_keys, state.container_order || [], fn key, acc ->
-        add_to_container_order(acc, key)
-      end)
-
-    # 2. Sort the containers according to the container_order
+    # 1. Sort by category (Docker -> System services -> File logs), then alphabetically by name
     sorted_containers =
-      Enum.sort_by(new_containers, fn c ->
-        key = container_order_key(c)
-        Enum.find_index(updated_order, &(&1 == key)) || length(updated_order)
+      Enum.sort(new_containers, fn c1, c2 ->
+        cat1 = container_category(c1)
+        cat2 = container_category(c2)
+
+        cond do
+          cat1 != cat2 ->
+            cat1 < cat2
+
+          true ->
+            to_string(c1.name) <= to_string(c2.name)
+        end
       end)
 
-    # 3. Preserve cpu_text and ram_text from old containers if they exist.
-    # Only copy a field when the old container actually has it, otherwise we'd
-    # inject `cpu_text: nil` (key present, value nil), which crashes the info pane
-    # (Span.new/2 rejects nil). This runs on every list refresh, so it matters.
+    # 2. Preserve cpu_text and ram_text from old containers if they exist.
     sorted_containers =
       Enum.map(sorted_containers, fn new_c ->
         case Enum.find(state.containers, &(&1.id == new_c.id)) do
@@ -1473,9 +1442,25 @@ defmodule Caudata.ServerWorker do
     %{
       state
       | containers: sorted_containers,
-        container_pids: updated_pids,
-        container_order: updated_order
+        container_pids: updated_pids
     }
+  end
+
+
+  defp container_category(container) do
+    id_str = to_string(container.id)
+    image = container.image
+
+    cond do
+      image == "file" or String.starts_with?(id_str, "file:") ->
+        3
+
+      image in ["systemd", "launchd"] or String.starts_with?(id_str, "systemd:") or String.starts_with?(id_str, "launchd:") ->
+        2
+
+      true ->
+        1
+    end
   end
 
   defp wrap_sudo(cmd, password) do

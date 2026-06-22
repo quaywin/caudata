@@ -1378,9 +1378,11 @@ defmodule Caudata.ServerWorker do
       end)
 
     # 2. Preserve cpu_text and ram_text from old containers if they exist.
+    old_containers_map = Map.new(state.containers, fn c -> {c.id, c} end)
+
     sorted_containers =
       Enum.map(sorted_containers, fn new_c ->
-        case Enum.find(state.containers, &(&1.id == new_c.id)) do
+        case Map.get(old_containers_map, new_c.id) do
           nil ->
             new_c
 

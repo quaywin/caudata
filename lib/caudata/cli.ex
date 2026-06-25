@@ -82,8 +82,9 @@ defmodule Caudata.CLI do
         current = get_current_version() |> String.trim_leading("v")
         latest = latest_tag |> String.trim_leading("v")
 
-        # Ignore if we are running in dev/timestamp mode
-        if String.contains?(current, "+dev") do
+        # Ignore if we are running in dev/timestamp mode and not running inside Burrito
+        if String.contains?(current, "+dev") and
+             match?({:error, :not_in_burrito}, get_binary_path()) do
           :no_update
         else
           case compare_versions(current, latest) do
@@ -290,6 +291,29 @@ defmodule Caudata.CLI do
   end
 
   defp parse_vsn_string(vsn) do
+    clean_vsn =
+      vsn
+      |> String.split("+")
+      |> List.first()
+      |> String.split("-")
+      |> List.first()
+
+    case String.split(clean_vsn, ".") do
+      [maj, min, pat] ->
+        case {Integer.parse(maj), Integer.parse(min), Integer.parse(pat)} do
+          {{maj_num, _}, {min_num, _}, {pat_num, _}} ->
+            [maj_num, min_num, pat_num]
+
+          _ ->
+            parse_original(vsn)
+        end
+
+      _ ->
+        parse_original(vsn)
+    end
+  end
+
+  defp parse_original(vsn) do
     vsn
     |> String.split(".")
     |> Enum.map(fn part ->

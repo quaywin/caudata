@@ -12,6 +12,13 @@ defmodule Caudata.CLITest do
       assert CLI.compare_versions("0.1.14", "0.1.14") == :eq
     end
 
+    test "correctly compares versions with build/prerelease metadata" do
+      assert CLI.compare_versions("0.1.29+dev.1.fc377d0", "0.1.30") == :lt
+      assert CLI.compare_versions("0.1.30+dev.1.fc377d0", "0.1.30") == :eq
+      assert CLI.compare_versions("0.1.30+dev.1.fc377d0", "0.1.29") == :gt
+      assert CLI.compare_versions("0.1.29-rc1", "0.1.29") == :eq
+    end
+
     test "handles non-semver fallback strings" do
       assert CLI.compare_versions("abc", "def") == :lt
       assert CLI.compare_versions("xyz", "abc") == :gt

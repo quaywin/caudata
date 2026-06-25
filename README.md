@@ -25,6 +25,7 @@ It aggregates and streams real-time logs from multiple remote Linux servers secu
 - 📄 **Custom Log Paths**: Add and stream specific custom log paths from remote machines.
 - 📊 **Real-time Server & Container Metrics**: Live panels showing CPU, RAM, and Disk usage of remote servers, alongside granular status, image, and resource usage for selected containers.
 - 📋 **Visual Select & Clipboard Copy**: Use `v` to select lines of logs, and copy them easily via `y` to the system clipboard.
+- 🌐 **Development Web View**: Render the exact same Terminal UI inside your web browser using Phoenix LiveView during local development for easy styling and debugging.
 - 🔄 **On-Demand History**: Scroll up to automatically fetch older logs from the server-side log store.
 - 📦 **Single-Binary Packaging**: Self-contained executable. No Elixir, Erlang, or external runtimes required on your machine.
 - 🔄 **Self-Upgrades**: Stay up to date with a single command (`caudata upgrade`).
@@ -123,6 +124,19 @@ Configuration is stored in an ETS-backed database at `~/.caudata/config.db` (man
 | :--- | :--- | :--- |
 | `CAUDATA_CONFIG_PATH` | Path to customize the configuration DB location | `~/.caudata/config.db` |
 | `CAUDATA_TUI` | Explicitly enable or disable Terminal UI (`true`/`false`) | Auto-detected |
+
+---
+
+## 🌐 Development Web View
+
+For easier debugging and layout testing, Caudata includes a Phoenix LiveView endpoint that allows you to view and interact with the TUI inside a web browser during local development.
+
+To run Caudata in development with the web server active:
+```bash
+# This starts the Phoenix server at http://localhost:4000
+mix run --no-halt
+```
+Open `http://localhost:4000` in your browser. Any changes you make to the UI code will automatically live-reload.
 
 ---
 

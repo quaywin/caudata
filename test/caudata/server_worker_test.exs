@@ -1198,4 +1198,108 @@ defmodule Caudata.ServerWorkerTest do
 
     stop_supervised(ServerWorker)
   end
+
+  test "container-specific stats streaming, parsing, and debouncing" do
+    profile =
+      Profile.new(%{
+        id: "container-stats-test-server",
+        host_pattern: "stats-test",
+        host_name: "10.0.0.40",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+    {:ok, counter_pid} = Agent.start_link(fn -> 0 end)
+
+    # Mox expectations
+    Mock
+    |> expect(:connect, fn "10.0.0.40", 22, _ -> {:ok, :dummy_conn} end)
+    |> stub(:open_channel, fn :dummy_conn ->
+      channel =
+        Agent.get_and_update(counter_pid, fn count ->
+          channel =
+            case count do
+              0 -> :dummy_list_channel
+              1 -> :dummy_metrics_channel
+              2 -> :dummy_log_channel
+              3 -> :dummy_stats_channel
+              _ -> :dummy_other_channel
+            end
+          {channel, count + 1}
+        end)
+      {:ok, channel}
+    end)
+    |> stub(:exec, fn :dummy_conn, _chan_id, cmd ->
+      cond do
+        String.contains?(cmd, "docker ps") ->
+          send(test_pid, :opened_list_channel)
+          :ok
+        String.contains?(cmd, "docker stats") ->
+          send(test_pid, :opened_stats_channel)
+          :ok
+        String.contains?(cmd, "METRICS:") ->
+          send(test_pid, :opened_metrics_channel)
+          :ok
+        String.contains?(cmd, "docker logs") ->
+          send(test_pid, :opened_log_channel)
+          :ok
+        true ->
+          :ok
+      end
+    end)
+    # Cleanup stubs
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    # Start worker with enable_metrics: true, and custom debounce delays for test
+    {:ok, worker_pid} =
+      start_supervised(
+        {ServerWorker, {profile, ssh_client: Mock, enable_metrics: true, enable_events: false, log_debounce_delay: 300, stats_debounce_delay: 300}}
+      )
+
+    assert_receive :opened_list_channel, 1000
+
+    # Bootstrap the container list with 1 container
+    bootstrap_ps =
+      "{\"ID\":\"container1\",\"Names\":\"web\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n"
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_list_channel, 0, bootstrap_ps}})
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_list_channel}})
+
+    assert_receive {:status_updated, "container-stats-test-server", :connected}, 1000
+    assert_receive :opened_metrics_channel, 1000
+    assert_receive {:containers_updated, "container-stats-test-server", _}, 1000
+
+    # Initially stats_channel should NOT be opened since no active container is set
+    refute_receive :opened_stats_channel, 200
+
+    # Select container1
+    assert :ok = GenServer.call(worker_pid, {:stream_container_logs, "container1"})
+
+    # Wait for debounce timer (300ms) to fire and open the stats channel
+    assert_receive :opened_stats_channel, 1000
+
+    # Get the actual stats channel ID from the worker state
+    worker_state = :sys.get_state(worker_pid)
+    stats_channel = worker_state.container_stats_channel_id
+
+    # Send container stats data chunk via stats channel
+    stats_data = "CONTAINER_METRICS: container1 25.5% 512MiB / 4GiB\n"
+
+    send(
+      worker_pid,
+      {:ssh_cm, :dummy_conn, {:data, stats_channel, 0, stats_data}}
+    )
+
+    # Verify that containers updated message is broadcast and container is updated in ServerWorker
+    assert_receive {:containers_updated, "container-stats-test-server", updated_containers}, 1000
+    c1 = Enum.find(updated_containers, &(&1.id == "container1"))
+    assert c1.cpu_text == "25.5%"
+    assert c1.ram_text == "512MiB / 4GiB"
+
+    stop_supervised(ServerWorker)
+  end
 end

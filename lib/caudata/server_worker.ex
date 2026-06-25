@@ -8,7 +8,7 @@ defmodule Caudata.ServerWorker do
   @health_check_interval 15_000
   @activity_timeout 30_000
 
-    @discovery_cmd "echo '===DOCKER==='; docker ps --no-trunc --format '{{json .}}' 2>/dev/null; echo '===OS==='; uname -s; echo '===SYSTEMD==='; if command -v systemctl >/dev/null 2>&1; then systemctl list-units --type=service --no-legend --no-pager 2>/dev/null; fi; echo '===LAUNCHD==='; if command -v launchctl >/dev/null 2>&1; then launchctl list 2>/dev/null; for dir in '/Library/LaunchDaemons' '/Library/LaunchAgents' \"\$HOME/Library/LaunchAgents\"; do if [ -d \"\$dir\" ]; then find \"\$dir\" -name '*.plist' -maxdepth 1 2>/dev/null | while read -r plist; do label=\$(basename \"\$plist\" .plist); echo \"- 0 \$label\"; done; fi; done; fi"
+  @discovery_cmd "echo '===DOCKER==='; docker ps --no-trunc --format '{{json .}}' 2>/dev/null; echo '===OS==='; uname -s; echo '===SYSTEMD==='; if command -v systemctl >/dev/null 2>&1; then systemctl list-units --type=service --no-legend --no-pager 2>/dev/null; fi; echo '===LAUNCHD==='; if command -v launchctl >/dev/null 2>&1; then launchctl list 2>/dev/null; for dir in '/Library/LaunchDaemons' '/Library/LaunchAgents' \"\$HOME/Library/LaunchAgents\"; do if [ -d \"\$dir\" ]; then find \"\$dir\" -name '*.plist' -maxdepth 1 2>/dev/null | while read -r plist; do label=\$(basename \"\$plist\" .plist); echo \"- 0 \$label\"; done; fi; done; fi"
 
   defstruct [
     :profile,
@@ -34,7 +34,13 @@ defmodule Caudata.ServerWorker do
     events_buffer: "",
     validation_channels: %{},
     health_check_timer: nil,
-    last_activity_at: nil
+    last_activity_at: nil,
+    container_stats_channel_id: nil,
+    container_stats_timer: nil,
+    container_stats_buffer: "",
+    log_stream_timer: nil,
+    log_debounce_delay: 100,
+    stats_debounce_delay: 300
   ]
 
   # Client API
@@ -89,6 +95,14 @@ defmodule Caudata.ServerWorker do
       Keyword.get(opts, :ssh_client) ||
         Application.get_env(:caudata, :ssh_client, Caudata.SSHClient.Native)
 
+    log_delay =
+      Keyword.get(opts, :log_debounce_delay) ||
+        Application.get_env(:caudata, :log_debounce_delay, 100)
+
+    stats_delay =
+      Keyword.get(opts, :stats_debounce_delay) ||
+        Application.get_env(:caudata, :stats_debounce_delay, 300)
+
     state = %__MODULE__{
       profile: profile,
       status: :connecting,
@@ -113,7 +127,13 @@ defmodule Caudata.ServerWorker do
       enable_metrics:
         Keyword.get(opts, :enable_metrics, Application.get_env(:caudata, :env) != :test),
       metrics: nil,
-      container_order: []
+      container_order: [],
+      container_stats_channel_id: nil,
+      container_stats_timer: nil,
+      container_stats_buffer: "",
+      log_stream_timer: nil,
+      log_debounce_delay: log_delay,
+      stats_debounce_delay: stats_delay
     }
 
     # Broadcast initial connecting status
@@ -176,76 +196,22 @@ defmodule Caudata.ServerWorker do
         c -> to_string(c.name)
       end
 
-    if is_nil(state.conn_ref) do
-      {:reply, {:error, :not_connected},
-       %{state | active_container_id: container_id, active_container_name: active_container_name}}
+    new_state = %{
+      state
+      | active_container_id: container_id,
+        active_container_name: active_container_name
+    }
+
+    new_state = cancel_log_stream_timer(new_state)
+    new_state = update_container_stats_stream(new_state, new_state.stats_debounce_delay)
+
+    if new_state.log_debounce_delay == 0 do
+      new_state = do_start_log_streaming(new_state)
+      {:reply, :ok, new_state}
     else
-      case Map.fetch(state.container_pids, container_id) do
-        {:ok, pid} ->
-          # Check and close oldest stream if we are about to open a new channel
-          target_status = Caudata.ContainerWorker.get_streaming_status(pid)
-
-          if not target_status.streaming? do
-            active_streams =
-              state.container_pids
-              |> Enum.filter(fn {_id, c_pid} -> Process.alive?(c_pid) end)
-              |> Enum.map(fn {id, c_pid} ->
-                case Caudata.ContainerWorker.get_streaming_status(c_pid) do
-                  %{streaming?: true, opened_at: opened_at} ->
-                    {id, c_pid, opened_at}
-
-                  _ ->
-                    nil
-                end
-              end)
-              |> Enum.reject(&is_nil/1)
-
-            if length(active_streams) >= @max_active_streams do
-              case Enum.min_by(active_streams, fn {_id, _c_pid, opened_at} -> opened_at end, fn -> nil end) do
-                nil ->
-                  :ok
-
-                {old_id, old_pid, _opened_at} ->
-                  Logger.info(
-                    "Max active channels (#{@max_active_streams}) reached. Closing oldest channel for container #{old_id} to make room."
-                  )
-
-                  Caudata.ContainerWorker.stop_streaming(old_pid)
-              end
-            end
-          end
-
-          try do
-            Caudata.ContainerWorker.start_streaming(pid, state.conn_ref)
-          catch
-            :exit, reason ->
-              Logger.warning(
-                "Timed out starting log stream for container #{container_id}: #{inspect(reason)}"
-              )
-
-              {:error, :timeout}
-          end
-          |> case do
-            :ok ->
-              {:reply, :ok,
-               %{
-                 state
-                 | active_container_id: container_id,
-                   active_container_name: active_container_name
-               }}
-
-            {:error, reason} ->
-              {:reply, {:error, reason},
-               %{
-                 state
-                 | active_container_id: container_id,
-                   active_container_name: active_container_name
-               }}
-          end
-
-        :error ->
-          {:reply, {:error, :container_not_found}, %{state | active_container_id: container_id}}
-      end
+      timer = Process.send_after(self(), :start_log_streaming, new_state.log_debounce_delay)
+      new_state = %{new_state | log_stream_timer: timer}
+      {:reply, :ok, new_state}
     end
   end
 
@@ -282,6 +248,7 @@ defmodule Caudata.ServerWorker do
       case state.ssh_client.open_channel(state.conn_ref) do
         {:ok, list_channel_id} ->
           wrapped_cmd = wrap_sudo(@discovery_cmd, state.profile.password)
+
           case state.ssh_client.exec(
                  state.conn_ref,
                  list_channel_id,
@@ -367,6 +334,7 @@ defmodule Caudata.ServerWorker do
     case state.ssh_client.open_channel(conn_ref) do
       {:ok, list_channel_id} ->
         wrapped_cmd = wrap_sudo(@discovery_cmd, state.profile.password)
+
         case state.ssh_client.exec(
                conn_ref,
                list_channel_id,
@@ -475,6 +443,12 @@ defmodule Caudata.ServerWorker do
         state = Enum.reduce(lines, state, &handle_metrics_line/2)
         {:noreply, %{state | metrics_buffer: new_metrics_buffer, last_activity_at: now}}
 
+      conn_ref == state.conn_ref && channel_id == state.container_stats_channel_id ->
+        chunk_str = to_string(chunk)
+        {lines, new_stats_buffer} = process_chunk(chunk_str, state.container_stats_buffer)
+        state = Enum.reduce(lines, state, &handle_metrics_line/2)
+        {:noreply, %{state | container_stats_buffer: new_stats_buffer, last_activity_at: now}}
+
       true ->
         {:noreply, state}
     end
@@ -529,7 +503,10 @@ defmodule Caudata.ServerWorker do
 
       conn_ref == state.conn_ref && channel_id == state.list_channel_id ->
         containers = parse_discovery_output(state.list_buffer)
-        Logger.info("Discovered #{length(containers)} containers/services for #{state.profile.id}")
+
+        Logger.info(
+          "Discovered #{length(containers)} containers/services for #{state.profile.id}"
+        )
 
         broadcast_status(state.profile.id, :connected)
 
@@ -579,8 +556,13 @@ defmodule Caudata.ServerWorker do
 
         state = start_docker_events_listener(state)
         state = start_metrics_streaming(state)
+        state = update_container_stats_stream(state)
         state = schedule_health_check(state)
         {:noreply, state}
+
+      conn_ref == state.conn_ref && channel_id == state.container_stats_channel_id ->
+        Logger.info("SSH Channel closed for container stats on #{state.profile.id}")
+        {:noreply, %{state | container_stats_channel_id: nil}}
 
       conn_ref == state.conn_ref && channel_id == state.metrics_channel_id ->
         Logger.info("SSH Channel closed for metrics on #{state.profile.id}")
@@ -660,6 +642,20 @@ defmodule Caudata.ServerWorker do
   end
 
   @impl true
+  def handle_info(:start_container_stats, state) do
+    state = %{state | container_stats_timer: nil}
+    new_state = start_container_stats_streaming!(state)
+    {:noreply, new_state}
+  end
+
+  @impl true
+  def handle_info(:start_log_streaming, state) do
+    state = %{state | log_stream_timer: nil}
+    new_state = do_start_log_streaming(state)
+    {:noreply, new_state}
+  end
+
+  @impl true
   def handle_info(_other, state) do
     # Catch-all to ignore other spurious messages (e.g. {:EXIT, pid, :normal} from Tasks)
     {:noreply, state}
@@ -707,6 +703,9 @@ defmodule Caudata.ServerWorker do
     # 2. Close parent worker's SSH channels cleanly
     state = close_list_channel(state)
     state = close_metrics_channel(state)
+    state = close_container_stats_channel(state)
+    state = cancel_container_stats_timer(state)
+    state = cancel_log_stream_timer(state)
 
     # 3. Stop SSH connection task and await its termination (closes the actual SSH connection)
     if state.conn_task_pid do
@@ -754,6 +753,9 @@ defmodule Caudata.ServerWorker do
     state = close_list_channel(state)
     state = close_events_channel(state)
     state = close_metrics_channel(state)
+    state = close_container_stats_channel(state)
+    state = cancel_container_stats_timer(state)
+    state = cancel_log_stream_timer(state)
 
     # Cancel health check timer
     state = cancel_health_check(state)
@@ -822,6 +824,7 @@ defmodule Caudata.ServerWorker do
         {:ok, events_channel_id} ->
           event_cmd =
             "docker events --filter 'type=container' --filter 'event=start' --filter 'event=die' --filter 'event=destroy' --format '{{json .}}'"
+
           wrapped_cmd = wrap_sudo(event_cmd, state.profile.password)
 
           case state.ssh_client.exec(state.conn_ref, events_channel_id, wrapped_cmd) do
@@ -874,14 +877,6 @@ defmodule Caudata.ServerWorker do
         {:ok, metrics_channel_id} ->
           # Run the metrics loop
           metrics_cmd = """
-          if command -v docker >/dev/null 2>&1; then
-            (sudo -n docker stats --format "CONTAINER_METRICS: {{.ID}} {{.CPUPerc}} {{.MemUsage}}" || docker stats --format "CONTAINER_METRICS: {{.ID}} {{.CPUPerc}} {{.MemUsage}}") 2>/dev/null &
-            docker_pid=$!
-          fi
-
-          # Clean up background docker stats process when this script exits
-          trap '[ -n "$docker_pid" ] && kill "$docker_pid" 2>/dev/null' EXIT HUP INT TERM
-
           prev_total=0
           prev_idle=0
           disk_info="0 0 0"
@@ -1018,7 +1013,13 @@ defmodule Caudata.ServerWorker do
   end
 
   defp handle_metrics_line(line, state) do
-    case String.split(line, " ", trim: true) do
+    clean_line =
+      line
+      |> String.replace(~r/\e\[[0-9;]*[a-zA-Z]/, "")
+      |> String.replace("\r", "")
+      |> String.trim()
+
+    case String.split(clean_line, " ", trim: true) do
       ["METRICS:", cpu, ram, total_ram, used_ram, total_disk_kb, used_disk_kb, _disk_pct] ->
         try do
           cpu_val = String.to_integer(cpu)
@@ -1058,23 +1059,34 @@ defmodule Caudata.ServerWorker do
           _ -> state
         end
 
-      ["CONTAINER_METRICS:", id, cpu_val, used_val, "/", limit_val] ->
-        updated_containers =
-          Enum.map(state.containers, fn container ->
-            if String.starts_with?(container.id, id) or String.starts_with?(id, container.id) do
-              container
-              |> Map.put(:cpu_text, cpu_val)
-              |> Map.put(:ram_text, "#{used_val} / #{limit_val}")
-            else
-              container
-            end
-          end)
+      ["CONTAINER_METRICS:", id, cpu_val | mem_parts] ->
+        mem_str = Enum.join(mem_parts, " ")
 
-        if updated_containers != state.containers do
-          broadcast_containers(state.profile.id, updated_containers)
-          %{state | containers: updated_containers}
-        else
-          state
+        case String.split(mem_str, "/", parts: 2) do
+          [used_val, limit_val] ->
+            used_val = String.trim(used_val)
+            limit_val = String.trim(limit_val)
+
+            updated_containers =
+              Enum.map(state.containers, fn container ->
+                if String.starts_with?(container.id, id) or String.starts_with?(id, container.id) do
+                  container
+                  |> Map.put(:cpu_text, cpu_val)
+                  |> Map.put(:ram_text, "#{used_val} / #{limit_val}")
+                else
+                  container
+                end
+              end)
+
+            if updated_containers != state.containers do
+              broadcast_containers(state.profile.id, updated_containers)
+              %{state | containers: updated_containers}
+            else
+              state
+            end
+
+          _ ->
+            state
         end
 
       _ ->
@@ -1190,116 +1202,132 @@ defmodule Caudata.ServerWorker do
   defp parse_discovery_output(buffer) do
     lines = String.split(buffer, ["\r\n", "\n"])
 
-    has_headers = Enum.any?(lines, fn line ->
-      trimmed = String.trim(line)
-      trimmed in ["===DOCKER===", "===OS===", "===SYSTEMD===", "===LAUNCHD==="]
-    end)
+    has_headers =
+      Enum.any?(lines, fn line ->
+        trimmed = String.trim(line)
+        trimmed in ["===DOCKER===", "===OS===", "===SYSTEMD===", "===LAUNCHD==="]
+      end)
 
     if has_headers do
       initial_state = %{
-      section: nil,
-      docker_lines: [],
-      os: nil,
-      systemd_lines: [],
-      launchd_lines: []
-    }
+        section: nil,
+        docker_lines: [],
+        os: nil,
+        systemd_lines: [],
+        launchd_lines: []
+      }
 
-    parsed =
-      Enum.reduce(lines, initial_state, fn line, acc ->
-        trimmed = String.trim(line)
+      parsed =
+        Enum.reduce(lines, initial_state, fn line, acc ->
+          trimmed = String.trim(line)
 
-        case trimmed do
-          "===DOCKER===" -> %{acc | section: :docker}
-          "===OS===" -> %{acc | section: :os}
-          "===SYSTEMD===" -> %{acc | section: :systemd}
-          "===LAUNCHD===" -> %{acc | section: :launchd}
-          "" -> acc
-          other ->
-            case acc.section do
-              :docker -> %{acc | docker_lines: [other | acc.docker_lines]}
-              :os -> %{acc | os: other}
-              :systemd -> %{acc | systemd_lines: [other | acc.systemd_lines]}
-              :launchd -> %{acc | launchd_lines: [other | acc.launchd_lines]}
-              _ -> acc
-            end
-        end
-      end)
+          case trimmed do
+            "===DOCKER===" ->
+              %{acc | section: :docker}
 
-    docker_containers =
-      parsed.docker_lines
-      |> Enum.reverse()
-      |> Enum.flat_map(fn line ->
-        case Jason.decode(line) do
-          {:ok, %{"ID" => id, "Names" => names} = map} ->
-            [
-              %{
-                id: id,
-                name: names,
-                image: Map.get(map, "Image", ""),
-                status: Map.get(map, "Status", ""),
-                state: Map.get(map, "State", "")
-              }
-            ]
+            "===OS===" ->
+              %{acc | section: :os}
 
-          _ ->
-            []
-        end
-      end)
+            "===SYSTEMD===" ->
+              %{acc | section: :systemd}
 
-    systemd_services =
-      parsed.systemd_lines
-      |> Enum.reverse()
-      |> Enum.flat_map(fn line ->
-        parts = String.split(line, ~r/\s+/, trim: true)
-        case parts do
-          [service_name | _] ->
-            if String.ends_with?(service_name, ".service") do
+            "===LAUNCHD===" ->
+              %{acc | section: :launchd}
+
+            "" ->
+              acc
+
+            other ->
+              case acc.section do
+                :docker -> %{acc | docker_lines: [other | acc.docker_lines]}
+                :os -> %{acc | os: other}
+                :systemd -> %{acc | systemd_lines: [other | acc.systemd_lines]}
+                :launchd -> %{acc | launchd_lines: [other | acc.launchd_lines]}
+                _ -> acc
+              end
+          end
+        end)
+
+      docker_containers =
+        parsed.docker_lines
+        |> Enum.reverse()
+        |> Enum.flat_map(fn line ->
+          case Jason.decode(line) do
+            {:ok, %{"ID" => id, "Names" => names} = map} ->
               [
                 %{
-                  id: "systemd:#{service_name}",
-                  name: service_name,
-                  image: "systemd",
-                  status: "active",
-                  state: "running"
+                  id: id,
+                  name: names,
+                  image: Map.get(map, "Image", ""),
+                  status: Map.get(map, "Status", ""),
+                  state: Map.get(map, "State", "")
                 }
               ]
-            else
-              []
-            end
-          _ ->
-            []
-        end
-      end)
 
-    launchd_services =
-      parsed.launchd_lines
-      |> Enum.reverse()
-      |> Enum.flat_map(fn line ->
-        parts = String.split(line, ~r/\s+/, trim: true)
-        case parts do
-          [_pid, _status, label] ->
-            if label != "Label" do
-              [
-                %{
-                  id: "launchd:#{label}",
-                  name: label,
-                  image: "launchd",
-                  status: "active",
-                  state: "running"
-                }
-              ]
-            else
+            _ ->
               []
-            end
-          _ ->
-            []
-        end
-      end)
+          end
+        end)
 
-    Enum.uniq_by(docker_containers ++ systemd_services ++ launchd_services, & &1.id)
+      systemd_services =
+        parsed.systemd_lines
+        |> Enum.reverse()
+        |> Enum.flat_map(fn line ->
+          parts = String.split(line, ~r/\s+/, trim: true)
+
+          case parts do
+            [service_name | _] ->
+              if String.ends_with?(service_name, ".service") do
+                [
+                  %{
+                    id: "systemd:#{service_name}",
+                    name: service_name,
+                    image: "systemd",
+                    status: "active",
+                    state: "running"
+                  }
+                ]
+              else
+                []
+              end
+
+            _ ->
+              []
+          end
+        end)
+
+      launchd_services =
+        parsed.launchd_lines
+        |> Enum.reverse()
+        |> Enum.flat_map(fn line ->
+          parts = String.split(line, ~r/\s+/, trim: true)
+
+          case parts do
+            [_pid, _status, label] ->
+              if label != "Label" do
+                [
+                  %{
+                    id: "launchd:#{label}",
+                    name: label,
+                    image: "launchd",
+                    status: "active",
+                    state: "running"
+                  }
+                ]
+              else
+                []
+              end
+
+            _ ->
+              []
+          end
+        end)
+
+      Enum.uniq_by(docker_containers ++ systemd_services ++ launchd_services, & &1.id)
     else
       Enum.flat_map(lines, fn line ->
         trimmed = String.trim(line)
+
         case Jason.decode(trimmed) do
           {:ok, %{"ID" => id, "Names" => names} = map} ->
             [
@@ -1311,6 +1339,7 @@ defmodule Caudata.ServerWorker do
                 state: Map.get(map, "State", "")
               }
             ]
+
           _ ->
             []
         end
@@ -1355,7 +1384,6 @@ defmodule Caudata.ServerWorker do
       {:containers_updated, source_id, containers}
     )
   end
-
 
   defp maybe_put(map, source, key) do
     if Map.has_key?(source, key), do: Map.put(map, key, Map.get(source, key)), else: map
@@ -1448,7 +1476,6 @@ defmodule Caudata.ServerWorker do
     }
   end
 
-
   defp container_category(container) do
     id_str = to_string(container.id)
     image = container.image
@@ -1457,7 +1484,8 @@ defmodule Caudata.ServerWorker do
       image == "file" or String.starts_with?(id_str, "file:") ->
         3
 
-      image in ["systemd", "launchd"] or String.starts_with?(id_str, "systemd:") or String.starts_with?(id_str, "launchd:") ->
+      image in ["systemd", "launchd"] or String.starts_with?(id_str, "systemd:") or
+          String.starts_with?(id_str, "launchd:") ->
         2
 
       true ->
@@ -1465,12 +1493,154 @@ defmodule Caudata.ServerWorker do
     end
   end
 
+  defp cancel_log_stream_timer(state) do
+    if state.log_stream_timer do
+      Process.cancel_timer(state.log_stream_timer)
+    end
+
+    %{state | log_stream_timer: nil}
+  end
+
+  defp do_start_log_streaming(state) do
+    if is_nil(state.conn_ref) or is_nil(state.active_container_id) do
+      state
+    else
+      case Map.fetch(state.container_pids, state.active_container_id) do
+        {:ok, pid} ->
+          # Check and close oldest stream if we are about to open a new channel
+          target_status = Caudata.ContainerWorker.get_streaming_status(pid)
+
+          if not target_status.streaming? do
+            active_streams =
+              state.container_pids
+              |> Enum.filter(fn {_id, c_pid} -> Process.alive?(c_pid) end)
+              |> Enum.map(fn {id, c_pid} ->
+                case Caudata.ContainerWorker.get_streaming_status(c_pid) do
+                  %{streaming?: true, opened_at: opened_at} ->
+                    {id, c_pid, opened_at}
+
+                  _ ->
+                    nil
+                end
+              end)
+              |> Enum.reject(&is_nil/1)
+
+            if length(active_streams) >= @max_active_streams do
+              case Enum.min_by(active_streams, fn {_id, _c_pid, opened_at} -> opened_at end, fn ->
+                     nil
+                   end) do
+                nil ->
+                  :ok
+
+                {old_id, old_pid, _opened_at} ->
+                  Logger.info(
+                    "Max active channels (#{@max_active_streams}) reached. Closing oldest channel for container #{old_id} to make room."
+                  )
+
+                  Caudata.ContainerWorker.stop_streaming(old_pid)
+              end
+            end
+          end
+
+          try do
+            Caudata.ContainerWorker.start_streaming(pid, state.conn_ref)
+            state
+          catch
+            :exit, reason ->
+              Logger.warning(
+                "Timed out starting log stream for container #{state.active_container_id}: #{inspect(reason)}"
+              )
+
+              state
+          end
+
+        :error ->
+          state
+      end
+    end
+  end
+
+  defp close_container_stats_channel(state) do
+    if state.container_stats_channel_id && state.conn_ref do
+      state.ssh_client.close_channel(state.conn_ref, state.container_stats_channel_id)
+    end
+
+    %{state | container_stats_channel_id: nil, container_stats_buffer: ""}
+  end
+
+  defp cancel_container_stats_timer(state) do
+    if state.container_stats_timer do
+      Process.cancel_timer(state.container_stats_timer)
+    end
+
+    %{state | container_stats_timer: nil}
+  end
+
+  defp update_container_stats_stream(state) do
+    update_container_stats_stream(state, state.stats_debounce_delay)
+  end
+
+  defp update_container_stats_stream(state, delay) do
+    state = cancel_container_stats_timer(state)
+
+    if delay == 0 do
+      start_container_stats_streaming!(state)
+    else
+      timer = Process.send_after(self(), :start_container_stats, delay)
+      %{state | container_stats_timer: timer}
+    end
+  end
+
+  defp docker_container?(nil), do: false
+
+  defp docker_container?(id) do
+    not String.starts_with?(id, "systemd:") and
+      not String.starts_with?(id, "launchd:") and
+      not String.starts_with?(id, "file:")
+  end
+
+  defp start_container_stats_streaming!(state) do
+    state = close_container_stats_channel(state)
+
+    if state.enable_metrics && state.conn_ref && docker_container?(state.active_container_id) do
+      Logger.info("Starting container stats collector for #{state.active_container_id}...")
+
+      case state.ssh_client.open_channel(state.conn_ref) do
+        {:ok, stats_channel_id} ->
+          escaped_id = String.replace(state.active_container_id, "'", "'\\''")
+
+          cmd =
+            "docker stats --format \"CONTAINER_METRICS: {{.ID}} {{.CPUPerc}} {{.MemUsage}}\" '#{escaped_id}'"
+
+          wrapped_cmd = wrap_sudo(cmd, state.profile.password)
+
+          case state.ssh_client.exec(state.conn_ref, stats_channel_id, wrapped_cmd) do
+            :ok ->
+              %{state | container_stats_channel_id: stats_channel_id, container_stats_buffer: ""}
+
+            {:error, reason} ->
+              Logger.warning("Failed to exec container stats command: #{inspect(reason)}")
+              state
+          end
+
+        {:error, reason} ->
+          Logger.warning("Failed to open channel for container stats: #{inspect(reason)}")
+          state
+      end
+    else
+      state
+    end
+  end
+
   defp wrap_sudo(cmd, password) do
     escaped_cmd = String.replace(cmd, "'", "'\\''")
+
     cond do
       password && password != "" ->
         escaped_password = String.replace(password, "'", "'\\''")
+
         "if command -v sudo >/dev/null 2>&1; then exec 3<&0; echo '#{escaped_password}' | sudo -S -p '' sh -c 'exec 0<&3 3<&-; #{escaped_cmd}'; else sh -c '#{escaped_cmd}'; fi"
+
       true ->
         "if command -v sudo >/dev/null 2>&1; then sudo -n sh -c '#{escaped_cmd}' || sh -c '#{escaped_cmd}'; else sh -c '#{escaped_cmd}'; fi"
     end

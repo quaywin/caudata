@@ -3,7 +3,7 @@
 [![Build and Release](https://github.com/quaywin/caudata/actions/workflows/release.yml/badge.svg)](https://github.com/quaywin/caudata/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Caudata** is a zero-config multi-server log streamer built with **Elixir/OTP** and **Ratatui** 🦎.
+**Caudata** is a zero-config multi-server log streamer built with **Elixir/OTP** and [**ex_ratatui**](https://github.com/mcass19/ex_ratatui) 🦎.
 
 It aggregates and streams real-time logs from multiple remote Linux servers securely over SSH config profiles, **without installing any agents** on remote hosts.
 

@@ -35,6 +35,29 @@ defmodule Caudata.CLI do
         run_upgrade()
         System.halt(0)
 
+      ["web" | rest] ->
+        case OptionParser.parse(rest, aliases: [p: :port], strict: [port: :integer]) do
+          {opts, [], []} ->
+            port =
+              opts[:port] ||
+                case System.get_env("PORT") do
+                  nil ->
+                    4000
+
+                  val ->
+                    case Integer.parse(val) do
+                      {num, ""} -> num
+                      _ -> 4000
+                    end
+                end
+
+            {:web, port}
+
+          _ ->
+            IO.puts(:stderr, "Invalid web options. Usage: caudata web [--port PORT] [-p PORT]")
+            System.halt(1)
+        end
+
       _ ->
         IO.puts(:stderr, "Unrecognized arguments: #{Enum.join(args, " ")}")
         print_help()
@@ -53,13 +76,18 @@ defmodule Caudata.CLI do
 
     Usage:
       caudata [options]
+      caudata web [web_options]
       caudata upgrade
 
     Options:
       -h, --help      Show this help message
       -v, --version   Show version information
 
+    Web Options:
+      -p, --port      Port to run the web server on (default: 4000)
+
     Commands:
+      web             Run the web UI server
       upgrade         Check for and install the latest version of Caudata
     """)
   end

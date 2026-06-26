@@ -87,6 +87,14 @@ caudata --help
 # Show current version
 caudata --version
 
+# Run the web UI server on port 4000 (default)
+caudata web
+
+# Run the web UI server on a custom port
+caudata web --port 8080
+# or
+caudata web -p 8080
+
 # Automatically upgrade to the latest release binary
 caudata upgrade
 ```

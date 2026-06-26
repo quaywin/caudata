@@ -1,5 +1,5 @@
 defmodule Caudata.ContainerWorker do
-  use GenServer, restart: :transient
+  use GenServer, restart: :temporary
   require Logger
   alias Caudata.LogStore
 

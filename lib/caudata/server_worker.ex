@@ -1,5 +1,5 @@
 defmodule Caudata.ServerWorker do
-  use GenServer, restart: :transient
+  use GenServer, restart: :temporary
   require Logger
 
   @max_reconnect_delay 30_000

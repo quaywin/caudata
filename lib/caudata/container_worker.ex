@@ -332,21 +332,37 @@ defmodule Caudata.ContainerWorker do
             String.starts_with?(state.container_id, "file:") ->
               "file:" <> path = state.container_id
               escaped_path = String.replace(path, "'", "'\\\'\''")
-              build_log_cmd("tail -n #{state.tail_limit || 100} -F \"#{escaped_path}\"", state.password)
+
+              build_log_cmd(
+                "tail -n #{state.tail_limit || 100} -F \"#{escaped_path}\"",
+                state.password
+              )
 
             String.starts_with?(state.container_id, "systemd:") ->
               "systemd:" <> service_name = state.container_id
               escaped_service = String.replace(service_name, "'", "'\\\'\''")
-              build_log_cmd("journalctl -u \"#{escaped_service}\" -f -n #{state.tail_limit || 100}", state.password)
+
+              build_log_cmd(
+                "journalctl -u \"#{escaped_service}\" -f -n #{state.tail_limit || 100}",
+                state.password
+              )
 
             String.starts_with?(state.container_id, "launchd:") ->
               "launchd:" <> service_name = state.container_id
               escaped_service = String.replace(service_name, "'", "'\\\'\''")
-              build_log_cmd("log stream --predicate \"process == \\\"#{escaped_service}\\\"\"", state.password)
+
+              build_log_cmd(
+                "log stream --predicate \"process == \\\"#{escaped_service}\\\"\"",
+                state.password
+              )
 
             true ->
               escaped_container_id = String.replace(state.container_id, "'", "'\\\'\''")
-              build_log_cmd("docker logs -t --follow --tail #{state.tail_limit || 1000} #{escaped_container_id}", state.password)
+
+              build_log_cmd(
+                "docker logs -t --follow --tail #{state.tail_limit || 1000} #{escaped_container_id}",
+                state.password
+              )
           end
 
         case state.ssh_client.exec(conn_ref, channel_id, log_cmd) do
@@ -422,11 +438,21 @@ defmodule Caudata.ContainerWorker do
       password && password != "" ->
         escaped_password = String.replace(password, "'", "'\\\'\''")
         escaped_cmd = String.replace(base_cmd, "'", "'\\\'\''")
-        "sh -c '''exec 3<&0; echo '\''" <> escaped_password <> "'\'' | sudo -S -p \"\" sh -c '\''exec 0<&3 3<&-; " <> escaped_cmd <> "'\'' & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'''"
+
+        "sh -c '''exec 3<&0; echo '\''" <>
+          escaped_password <>
+          "'\'' | sudo -S -p \"\" sh -c '\''exec 0<&3 3<&-; " <>
+          escaped_cmd <>
+          "'\'' & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'''"
 
       true ->
         escaped_cmd = String.replace(base_cmd, "'", "'\\\'\''")
-        "sh -c '''if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then exec sudo -n " <> escaped_cmd <> "; else exec " <> escaped_cmd <> "; fi & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'''"
+
+        "sh -c '''if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then exec sudo -n " <>
+          escaped_cmd <>
+          "; else exec " <>
+          escaped_cmd <>
+          "; fi & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'''"
     end
   end
 end

@@ -14,7 +14,10 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
 
     enabled_containers =
       if selected_profile do
-        Caudata.UI.ViewHelper.get_enabled_containers(selected_profile, Map.get(state.containers, selected_profile.id, []))
+        Caudata.UI.ViewHelper.get_enabled_containers(
+          selected_profile,
+          Map.get(state.containers, selected_profile.id, [])
+        )
       else
         []
       end
@@ -42,11 +45,14 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
               container.image == "file" or String.starts_with?(to_string(container.id), "file:")
 
             container_image = Map.get(container, :image)
+
             is_systemd =
-              container_image == "systemd" or String.starts_with?(to_string(container.id), "systemd:")
+              container_image == "systemd" or
+                String.starts_with?(to_string(container.id), "systemd:")
 
             is_launchd =
-              container_image == "launchd" or String.starts_with?(to_string(container.id), "launchd:")
+              container_image == "launchd" or
+                String.starts_with?(to_string(container.id), "launchd:")
 
             {icon, icon_color} =
               cond do

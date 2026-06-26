@@ -247,6 +247,7 @@ defmodule Caudata.UI.ViewHelper do
     |> Stream.filter(fn {item, _idx} -> item == first_new end)
     |> Enum.find_value(fn {_item, idx} ->
       remaining_old = Enum.drop(old_logs, idx)
+
       if List.starts_with?(new_logs, remaining_old) do
         idx
       else
@@ -301,9 +302,11 @@ defmodule Caudata.UI.ViewHelper do
       Enum.filter(containers, fn c ->
         id_str = to_string(c.id)
         image = Map.get(c, :image)
-        is_service = image in ["systemd", "launchd"] or
-          String.starts_with?(id_str, "systemd:") or
-          String.starts_with?(id_str, "launchd:")
+
+        is_service =
+          image in ["systemd", "launchd"] or
+            String.starts_with?(id_str, "systemd:") or
+            String.starts_with?(id_str, "launchd:")
 
         if is_service do
           id_str in enabled_services or to_string(c.name) in enabled_services

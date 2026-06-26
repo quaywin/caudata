@@ -13,7 +13,10 @@ defmodule Caudata.UI.Components.Sidebar.ContainerInfo do
 
     enabled_containers =
       if selected_profile do
-        Caudata.UI.ViewHelper.get_enabled_containers(selected_profile, Map.get(state.containers, selected_profile.id, []))
+        Caudata.UI.ViewHelper.get_enabled_containers(
+          selected_profile,
+          Map.get(state.containers, selected_profile.id, [])
+        )
       else
         []
       end

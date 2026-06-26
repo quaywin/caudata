@@ -104,6 +104,8 @@ defmodule Caudata.UI.App do
       settings_global_capacity: "1000",
       settings_input_active: false,
       settings_input_value: "",
+      settings_service_search: "",
+      settings_service_search_active: false,
       settings_status_msg: nil,
       logs_dirty: true,
       logs_full_screen: false,

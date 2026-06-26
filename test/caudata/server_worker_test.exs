@@ -1155,7 +1155,9 @@ defmodule Caudata.ServerWorkerTest do
     Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
 
     {:ok, worker_pid} =
-      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_metrics: false, enable_events: false}})
+      start_supervised(
+        {ServerWorker, {profile, ssh_client: Mock, enable_metrics: false, enable_events: false}}
+      )
 
     assert_receive :opened_list_channel, 1000
 
@@ -1226,8 +1228,10 @@ defmodule Caudata.ServerWorkerTest do
               3 -> :dummy_stats_channel
               _ -> :dummy_other_channel
             end
+
           {channel, count + 1}
         end)
+
       {:ok, channel}
     end)
     |> stub(:exec, fn :dummy_conn, _chan_id, cmd ->
@@ -1235,15 +1239,19 @@ defmodule Caudata.ServerWorkerTest do
         String.contains?(cmd, "docker ps") ->
           send(test_pid, :opened_list_channel)
           :ok
+
         String.contains?(cmd, "docker stats") ->
           send(test_pid, :opened_stats_channel)
           :ok
+
         String.contains?(cmd, "METRICS:") ->
           send(test_pid, :opened_metrics_channel)
           :ok
+
         String.contains?(cmd, "docker logs") ->
           send(test_pid, :opened_log_channel)
           :ok
+
         true ->
           :ok
       end
@@ -1257,7 +1265,13 @@ defmodule Caudata.ServerWorkerTest do
     # Start worker with enable_metrics: true, and custom debounce delays for test
     {:ok, worker_pid} =
       start_supervised(
-        {ServerWorker, {profile, ssh_client: Mock, enable_metrics: true, enable_events: false, log_debounce_delay: 300, stats_debounce_delay: 300}}
+        {ServerWorker,
+         {profile,
+          ssh_client: Mock,
+          enable_metrics: true,
+          enable_events: false,
+          log_debounce_delay: 300,
+          stats_debounce_delay: 300}}
       )
 
     assert_receive :opened_list_channel, 1000

@@ -8,7 +8,20 @@ defmodule Caudata.ServerWorker do
   @health_check_interval 15_000
   @activity_timeout 30_000
 
-  @discovery_cmd "echo '===DOCKER==='; docker ps --no-trunc --format '{{json .}}' 2>/dev/null; echo '===OS==='; uname -s; echo '===SYSTEMD==='; if command -v systemctl >/dev/null 2>&1; then systemctl list-units --type=service --no-legend --no-pager 2>/dev/null; fi; echo '===LAUNCHD==='; if command -v launchctl >/dev/null 2>&1; then launchctl list 2>/dev/null; for dir in '/Library/LaunchDaemons' '/Library/LaunchAgents' \"\$HOME/Library/LaunchAgents\"; do if [ -d \"\$dir\" ]; then find \"\$dir\" -name '*.plist' -maxdepth 1 2>/dev/null | while read -r plist; do label=\$(basename \"\$plist\" .plist); echo \"- 0 \$label\"; done; fi; done; fi"
+  @docker_discovery_cmd "echo '===DOCKER==='; docker ps --no-trunc --format '{{json .}}' 2>/dev/null"
+  @os_discovery_cmd "echo '===OS==='; uname -s"
+  @systemd_discovery_cmd "echo '===SYSTEMD==='; if command -v systemctl >/dev/null 2>&1; then systemctl list-units --type=service --no-legend --no-pager 2>/dev/null; fi"
+  @launchd_discovery_cmd "echo '===LAUNCHD==='; if command -v launchctl >/dev/null 2>&1; then launchctl list 2>/dev/null; for dir in '/System/Library/LaunchDaemons' '/Library/LaunchDaemons' '/Library/LaunchAgents' \"$HOME/Library/LaunchAgents\"; do if [ -d \"$dir\" ]; then find \"$dir\" -name '*.plist' -maxdepth 1 2>/dev/null | while read -r plist; do label=$(basename \"$plist\" .plist); echo \"- 0 $label\"; done; fi; done; fi"
+
+  @discovery_cmd Enum.join(
+                   [
+                     @docker_discovery_cmd,
+                     @os_discovery_cmd,
+                     @systemd_discovery_cmd,
+                     @launchd_discovery_cmd
+                   ],
+                   "; "
+                 )
 
   defstruct [
     :profile,
@@ -1635,14 +1648,27 @@ defmodule Caudata.ServerWorker do
   defp wrap_sudo(cmd, password) do
     escaped_cmd = String.replace(cmd, "'", "'\\''")
 
-    cond do
-      password && password != "" ->
-        escaped_password = String.replace(password, "'", "'\\''")
+    inner_script =
+      cond do
+        password && password != "" ->
+          escaped_password = String.replace(password, "'", "'\\''")
 
-        "if command -v sudo >/dev/null 2>&1; then exec 3<&0; echo '#{escaped_password}' | sudo -S -p '' sh -c 'exec 0<&3 3<&-; #{escaped_cmd}'; else sh -c '#{escaped_cmd}'; fi"
+          "if command -v sudo >/dev/null 2>&1; then exec 3<&0; echo '#{escaped_password}' | sudo -S -p '' sh -c 'exec 0<&3 3<&-; #{escaped_cmd}' 2>/dev/null || sh -c '#{escaped_cmd}'; else sh -c '#{escaped_cmd}'; fi"
 
-      true ->
-        "if command -v sudo >/dev/null 2>&1; then sudo -n sh -c '#{escaped_cmd}' || sh -c '#{escaped_cmd}'; else sh -c '#{escaped_cmd}'; fi"
-    end
+        true ->
+          "if command -v sudo >/dev/null 2>&1; then sudo -n sh -c '#{escaped_cmd}' 2>/dev/null || sh -c '#{escaped_cmd}'; else sh -c '#{escaped_cmd}'; fi"
+      end
+
+    # Wrap the entire script in sh -c "..." to ensure compatibility with
+    # any login shell (fish, zsh, bash, etc.) - the login shell only sees
+    # a simple `sh -c "..."` command, not the POSIX syntax inside.
+    escaped_for_dq =
+      inner_script
+      |> String.replace("\\", "\\\\")
+      |> String.replace("\"", "\\\"")
+      |> String.replace("$", "\\$")
+      |> String.replace("`", "\\`")
+
+    "sh -c \"#{escaped_for_dq}\""
   end
 end

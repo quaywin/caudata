@@ -60,10 +60,19 @@ defmodule Caudata.UI.Components.Footer do
                       ]
 
                     :services ->
-                      [
-                        Span.new("[⇅/j/k] Select Service ", style: %Style{fg: :cyan}),
-                        Span.new("[Space] Toggle Service ", style: %Style{fg: :green})
-                      ]
+                      if state.settings_service_search_active do
+                        [
+                          Span.new("[Type] Filter ", style: %Style{fg: :cyan}),
+                          Span.new("[Enter] Apply ", style: %Style{fg: :green}),
+                          Span.new("[Esc] Close ", style: %Style{fg: :red})
+                        ]
+                      else
+                        [
+                          Span.new("[⇅/j/k] Select Service ", style: %Style{fg: :cyan}),
+                          Span.new("[Space] Toggle Service ", style: %Style{fg: :green}),
+                          Span.new("[/] Search/Filter ", style: %Style{fg: :yellow})
+                        ]
+                      end
 
                     :custom_logs ->
                       [

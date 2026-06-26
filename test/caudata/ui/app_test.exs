@@ -875,6 +875,97 @@ defmodule Caudata.UI.AppTest do
     refute "systemd:nginx.service" in profile_enabled.enabled_services
   end
 
+  test "handle_event/2 filters system services by search query" do
+    {:ok, state} = App.mount([])
+
+    profile = %Caudata.Profile{
+      id: "search-services-server",
+      host_name: "5.5.5.5",
+      host_pattern: "search-services-server",
+      enabled_services: []
+    }
+
+    _ =
+      Caudata.ConfigManager.add_manual_profile(%{
+        id: "search-services-server",
+        host_pattern: "search-services-server"
+      })
+
+    on_exit(fn ->
+      _ = Caudata.ConfigManager.delete_profile("search-services-server")
+    end)
+
+    state = %{
+      state
+      | profiles: [profile],
+        modal_visible: true,
+        modal_type: :settings,
+        settings_selected_profile_idx: 0,
+        settings_focus: :services,
+        settings_service_idx: 0,
+        containers: %{
+          "search-services-server" => [
+            %{
+              id: "systemd:nginx.service",
+              name: "nginx.service",
+              image: "systemd",
+              status: "active"
+            },
+            %{id: "systemd:ssh.service", name: "ssh.service", image: "systemd", status: "active"},
+            %{
+              id: "systemd:docker.service",
+              name: "docker.service",
+              image: "systemd",
+              status: "active"
+            }
+          ]
+        }
+    }
+
+    # Press "/" to enter search mode
+    event_slash = %ExRatatui.Event.Key{code: "/", modifiers: []}
+    assert {:noreply, state_searching} = App.handle_event(event_slash, state)
+    assert state_searching.settings_service_search_active
+
+    # Type "nginx" by sending chars one at a time
+    state_with_query =
+      Enum.reduce(String.graphemes("nginx"), state_searching, fn ch, acc ->
+        event = %ExRatatui.Event.Key{code: ch, modifiers: []}
+        {:noreply, next} = App.handle_event(event, acc)
+        next
+      end)
+
+    assert state_with_query.settings_service_search == "nginx"
+    assert state_with_query.settings_service_search_active
+
+    # Press Enter to apply filter and exit search mode (query retained)
+    event_enter = %ExRatatui.Event.Key{code: "enter", modifiers: []}
+    assert {:noreply, state_applied} = App.handle_event(event_enter, state_with_query)
+
+    assert state_applied.settings_service_search == "nginx"
+    refute state_applied.settings_service_search_active
+
+    # To modify the filter: press "/" to re-enter search mode (keeps existing query)
+    event_slash_again = %ExRatatui.Event.Key{code: "/", modifiers: []}
+    assert {:noreply, state_editing} = App.handle_event(event_slash_again, state_applied)
+    assert state_editing.settings_service_search_active
+    assert state_editing.settings_service_search == "nginx"
+
+    # Backspace deletes the last char one at a time
+    event_bs = %ExRatatui.Event.Key{code: "backspace", modifiers: []}
+    assert {:noreply, state_bs} = App.handle_event(event_bs, state_editing)
+    assert state_bs.settings_service_search == "ngin"
+
+    # Setup state with broad filter "service" matching all 3 services so we can navigate down
+    state_broad = %{state_editing | settings_service_search: "service"}
+
+    # Press down while searching: should navigate list but keep search active
+    event_down = %ExRatatui.Event.Key{code: "down", modifiers: []}
+    assert {:noreply, state_navigated} = App.handle_event(event_down, state_broad)
+    assert state_navigated.settings_service_search_active
+    assert state_navigated.settings_service_idx == 1
+  end
+
   test "handle_info/2 handles validation result with connection errors by saving the path anyway" do
     {:ok, state} = App.mount([])
 

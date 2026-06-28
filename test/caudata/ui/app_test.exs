@@ -1421,4 +1421,49 @@ defmodule Caudata.UI.AppTest do
       assert tick3.notification == nil
     end
   end
+
+  test "handle_info/2 containers_updated auto-selects the first container if none is selected" do
+    server_id = "test-server-auto-select"
+    {:ok, state} = App.mount([])
+
+    profile =
+      Caudata.Profile.new(%{
+        id: server_id,
+        host_pattern: "local-server",
+        host_name: "local",
+        user: "",
+        port: 0,
+        is_local: true
+      })
+
+    containers = [
+      %{
+        id: "container1",
+        name: "test-container1",
+        image: "nginx",
+        status: "Up",
+        state: "running"
+      },
+      %{
+        id: "container2",
+        name: "test-container2",
+        image: "alpine",
+        status: "Up",
+        state: "running"
+      }
+    ]
+
+    state = %{
+      state
+      | profiles: [profile],
+        selected_profile_id: server_id,
+        selected_container_id: nil
+    }
+
+    msg = {:containers_updated, server_id, containers}
+    assert {:noreply, updated_state} = App.handle_info(msg, state)
+
+    assert updated_state.selected_container_id == "container1"
+    assert updated_state.logs_dirty == true
+  end
 end

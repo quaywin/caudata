@@ -397,7 +397,10 @@ defmodule Caudata.ContainerWorker do
     state = flush_pending_logs(state)
 
     if state.channel_id && state.conn_ref do
-      Logger.info("Closing log channel #{state.channel_id} for container #{state.container_id}")
+      Logger.info(
+        "Closing log channel #{inspect(state.channel_id)} for container #{state.container_id}"
+      )
+
       state.ssh_client.close_channel(state.conn_ref, state.channel_id)
     end
 
@@ -436,23 +439,34 @@ defmodule Caudata.ContainerWorker do
   defp build_log_cmd(base_cmd, password) do
     cond do
       password && password != "" ->
-        escaped_password = String.replace(password, "'", "'\\\'\''")
-        escaped_cmd = String.replace(base_cmd, "'", "'\\\'\''")
+        escaped_password = String.replace(password, "'", "'\\''")
+        escaped_cmd = String.replace(base_cmd, "'", "'\\''")
 
-        "sh -c '''exec 3<&0; echo '\''" <>
-          escaped_password <>
-          "'\'' | sudo -S -p \"\" sh -c '\''exec 0<&3 3<&-; " <>
-          escaped_cmd <>
-          "'\'' & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'''"
+        inner_script =
+          "if true <&0 2>/dev/null; then exec 3<&0; fi; " <>
+            "echo '#{escaped_password}' | sudo -S -p '' sh -c 'if true <&3 2>/dev/null; then exec 0<&3 3<&-; fi; exec #{escaped_cmd}' & pid=$!; " <>
+            "trap 'kill $pid 2>/dev/null' EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null"
+
+        escaped_for_dq =
+          inner_script
+          |> String.replace("\\", "\\\\")
+          |> String.replace("\"", "\\\"")
+          |> String.replace("$", "\\$")
+          |> String.replace("`", "\\`")
+
+        "sh -c \"#{escaped_for_dq}\""
 
       true ->
-        escaped_cmd = String.replace(base_cmd, "'", "'\\\'\''")
+        escaped_cmd = String.replace(base_cmd, "'", "'\\''")
+        inner_script = "if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then exec sudo -n #{escaped_cmd}; else exec #{escaped_cmd}; fi & pid=$!; trap 'kill $pid 2>/dev/null' EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null"
+        escaped_for_dq =
+          inner_script
+          |> String.replace("\\", "\\\\")
+          |> String.replace("\"", "\\\"")
+          |> String.replace("$", "\\$")
+          |> String.replace("`", "\\`")
 
-        "sh -c '''if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then exec sudo -n " <>
-          escaped_cmd <>
-          "; else exec " <>
-          escaped_cmd <>
-          "; fi & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'''"
+        "sh -c \"#{escaped_for_dq}\""
     end
   end
 end

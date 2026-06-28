@@ -189,14 +189,23 @@ defmodule Caudata.UI.Components.SettingsModal do
     ]
   end
 
-  defp render_connection_tab(state, _profile) do
-    fields_config = [
-      {"host_name", "Host/IP (required):"},
-      {"port", "Port:"},
-      {"user", "User:"},
-      {"identity_file", "Identity File (path):"},
-      {"password", "Password:"}
-    ]
+  defp render_connection_tab(state, profile) do
+    is_local = Map.get(profile, :is_local, false)
+
+    fields_config =
+      if is_local do
+        [
+          {"password", "Password:"}
+        ]
+      else
+        [
+          {"host_name", "Host/IP (required):"},
+          {"port", "Port:"},
+          {"user", "User:"},
+          {"identity_file", "Identity File (path):"},
+          {"password", "Password:"}
+        ]
+      end
 
     form_lines =
       Enum.with_index(fields_config)
@@ -221,8 +230,9 @@ defmodule Caudata.UI.Components.SettingsModal do
         ]
       end)
 
-    save_active = state.settings_connection_focus_idx == 5
-    cancel_active = state.settings_connection_focus_idx == 6
+    num_fields = length(fields_config)
+    save_active = state.settings_connection_focus_idx == num_fields
+    cancel_active = state.settings_connection_focus_idx == num_fields + 1
 
     buttons_line =
       Line.new([
@@ -777,13 +787,19 @@ defmodule Caudata.UI.Components.SettingsModal do
 
                     connection_fields =
                       if profile do
-                        %{
-                          "host_name" => profile.host_name || "",
-                          "port" => to_string(profile.port || 22),
-                          "user" => profile.user || "",
-                          "identity_file" => profile.identity_file || "",
-                          "password" => profile.password || ""
-                        }
+                        if Map.get(profile, :is_local, false) do
+                          %{
+                            "password" => profile.password || ""
+                          }
+                        else
+                          %{
+                            "host_name" => profile.host_name || "",
+                            "port" => to_string(profile.port || 22),
+                            "user" => profile.user || "",
+                            "identity_file" => profile.identity_file || "",
+                            "password" => profile.password || ""
+                          }
+                        end
                       else
                         %{}
                       end
@@ -846,13 +862,19 @@ defmodule Caudata.UI.Components.SettingsModal do
 
                     connection_fields =
                       if profile do
-                        %{
-                          "host_name" => profile.host_name || "",
-                          "port" => to_string(profile.port || 22),
-                          "user" => profile.user || "",
-                          "identity_file" => profile.identity_file || "",
-                          "password" => profile.password || ""
-                        }
+                        if Map.get(profile, :is_local, false) do
+                          %{
+                            "password" => profile.password || ""
+                          }
+                        else
+                          %{
+                            "host_name" => profile.host_name || "",
+                            "port" => to_string(profile.port || 22),
+                            "user" => profile.user || "",
+                            "identity_file" => profile.identity_file || "",
+                            "password" => profile.password || ""
+                          }
+                        end
                       else
                         %{}
                       end
@@ -1234,7 +1256,15 @@ defmodule Caudata.UI.Components.SettingsModal do
   end
 
   defp handle_connection_key(key, key_data, model, profile) do
-    fields = ["host_name", "port", "user", "identity_file", "password", :save, :cancel]
+    is_local = Map.get(profile, :is_local, false)
+
+    fields =
+      if is_local do
+        ["password", :save, :cancel]
+      else
+        ["host_name", "port", "user", "identity_file", "password", :save, :cancel]
+      end
+
     num_fields = length(fields)
     active_idx = model.settings_connection_focus_idx
     active_item = Enum.at(fields, active_idx)
@@ -1258,13 +1288,20 @@ defmodule Caudata.UI.Components.SettingsModal do
         case active_item do
           :cancel ->
             # Revert fields to profile defaults and go back to :servers tab
-            reverted_fields = %{
-              "host_name" => profile.host_name || "",
-              "port" => to_string(profile.port || 22),
-              "user" => profile.user || "",
-              "identity_file" => profile.identity_file || "",
-              "password" => profile.password || ""
-            }
+            reverted_fields =
+              if is_local do
+                %{
+                  "password" => profile.password || ""
+                }
+              else
+                %{
+                  "host_name" => profile.host_name || "",
+                  "port" => to_string(profile.port || 22),
+                  "user" => profile.user || "",
+                  "identity_file" => profile.identity_file || "",
+                  "password" => profile.password || ""
+                }
+              end
 
             {%{
                model
@@ -1343,53 +1380,79 @@ defmodule Caudata.UI.Components.SettingsModal do
   end
 
   defp save_connection_settings(model, profile) do
-    host_name = String.trim(model.settings_connection_fields["host_name"] || "")
-    port_str = String.trim(model.settings_connection_fields["port"] || "")
+    if Map.get(profile, :is_local, false) do
+      password = String.trim(model.settings_connection_fields["password"] || "")
+      password = if password == "", do: nil, else: password
 
-    port =
-      case Integer.parse(port_str) do
-        {p, _} -> p
-        _ -> 22
+      updates = %{
+        password: password
+      }
+
+      case Caudata.ConfigManager.update_profile(profile.id, updates) do
+        {:ok, updated_profile} ->
+          new_profiles =
+            Enum.map(model.profiles, fn p ->
+              if p.id == profile.id, do: updated_profile, else: p
+            end)
+
+          {%{
+             model
+             | profiles: new_profiles,
+               settings_status_msg: "Successfully saved connection settings"
+           }, []}
+
+        {:error, reason} ->
+          {%{model | settings_status_msg: "Error saving: #{inspect(reason)}"}, []}
       end
+    else
+      host_name = String.trim(model.settings_connection_fields["host_name"] || "")
+      port_str = String.trim(model.settings_connection_fields["port"] || "")
 
-    user = String.trim(model.settings_connection_fields["user"] || "")
-    user = if user == "", do: nil, else: user
-
-    identity_file = String.trim(model.settings_connection_fields["identity_file"] || "")
-    identity_file = if identity_file == "", do: nil, else: identity_file
-
-    password = String.trim(model.settings_connection_fields["password"] || "")
-    password = if password == "", do: nil, else: password
-
-    cond do
-      host_name == "" ->
-        {%{model | settings_status_msg: "Error: Host/IP is required"}, []}
-
-      true ->
-        updates = %{
-          host_name: host_name,
-          port: port,
-          user: user,
-          identity_file: identity_file,
-          password: password
-        }
-
-        case Caudata.ConfigManager.update_profile(profile.id, updates) do
-          {:ok, updated_profile} ->
-            new_profiles =
-              Enum.map(model.profiles, fn p ->
-                if p.id == profile.id, do: updated_profile, else: p
-              end)
-
-            {%{
-               model
-               | profiles: new_profiles,
-                 settings_status_msg: "Successfully saved connection settings"
-             }, []}
-
-          {:error, reason} ->
-            {%{model | settings_status_msg: "Error saving: #{inspect(reason)}"}, []}
+      port =
+        case Integer.parse(port_str) do
+          {p, _} -> p
+          _ -> 22
         end
+
+      user = String.trim(model.settings_connection_fields["user"] || "")
+      user = if user == "", do: nil, else: user
+
+      identity_file = String.trim(model.settings_connection_fields["identity_file"] || "")
+      identity_file = if identity_file == "", do: nil, else: identity_file
+
+      password = String.trim(model.settings_connection_fields["password"] || "")
+      password = if password == "", do: nil, else: password
+
+      cond do
+        host_name == "" ->
+          {%{model | settings_status_msg: "Error: Host/IP is required"}, []}
+
+        true ->
+          updates = %{
+            host_name: host_name,
+            port: port,
+            user: user,
+            identity_file: identity_file,
+            password: password
+          }
+
+          case Caudata.ConfigManager.update_profile(profile.id, updates) do
+            {:ok, updated_profile} ->
+              new_profiles =
+                Enum.map(model.profiles, fn p ->
+                  if p.id == profile.id, do: updated_profile, else: p
+                end)
+
+              {%{
+                 model
+                 | profiles: new_profiles,
+                   settings_status_msg: "Successfully saved connection settings"
+               }, []}
+
+            {:error, reason} ->
+              {%{model | settings_status_msg: "Error saving: #{inspect(reason)}"}, []}
+          end
+      end
     end
   end
 

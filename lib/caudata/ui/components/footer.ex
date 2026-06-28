@@ -22,7 +22,7 @@ defmodule Caudata.UI.Components.Footer do
                 Span.new("[Esc] Cancel ", style: %Style{fg: :red})
               ]
 
-            :manual_input ->
+            type when type in [:manual_input, :local_input] ->
               [
                 Span.new("[⇅] Navigate fields  ", style: %Style{fg: :yellow}),
                 Span.new("[Type] Edit text ", style: %Style{fg: :cyan}),

@@ -5,9 +5,9 @@
 
 **Caudata** is a zero-config multi-server log streamer built with **Elixir/OTP** and [**ex_ratatui**](https://github.com/mcass19/ex_ratatui) 🦎.
 
-It aggregates and streams real-time logs from multiple remote Linux servers securely over SSH config profiles, **without installing any agents** on remote hosts.
+It aggregates and streams real-time logs from multiple remote Linux servers securely over SSH config profiles, as well as the **local machine**, **without installing any agents** on remote hosts.
 
-*Tired of SSH-ing into 5 different servers just to tail Docker logs? Caudata brings them all into a single, responsive terminal dashboard.*
+*Tired of SSH-ing into 5 different servers just to tail Docker logs? Caudata brings them all (and your local setup) into a single, responsive terminal dashboard.*
 
 ---
 
@@ -20,6 +20,7 @@ It aggregates and streams real-time logs from multiple remote Linux servers secu
 ## 🚀 Key Features
 
 - 🛡️ **Zero-Agent / Secure SSH**: Connects seamlessly using your existing `~/.ssh/config` or custom server configurations. Supports both **SSH key files (private keys)** and **password authentication** securely. No remote agents, no daemon installation, and no extra configuration needed on target servers.
+- 💻 **Local Machine Monitoring**: Monitor containers and services on your local machine using direct port communication (bypassing SSH). Optionally specify your sudo password for commands requiring elevated privileges.
 - 🐳 **Real-Time Docker Discovery & Recovery**: Auto-discovers running Docker containers. Automatically reconnects active log streams when a container is rebuilt or restarted.
 - ⚙️ **System Services Support**: Stream logs from system daemon services running under **Systemd** (Linux) or **Launchd** (macOS).
 - 📄 **Custom Log Paths**: Add and stream specific custom log paths from remote machines.
@@ -63,18 +64,14 @@ mise exec -- mix run --no-halt
 
 ## 📖 Quick Start
 
-1. **Verify SSH Config**: Ensure you have SSH profiles defined in `~/.ssh/config`, for example:
-   ```ssh
-   Host production-server
-       HostName 192.168.1.100
-       User ubuntu
-       IdentityFile ~/.ssh/id_rsa
-   ```
-2. **Start Caudata**:
+1. **Start Caudata**:
    ```bash
    caudata
    ```
-3. **Connect & Stream**: Use the TUI sidebar to select a host, hit `Enter` to connect, and Caudata will auto-discover running Docker containers. Toggle logs using `Space`.
+2. **Add Connections**:
+   - **Remote Server (SSH)**: Caudata automatically scans your `~/.ssh/config`. If you need to add custom servers manually, press `a` or `+` in the TUI, select `+ Manual SSH Connection`, and fill in the details.
+   - **Local Machine**: Press `a` or `+` in the TUI, select `+ Local Machine Connection`, and enter your local sudo password (optional, required if your local Docker or system logs require root permissions).
+3. **Connect & Stream**: Use the TUI sidebar to select a host/local connection, hit `Enter` to connect, and Caudata will auto-discover running Docker containers. Toggle logs using `Space`.
 
 ---
 
@@ -107,7 +104,7 @@ caudata upgrade
 | :--- | :--- |
 | `↑` / `↓` (or `k` / `j`) | Navigate sidebar or lists / Scroll logs up/down |
 | `Enter` | Connect and start log streaming / Confirm action |
-| `a` / `A` / `+` | Open the **Add SSH Connection** modal |
+| `a` / `A` / `+` | Open the **Add Connection** modal |
 | `s` / `S` | Open the **Global Settings** modal |
 | `/` | Enter search mode to filter logs (Regex supported) |
 | `Space` | Toggle options (e.g. enable/disable servers/containers/services) |
@@ -161,6 +158,27 @@ BURRITO_TARGET=macos_aarch64 mix release --overwrite
 ```bash
 mix test
 ```
+
+---
+
+## 🗺️ Alternatives & Similar Projects
+
+If you are looking for other tools to monitor or view logs, here is how **Caudata** compares to existing popular open-source alternatives:
+
+| Project | Interface | Primary Focus | Multi-Server (SSH) | Docker Container Auto-Discovery | Zero-Agent / Zero-Config |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Caudata** | TUI & Web | Agentless Multi-Server Log/Metrics | Yes (native SSH config) | Yes (remote) | Yes |
+| **[MultiTail](https://github.com/folkertvanheusden/multitail)** | TUI | Aggregated file/command logs | Yes (manual pipes) | No | No (requires manual config) |
+| **[Dozzle](https://github.com/amir20/dozzle)** | Web | Docker container logs | Yes (requires agents) | Yes (needs setup) | No |
+| **[lnav](https://github.com/tstack/lnav)** | TUI | Log parsing & SQL query | No (mainly local) | No | Yes (for local files) |
+| **[Lazydocker](https://github.com/jesseduffield/lazydocker)** | TUI | Local Docker management | No | Yes (local only) | Yes (local only) |
+
+### Key Differences
+
+- **[MultiTail](https://github.com/folkertvanheusden/multitail)**: A classic C utility to monitor multiple log files or command outputs. It supports remote servers via command piping (e.g., `multitail -l "ssh host 'tail -f ...'"`), but it doesn't automatically discover docker containers, doesn't retrieve remote resource metrics, and requires manual configuration for host lists.
+- **[Dozzle](https://github.com/amir20/dozzle)**: A beautiful web-based viewer for Docker container logs. Unlike Caudata's TUI, it runs in a browser and requires installing Dozzle agents or exposing the Docker socket on each host. It also doesn't support systemd/launchd or arbitrary remote files.
+- **[lnav (The Log File Navigator)](https://github.com/tstack/lnav)**: A highly advanced local log analyzer. It is amazing for syntax highlighting, chronologically merging logs, and searching them using SQL. However, it does not manage remote connections or stream remote system metrics out of the box.
+- **[Lazydocker](https://github.com/jesseduffield/lazydocker)**: A great TUI for managing docker containers locally. It doesn't aggregate log streams across multiple remote hosts over SSH or handle systemd daemon logs.
 
 ---
 

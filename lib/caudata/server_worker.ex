@@ -105,8 +105,14 @@ defmodule Caudata.ServerWorker do
     Process.flag(:trap_exit, true)
 
     ssh_client =
-      Keyword.get(opts, :ssh_client) ||
-        Application.get_env(:caudata, :ssh_client, Caudata.SSHClient.Native)
+      cond do
+        Map.get(profile, :is_local, false) ->
+          Caudata.LocalClient
+
+        true ->
+          Keyword.get(opts, :ssh_client) ||
+            Application.get_env(:caudata, :ssh_client, Caudata.SSHClient.Native)
+      end
 
     log_delay =
       Keyword.get(opts, :log_debounce_delay) ||
@@ -1117,10 +1123,21 @@ defmodule Caudata.ServerWorker do
 
   defp handle_docker_event(line, state) do
     case Jason.decode(line) do
-      {:ok, %{"status" => status, "id" => id, "Actor" => %{"Attributes" => attributes}}} ->
+      {:ok, data} when is_map(data) ->
+        status = Map.get(data, "Action") || Map.get(data, "status")
+
+        actor = Map.get(data, "Actor") || %{}
+        id = Map.get(actor, "ID") || Map.get(data, "id") || Map.get(data, "ID")
+
+        attributes = Map.get(actor, "Attributes") || %{}
         name = Map.get(attributes, "name")
         image = Map.get(attributes, "image", "")
-        process_parsed_event(state, status, id, name, image)
+
+        if status && id && name do
+          process_parsed_event(state, status, id, name, image)
+        else
+          state
+        end
 
       _ ->
         state
@@ -1653,7 +1670,7 @@ defmodule Caudata.ServerWorker do
         password && password != "" ->
           escaped_password = String.replace(password, "'", "'\\''")
 
-          "if command -v sudo >/dev/null 2>&1; then exec 3<&0; echo '#{escaped_password}' | sudo -S -p '' sh -c 'exec 0<&3 3<&-; #{escaped_cmd}' 2>/dev/null || sh -c '#{escaped_cmd}'; else sh -c '#{escaped_cmd}'; fi"
+          "if command -v sudo >/dev/null 2>&1; then if true <&0 2>/dev/null; then exec 3<&0; fi; echo '#{escaped_password}' | sudo -S -p '' sh -c 'if true <&3 2>/dev/null; then exec 0<&3 3<&-; fi; #{escaped_cmd}' 2>/dev/null || sh -c '#{escaped_cmd}'; else sh -c '#{escaped_cmd}'; fi"
 
         true ->
           "if command -v sudo >/dev/null 2>&1; then sudo -n sh -c '#{escaped_cmd}' 2>/dev/null || sh -c '#{escaped_cmd}'; else sh -c '#{escaped_cmd}'; fi"

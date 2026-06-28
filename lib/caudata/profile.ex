@@ -15,7 +15,8 @@ defmodule Caudata.Profile do
     disabled_containers: [],
     custom_logs: [],
     enabled_services: [],
-    enabled: true
+    enabled: true,
+    is_local: false
   ]
 
   @type t :: %__MODULE__{
@@ -29,7 +30,8 @@ defmodule Caudata.Profile do
           disabled_containers: [String.t()],
           custom_logs: [String.t()],
           enabled_services: [String.t()],
-          enabled: boolean()
+          enabled: boolean(),
+          is_local: boolean()
         }
 
   @doc """
@@ -59,7 +61,8 @@ defmodule Caudata.Profile do
           disabled_containers: [],
           custom_logs: [],
           enabled_services: [],
-          enabled: true
+          enabled: true,
+          is_local: false
         },
         clean_attrs
       )

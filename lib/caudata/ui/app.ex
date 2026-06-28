@@ -302,15 +302,18 @@ defmodule Caudata.UI.App do
             {%{}, %{}}
           end
 
-        {:noreply,
-         %{
-           state
-           | statuses: statuses,
-             containers: containers,
-             metrics: metrics,
-             buffer_sizes: Map.merge(state.buffer_sizes, sizes),
-             drop_counts: Map.merge(state.drop_counts, drops)
-         }}
+        new_state =
+          %{
+            state
+            | statuses: statuses,
+              containers: containers,
+              metrics: metrics,
+              buffer_sizes: Map.merge(state.buffer_sizes, sizes),
+              drop_counts: Map.merge(state.drop_counts, drops)
+          }
+          |> maybe_auto_select_container()
+
+        {:noreply, new_state}
 
       :tick ->
         state = %{state | tick_scheduled: false}
@@ -514,7 +517,9 @@ defmodule Caudata.UI.App do
         {:noreply, %{state | metrics: Map.put(state.metrics, server_id, metrics)}}
 
       {:containers_updated, server_id, containers} ->
-        {:noreply, %{state | containers: Map.put(state.containers, server_id, containers)}}
+        new_state = %{state | containers: Map.put(state.containers, server_id, containers)}
+        new_state = maybe_auto_select_container(new_state)
+        {:noreply, new_state}
 
       {:container_rebuilt, server_id, old_id, new_id} ->
         new_state =
@@ -707,6 +712,30 @@ defmodule Caudata.UI.App do
       %{new_state | logs_dirty: true}
     else
       new_state
+    end
+  end
+
+  defp maybe_auto_select_container(state) do
+    if is_nil(state.selected_container_id) and state.selected_profile_id do
+      profile = Enum.find(state.profiles, &(&1.id == state.selected_profile_id))
+      containers = Map.get(state.containers, state.selected_profile_id, [])
+      enabled_containers = Caudata.UI.ViewHelper.get_enabled_containers(profile, containers)
+
+      case enabled_containers do
+        [first_container | _] ->
+          {new_state, _cmds} =
+            KeyHandler.select_item(
+              {:container, state.selected_profile_id, first_container.id, first_container.name},
+              state
+            )
+
+          adjust_log_subscription(state, new_state)
+
+        _ ->
+          state
+      end
+    else
+      state
     end
   end
 

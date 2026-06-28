@@ -25,11 +25,20 @@ defmodule Caudata.UI.Components.Sidebar.ServerList do
         status_color = ViewHelper.status_color(status)
 
         status_icon =
-          case status do
-            :connected -> "● "
-            :connecting -> "◌ "
-            :disabled -> "⊘ "
-            _ -> "○ "
+          cond do
+            Map.get(profile, :is_local, false) ->
+              case status do
+                :connected -> "■"
+                _ -> "□"
+              end
+
+            true ->
+              case status do
+                :connected -> "●"
+                :connecting -> "◌"
+                :disabled -> "⊘"
+                _ -> "○"
+              end
           end
 
         is_selected = state.selected_profile_id == profile.id
@@ -51,6 +60,7 @@ defmodule Caudata.UI.Components.Sidebar.ServerList do
         Line.new([
           Span.new(prefix, style: style),
           Span.new(status_icon, style: %Style{fg: status_color}),
+          Span.new(" ", style: style),
           Span.new(profile.id, style: style)
         ])
       end)

@@ -97,13 +97,20 @@ defmodule Caudata.UI.KeyHandler do
 
           profile = Enum.at(model.profiles, selected_idx)
 
-          connection_fields = %{
-            "host_name" => profile.host_name || "",
-            "port" => to_string(profile.port || 22),
-            "user" => profile.user || "",
-            "identity_file" => profile.identity_file || "",
-            "password" => profile.password || ""
-          }
+          connection_fields =
+            if Map.get(profile, :is_local, false) do
+              %{
+                "password" => profile.password || ""
+              }
+            else
+              %{
+                "host_name" => profile.host_name || "",
+                "port" => to_string(profile.port || 22),
+                "user" => profile.user || "",
+                "identity_file" => profile.identity_file || "",
+                "password" => profile.password || ""
+              }
+            end
 
           capacity =
             if Process.whereis(Caudata.ConfigStore) do

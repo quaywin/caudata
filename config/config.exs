@@ -23,3 +23,19 @@ if Mix.env() == :dev do
       ]
     ]
 end
+
+# Target-specific NIF configuration for Burrito builds.
+# When packaging with Burrito, we build target-by-target and must cross-compile the Rust NIF for Tailscale.
+if burrito_target = System.get_env("BURRITO_TARGET") do
+  rustler_target =
+    case burrito_target do
+      "macos_x86_64" -> "x86_64-apple-darwin"
+      "macos_aarch64" -> "aarch64-apple-darwin"
+      "linux_x86_64" -> "x86_64-unknown-linux-gnu"
+      _ -> nil
+    end
+
+  if rustler_target do
+    config :tailscale, Tailscale.Native, target: rustler_target
+  end
+end

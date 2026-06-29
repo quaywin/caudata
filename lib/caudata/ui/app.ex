@@ -334,7 +334,23 @@ defmodule Caudata.UI.App do
           }
           |> maybe_auto_select_container()
 
-        {:noreply, new_state}
+        # Check Tailscale status and set initial notification if applicable
+        new_state =
+          case Caudata.Tailscale.Service.get_status() do
+            :connecting ->
+              %{new_state | notification: {"Connecting to Tailscale network...", 25}}
+
+            {:connected, ip_str} ->
+              %{new_state | notification: {"Tailscale connected successfully! IP: #{ip_str}", 25}}
+
+            {:error, err} ->
+              %{new_state | notification: {"Error connecting to Tailscale: #{inspect(err)}", 25}}
+
+            _ ->
+              new_state
+          end
+
+        noreply(state, new_state)
 
       :tick ->
         state = %{state | tick_scheduled: false}

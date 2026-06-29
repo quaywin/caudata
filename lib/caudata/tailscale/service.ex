@@ -20,6 +20,10 @@ defmodule Caudata.Tailscale.Service do
     GenServer.call(__MODULE__, :get_ip)
   end
 
+  def get_status do
+    if GenServer.whereis(__MODULE__), do: GenServer.call(__MODULE__, :get_status), else: :inactive
+  end
+
   @doc """
   Checks if a host is a Tailscale IP (starts with 100.x) or ends with `.ts.net` (MagicDNS).
   """
@@ -167,6 +171,18 @@ defmodule Caudata.Tailscale.Service do
   @impl true
   def handle_call(:get_ip, _from, state) do
     {:reply, Map.get(state, :ip), state}
+  end
+
+  @impl true
+  def handle_call(:get_status, _from, state) do
+    status =
+      case Map.get(state, :status) do
+        :active -> {:connected, state.ip}
+        :error -> {:error, state.error}
+        status -> status
+      end
+
+    {:reply, status, state}
   end
 
   # Helpers

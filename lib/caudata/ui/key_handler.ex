@@ -13,6 +13,31 @@ defmodule Caudata.UI.KeyHandler do
   """
   def handle_key_event(key_data, model) do
     Logger.info("Received key event: #{inspect(key_data)}")
+
+    # Check if we are inside any text input mode
+    is_input_active =
+      model.modal_visible or
+        model.mode == :searching or
+        Map.get(model, :settings_input_active, false) or
+        Map.get(model, :settings_service_search_active, false)
+
+    # Intercept paste hotkey (uppercase 'P' or Ctrl+V) when input is active
+    key_data =
+      if is_input_active and Caudata.UI.ViewHelper.paste_key?(key_data) do
+        case Map.get(key_data, :key) do
+          :paste ->
+            key_data
+
+          _ ->
+            case Caudata.UI.ViewHelper.paste_from_clipboard() do
+              {:ok, text} -> %{key: :paste, content: text}
+              _ -> key_data
+            end
+        end
+      else
+        key_data
+      end
+
     key = Map.get(key_data, :key)
     modifiers = Map.get(key_data, :modifiers, [])
     _ctrl = Map.get(key_data, :ctrl, false) or :ctrl in modifiers
@@ -119,6 +144,32 @@ defmodule Caudata.UI.KeyHandler do
               1000
             end
 
+          ts_enabled =
+            if Process.whereis(Caudata.ConfigStore) do
+              Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :tailscale, :enabled, false)
+            else
+              false
+            end
+
+          ts_auth_key =
+            if Process.whereis(Caudata.ConfigStore) do
+              Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :tailscale, :auth_key, "")
+            else
+              ""
+            end
+
+          ts_hostname =
+            if Process.whereis(Caudata.ConfigStore) do
+              Caudata.ConfigStore.get_setting(
+                Caudata.ConfigStore,
+                :tailscale,
+                :hostname,
+                "caudata"
+              )
+            else
+              "caudata"
+            end
+
           {%{
              model
              | modal_visible: true,
@@ -131,6 +182,10 @@ defmodule Caudata.UI.KeyHandler do
                settings_connection_fields: connection_fields,
                settings_global_focus_idx: 0,
                settings_global_capacity: to_string(capacity),
+               settings_ts_enabled: ts_enabled,
+               settings_ts_auth_key: ts_auth_key,
+               settings_ts_hostname: ts_hostname,
+               settings_tailscale_focus_idx: 0,
                settings_input_active: false,
                settings_input_value: "",
                settings_service_search: "",

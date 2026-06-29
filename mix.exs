@@ -1,3 +1,6 @@
+# Acknowledge that tailscale-rs is experimental software as required by the library.
+System.put_env("TS_RS_EXPERIMENT", "this_is_unstable_software")
+
 defmodule Caudata.MixProject do
   use Mix.Project
 
@@ -119,6 +122,7 @@ defmodule Caudata.MixProject do
       {:nimble_options, "~> 1.1"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.1"},
+      {:tailscale, "~> 0.3.3"},
       {:phoenix_live_reload, "~> 1.5", only: :dev},
       {:mox, "~> 1.1", only: :test},
       {:stream_data, "~> 1.1", only: :test},

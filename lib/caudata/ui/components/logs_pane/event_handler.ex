@@ -349,6 +349,18 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
 
   defp handle_search_key(key, key_data, model) do
     case key do
+      :paste ->
+        text = Map.get(key_data, :content, "")
+        new_val = model.filter_regex <> text
+
+        {error, _compiled} =
+          case Regex.compile(new_val) do
+            {:ok, re} -> {false, re}
+            _ -> {true, nil}
+          end
+
+        {%{model | filter_regex: new_val, filter_error: error}, []}
+
       :backspace ->
         new_val = String.slice(model.filter_regex, 0..-2//1)
 

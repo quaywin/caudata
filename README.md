@@ -130,6 +130,13 @@ Configuration is stored in an ETS-backed database at `~/.caudata/config.db` (man
 | `CAUDATA_CONFIG_PATH` | Path to customize the configuration DB location | `~/.caudata/config.db` |
 | `CAUDATA_TUI` | Explicitly enable or disable Terminal UI (`true`/`false`) | Auto-detected |
 
+### 🔑 Tailscale VPN Integration
+
+Caudata supports establishing user-space Tailscale VPN connections without requiring an active system-wide Tailscale daemon on your host machine.
+
+- **How it works**: When connecting to a remote server with a Tailscale IP (matching `100.64.0.0/10`) or MagicDNS (`*.ts.net`), Caudata automatically routes the SSH traffic through a secure local user-space proxy tunnel.
+- **Configuration**: Set up Tailscale via the **Global Settings** modal (press `s` in the TUI) or pre-configure it by setting the `TAILSCALE_AUTHKEY` environment variable.
+
 ---
 
 ## 🌐 Development Web View

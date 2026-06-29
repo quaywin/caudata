@@ -190,6 +190,73 @@ defmodule Caudata.UI.ViewHelper do
     end
   end
 
+  @doc """
+  Reads the system clipboard and returns the text, or an error.
+  """
+  def paste_from_clipboard do
+    if Application.get_env(:caudata, :env) == :test do
+      {:ok, "mocked_paste_data"}
+    else
+      case :os.type() do
+        {:unix, :darwin} ->
+          run_command("pbpaste", [])
+
+        {:unix, :linux} ->
+          cond do
+            System.find_executable("xclip") ->
+              run_command("xclip", ["-selection", "clipboard", "-o"])
+
+            System.find_executable("xsel") ->
+              run_command("xsel", ["--clipboard", "--output"])
+
+            System.find_executable("wl-paste") ->
+              run_command("wl-paste", [])
+
+            true ->
+              {:error, :no_clipboard_tool}
+          end
+
+        {:win32, _} ->
+          run_command("powershell.exe", ["-Command", "Get-Clipboard"])
+
+        _ ->
+          {:error, :unsupported_os}
+      end
+    end
+  end
+
+  @doc """
+  Helper to detect if a key press is the paste hotkey.
+  Supports:
+  - "P" uppercase character (user preference for 1-character hotkey)
+  - Ctrl+V combination
+  - Explicit paste key/atom
+  """
+  def paste_key?(key_data) do
+    key = Map.get(key_data, :key)
+    modifiers = Map.get(key_data, :modifiers, [])
+
+    key == :paste or
+      (key == :char and Map.get(key_data, :char) == "P") or
+      (key == :char and Map.get(key_data, :char) in ["v", "V"] and
+         ("ctrl" in modifiers or "Ctrl" in modifiers or Map.get(key_data, :ctrl, false)))
+  end
+
+  defp run_command(cmd, args) do
+    case System.find_executable(cmd) do
+      nil ->
+        {:error, :command_not_found}
+
+      _path ->
+        case System.cmd(cmd, args) do
+          {output, 0} -> {:ok, String.trim_trailing(output)}
+          _ -> {:error, :command_failed}
+        end
+    end
+  rescue
+    _ -> {:error, :execution_failed}
+  end
+
   defp try_port(cmd, args, input) do
     case System.find_executable(cmd) do
       nil ->

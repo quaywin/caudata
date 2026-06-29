@@ -36,7 +36,15 @@ defmodule Caudata.CLI do
         System.halt(0)
 
       ["web" | rest] ->
-        case OptionParser.parse(rest, aliases: [p: :port], strict: [port: :integer]) do
+        case OptionParser.parse(rest,
+               aliases: [p: :port, t: :tailscale, k: :authkey],
+               strict: [
+                 port: :integer,
+                 tailscale: :boolean,
+                 authkey: :string,
+                 tailscale_port: :integer
+               ]
+             ) do
           {opts, [], []} ->
             port =
               opts[:port] ||
@@ -51,10 +59,20 @@ defmodule Caudata.CLI do
                     end
                 end
 
+            if opts[:tailscale] && opts[:authkey] do
+              System.put_env("TAILSCALE_AUTHKEY", opts[:authkey])
+              ts_port = opts[:tailscale_port] || 80
+              System.put_env("TAILSCALE_WEB_PORT", to_string(ts_port))
+            end
+
             {:web, port}
 
           _ ->
-            IO.puts(:stderr, "Invalid web options. Usage: caudata web [--port PORT] [-p PORT]")
+            IO.puts(
+              :stderr,
+              "Invalid web options. Usage: caudata web [--port PORT] [--tailscale --authkey KEY]"
+            )
+
             System.halt(1)
         end
 

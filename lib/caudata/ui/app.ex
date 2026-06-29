@@ -23,6 +23,7 @@ defmodule Caudata.UI.App do
     if Process.whereis(Caudata.PubSub) do
       Phoenix.PubSub.subscribe(Caudata.PubSub, "config:profiles")
       Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+      Phoenix.PubSub.subscribe(Caudata.PubSub, "tailscale")
     end
 
     {width, height} =
@@ -102,6 +103,10 @@ defmodule Caudata.UI.App do
       settings_connection_fields: %{},
       settings_global_focus_idx: 0,
       settings_global_capacity: "1000",
+      settings_ts_enabled: false,
+      settings_ts_auth_key: "",
+      settings_ts_hostname: "caudata",
+      settings_tailscale_focus_idx: 0,
       settings_input_active: false,
       settings_input_value: "",
       settings_service_search: "",
@@ -165,6 +170,10 @@ defmodule Caudata.UI.App do
             "esc" -> :escape
             "escape" -> :escape
             "backspace" -> :backspace
+            "f2" -> :f2
+            "F2" -> :f2
+            "insert" -> :insert
+            "Insert" -> :insert
             _ -> nil
           end
 
@@ -190,9 +199,25 @@ defmodule Caudata.UI.App do
         consecutive_key_count: new_consecutive_count
     }
 
-    case KeyHandler.handle_key_event(key_data, state) do
+    KeyHandler.handle_key_event(key_data, state)
+    |> process_key_event_result(state)
+  end
+
+  def handle_event(%ExRatatui.Event.Paste{content: text}, state) do
+    key_data = %{key: :paste, content: text}
+
+    KeyHandler.handle_key_event(key_data, state)
+    |> process_key_event_result(state)
+  end
+
+  def handle_event(_event, state) do
+    {:noreply, state}
+  end
+
+  defp process_key_event_result(key_handler_result, state) do
+    case key_handler_result do
       {new_state, []} ->
-        {:noreply, adjust_log_subscription(state, new_state)}
+        noreply(state, new_state)
 
       {new_state, [{:command, :quit}]} ->
         {:stop, new_state}
@@ -255,15 +280,11 @@ defmodule Caudata.UI.App do
             loading_history: false
         }
 
-        {:noreply, adjust_log_subscription(state, final_state)}
+        noreply(state, final_state)
 
       {new_state, _other_commands} ->
-        {:noreply, adjust_log_subscription(state, new_state)}
+        noreply(state, new_state)
     end
-  end
-
-  def handle_event(_event, state) do
-    {:noreply, state}
   end
 
   @impl true
@@ -482,7 +503,7 @@ defmodule Caudata.UI.App do
             visual_anchor: visual_anchor
         }
 
-        {:noreply, adjust_log_subscription(state, new_state)}
+        noreply(state, new_state)
 
       {:update_available, tag_name} ->
         {:noreply, %{state | update_available: tag_name}}
@@ -512,6 +533,21 @@ defmodule Caudata.UI.App do
              containers: new_containers,
              metrics: new_metrics
          }}
+
+      {:tailscale_status, :connecting} ->
+        noreply(state, %{state | notification: {"Connecting to Tailscale network...", 25}})
+
+      {:tailscale_status, {:connected, ip_str}} ->
+        noreply(state, %{
+          state
+          | notification: {"Tailscale connected successfully! IP: #{ip_str}", 25}
+        })
+
+      {:tailscale_status, {:error, err}} ->
+        noreply(state, %{
+          state
+          | notification: {"Error connecting to Tailscale: #{inspect(err)}", 25}
+        })
 
       {:metrics_updated, server_id, metrics} ->
         {:noreply, %{state | metrics: Map.put(state.metrics, server_id, metrics)}}
@@ -693,6 +729,20 @@ defmodule Caudata.UI.App do
     end
 
     :ok
+  end
+
+  defp noreply(old_state, new_state) do
+    new_state = adjust_log_subscription(old_state, new_state)
+
+    new_state =
+      if new_state.notification && not Map.get(new_state, :tick_scheduled, false) do
+        Process.send_after(self(), :tick, 100)
+        %{new_state | tick_scheduled: true}
+      else
+        new_state
+      end
+
+    {:noreply, new_state}
   end
 
   defp adjust_log_subscription(old_state, new_state) do

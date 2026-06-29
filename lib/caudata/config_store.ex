@@ -82,6 +82,14 @@ defmodule Caudata.ConfigStore do
     GenServer.call(store, {:put_setting, section, key, value})
   end
 
+  @doc """
+  Saves a batch of global settings.
+  Expects a list of tuples: `[{section, key, value}, ...]`
+  """
+  def put_settings(store \\ __MODULE__, settings) when is_list(settings) do
+    GenServer.call(store, {:put_settings, settings})
+  end
+
   # Helper to resolve table name from GenServer name/ref
   defp get_table_name(store) when is_atom(store), do: store
 
@@ -185,6 +193,16 @@ defmodule Caudata.ConfigStore do
     {:reply, :ok, state}
   end
 
+  @impl true
+  def handle_call({:put_settings, settings}, _from, state) do
+    Enum.each(settings, fn {section, key, value} ->
+      :ets.insert(state.table, {{section, key}, value})
+    end)
+
+    save_async(state)
+    {:reply, :ok, state}
+  end
+
   # Helpers
 
   defp initialize_defaults(t) do
@@ -236,13 +254,29 @@ defmodule Caudata.ConfigStore do
     if is_test do
       dir = Path.dirname(path)
       File.mkdir_p!(dir)
-      :ok = :ets.tab2file(file_tab, char_path)
+
+      case :ets.tab2file(file_tab, char_path) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.error("Failed to persist config to disk at #{path}: #{inspect(reason)}")
+      end
+
       :ets.delete(file_tab)
     else
       Task.start(fn ->
         dir = Path.dirname(path)
         File.mkdir_p!(dir)
-        :ok = :ets.tab2file(file_tab, char_path)
+
+        case :ets.tab2file(file_tab, char_path) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Logger.error("Failed to persist config to disk at #{path}: #{inspect(reason)}")
+        end
+
         :ets.delete(file_tab)
       end)
     end

@@ -377,6 +377,13 @@ defmodule Caudata.UI.Components.AddServerModal do
 
       is_binary(active_item) ->
         case key do
+          :paste ->
+            text = Map.get(key_data, :content, "")
+            current_val = Map.get(model.modal_fields, active_item, "")
+            new_val = current_val <> text
+            new_fields = Map.put(model.modal_fields, active_item, new_val)
+            {%{model | modal_fields: new_fields}, []}
+
           :backspace ->
             current_val = Map.get(model.modal_fields, active_item, "")
             new_val = String.slice(current_val, 0..-2//1)
@@ -514,6 +521,13 @@ defmodule Caudata.UI.Components.AddServerModal do
 
       is_binary(active_item) ->
         case key do
+          :paste ->
+            text = Map.get(key_data, :content, "")
+            current_val = Map.get(model.modal_fields, active_item, "")
+            new_val = current_val <> text
+            new_fields = Map.put(model.modal_fields, active_item, new_val)
+            {%{model | modal_fields: new_fields}, []}
+
           :backspace ->
             current_val = Map.get(model.modal_fields, active_item, "")
             new_val = String.slice(current_val, 0..-2//1)

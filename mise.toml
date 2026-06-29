@@ -2,3 +2,7 @@
 erlang = "28.5.0.1"
 elixir = "1.19.5-otp-28"
 zig = "0.15.2"
+rust = "1.91.0"
+
+[env]
+TS_RS_EXPERIMENT = "this_is_unstable_software"

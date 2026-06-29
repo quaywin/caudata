@@ -734,8 +734,12 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, state_tab2} = App.handle_event(event_tab, state_tab1b)
     assert state_tab2.settings_focus == :custom_logs
 
-    # Tab 4: :custom_logs -> :general
-    assert {:noreply, state_tab3} = App.handle_event(event_tab, state_tab2)
+    # Tab 4: :custom_logs -> :tailscale
+    assert {:noreply, state_tab3_ts} = App.handle_event(event_tab, state_tab2)
+    assert state_tab3_ts.settings_focus == :tailscale
+
+    # Tab 4b: :tailscale -> :general
+    assert {:noreply, state_tab3} = App.handle_event(event_tab, state_tab3_ts)
     assert state_tab3.settings_focus == :general
 
     # Tab 5: :general -> :servers
@@ -1465,5 +1469,76 @@ defmodule Caudata.UI.AppTest do
 
     assert updated_state.selected_container_id == "container1"
     assert updated_state.logs_dirty == true
+  end
+
+  test "handle_event/2 handles Ctrl+V, 'P' key, and ExRatatui.Event.Paste in various input modes" do
+    {:ok, state} = App.mount([])
+
+    # 1. AddServerModal (Manual input) - Test paste with Ctrl+V
+    manual_state = %{
+      state
+      | modal_visible: true,
+        modal_type: :manual_input,
+        # "host_name"
+        modal_focus_index: 1,
+        modal_fields: %{"host_name" => "myhost-"}
+    }
+
+    event_paste_ctrl = %ExRatatui.Event.Key{code: "v", modifiers: ["ctrl"]}
+    assert {:noreply, pasted_manual_ctrl} = App.handle_event(event_paste_ctrl, manual_state)
+    assert pasted_manual_ctrl.modal_fields["host_name"] == "myhost-mocked_paste_data"
+
+    # Test paste with 'P' key
+    event_paste_p = %ExRatatui.Event.Key{code: "P", modifiers: []}
+    assert {:noreply, pasted_manual_p} = App.handle_event(event_paste_p, manual_state)
+    assert pasted_manual_p.modal_fields["host_name"] == "myhost-mocked_paste_data"
+
+    # Test paste with ExRatatui.Event.Paste
+    event_paste_struct = %ExRatatui.Event.Paste{content: "bracketed_data"}
+    assert {:noreply, pasted_manual_struct} = App.handle_event(event_paste_struct, manual_state)
+    assert pasted_manual_struct.modal_fields["host_name"] == "myhost-bracketed_data"
+
+    # 2. SettingsModal (Connection fields)
+    profile1 = %Caudata.Profile{id: "server1", host_name: "1.1.1.1", host_pattern: "server1"}
+
+    settings_state = %{
+      state
+      | profiles: [profile1],
+        modal_visible: true,
+        modal_type: :settings,
+        settings_focus: :connection,
+        # "host_name"
+        settings_connection_focus_idx: 0,
+        settings_connection_fields: %{"host_name" => "host-"}
+    }
+
+    assert {:noreply, pasted_settings} = App.handle_event(event_paste_p, settings_state)
+    assert pasted_settings.settings_connection_fields["host_name"] == "host-mocked_paste_data"
+
+    # 3. SettingsModal (General - capacity, digits only)
+    general_state = %{
+      state
+      | modal_visible: true,
+        modal_type: :settings,
+        settings_focus: :general,
+        # capacity
+        settings_global_focus_idx: 0,
+        settings_global_capacity: "10"
+    }
+
+    assert {:noreply, pasted_general} = App.handle_event(event_paste_p, general_state)
+    # "mocked_paste_data" has no digits, so capacity remains "10"
+    assert pasted_general.settings_global_capacity == "10"
+
+    # 4. Search log regex input
+    searching_state = %{
+      state
+      | mode: :searching,
+        active_field: :filter_regex,
+        filter_regex: "pattern_"
+    }
+
+    assert {:noreply, pasted_search} = App.handle_event(event_paste_p, searching_state)
+    assert pasted_search.filter_regex == "pattern_mocked_paste_data"
   end
 end

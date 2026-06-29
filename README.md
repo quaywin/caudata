@@ -180,12 +180,7 @@ If you are looking for other tools to monitor or view logs, here is how **Caudat
 | **[lnav](https://github.com/tstack/lnav)** | TUI | Log parsing & SQL query | No (mainly local) | No | Yes (for local files) |
 | **[Lazydocker](https://github.com/jesseduffield/lazydocker)** | TUI | Local Docker management | No | Yes (local only) | Yes (local only) |
 
-### Key Differences
 
-- **[MultiTail](https://github.com/folkertvanheusden/multitail)**: A classic C utility to monitor multiple log files or command outputs. It supports remote servers via command piping (e.g., `multitail -l "ssh host 'tail -f ...'"`), but it doesn't automatically discover docker containers, doesn't retrieve remote resource metrics, and requires manual configuration for host lists.
-- **[Dozzle](https://github.com/amir20/dozzle)**: A beautiful web-based viewer for Docker container logs. Unlike Caudata's TUI, it runs in a browser and requires installing Dozzle agents or exposing the Docker socket on each host. It also doesn't support systemd/launchd or arbitrary remote files.
-- **[lnav (The Log File Navigator)](https://github.com/tstack/lnav)**: A highly advanced local log analyzer. It is amazing for syntax highlighting, chronologically merging logs, and searching them using SQL. However, it does not manage remote connections or stream remote system metrics out of the box.
-- **[Lazydocker](https://github.com/jesseduffield/lazydocker)**: A great TUI for managing docker containers locally. It doesn't aggregate log streams across multiple remote hosts over SSH or handle systemd daemon logs.
 
 ---
 

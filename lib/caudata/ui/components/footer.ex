@@ -165,7 +165,7 @@ defmodule Caudata.UI.Components.Footer do
               base_shortcuts ++
                 [
                   Span.new(
-                    " | Update v#{state.update_available} available! Run 'caudata upgrade'",
+                    " | Update #{state.update_available} available! Run 'caudata upgrade'",
                     style: %Style{fg: :green}
                   )
                 ]

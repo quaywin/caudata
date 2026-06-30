@@ -149,7 +149,7 @@ defmodule Caudata.CLI do
 
     case check_for_update() do
       {:update_available, latest_tag} ->
-        IO.puts("New version v#{latest_tag} is available!")
+        IO.puts("New version #{latest_tag} is available!")
 
         case get_binary_path() do
           {:ok, bin_path} ->
@@ -170,7 +170,17 @@ defmodule Caudata.CLI do
                       File.write!(temp_path, binary_data)
                       File.chmod!(temp_path, 0o755)
                       File.rename!(temp_path, bin_path)
-                      IO.puts("Successfully upgraded Caudata to v#{latest_tag}!")
+                      IO.puts("Successfully upgraded Caudata to #{latest_tag}!")
+
+                      # Trigger the new binary to unpack itself and uninstall older versions immediately
+                      case System.cmd(bin_path, ["--version"], stderr_to_stdout: true) do
+                        {output, 0} ->
+                          # Print the launcher's output (like "Uninstalled older version") to the user
+                          IO.write(output)
+
+                        _ ->
+                          :ok
+                      end
                     rescue
                       e ->
                         IO.puts(:stderr, "Failed to apply update: #{Exception.message(e)}")

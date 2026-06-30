@@ -29,7 +29,6 @@ end
 if burrito_target = System.get_env("BURRITO_TARGET") do
   rustler_target =
     case burrito_target do
-      "macos_x86_64" -> "x86_64-apple-darwin"
       "macos_aarch64" -> "aarch64-apple-darwin"
       "linux_x86_64" -> "x86_64-unknown-linux-gnu"
       _ -> nil

@@ -52,7 +52,7 @@ defmodule Caudata.UI.Components.SettingsModal do
       end)
       |> Enum.intersperse(Span.new("│", style: %Style{fg: :dark_gray}))
 
-    tabs_line = Line.new([Span.new("  Tab: ") | tab_spans])
+    tabs_line = Line.new(tab_spans)
 
     divider_line =
       Line.new([

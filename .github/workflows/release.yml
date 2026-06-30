@@ -21,9 +21,6 @@ jobs:
           - target: macos_aarch64
             os: macos-latest
             rust_target: aarch64-apple-darwin
-          - target: macos_x86_64
-            os: macos-latest
-            rust_target: x86_64-apple-darwin
 
     steps:
       - name: Checkout code
@@ -108,7 +105,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            burrito_out/caudata_macos_x86_64
             burrito_out/caudata_macos_aarch64
             burrito_out/caudata_linux_x86_64
           draft: false

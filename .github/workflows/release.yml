@@ -19,7 +19,7 @@ jobs:
             os: ubuntu-latest
             rust_target: x86_64-unknown-linux-gnu
           - target: macos_aarch64
-            os: macos-latest
+            os: macos-15
             rust_target: aarch64-apple-darwin
 
     steps:

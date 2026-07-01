@@ -190,17 +190,17 @@ defmodule Caudata.ContainerWorkerTest do
     Process.sleep(120)
     snapshot = LogStore.get_snapshot("my-server/container123")
 
-    # Verify that the logs are stored in the order they are received!
+    # Verify that the logs are sorted in chronological order!
     assert snapshot == [
-             %{
-               timestamp: "2026-06-08T12:00:01.000000000Z",
-               stream: :stderr,
-               message: "stderr line"
-             },
              %{
                timestamp: "2026-06-08T12:00:00.000000000Z",
                stream: :stdout,
                message: "stdout line"
+             },
+             %{
+               timestamp: "2026-06-08T12:00:01.000000000Z",
+               stream: :stderr,
+               message: "stderr line"
              }
            ]
 

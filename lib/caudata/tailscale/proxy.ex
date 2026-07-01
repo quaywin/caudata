@@ -128,19 +128,19 @@ defmodule Caudata.Tailscale.SSHProxy do
 
   # Helpers to work around type mismatch bugs in ts_elixir library
 
+  defp safe_ts_send(_ts_stream, <<>>), do: :ok
+
   defp safe_ts_send(ts_stream, binary_data) do
     byte_list = :erlang.binary_to_list(binary_data)
-    do_safe_ts_send(ts_stream, byte_list)
-  end
 
-  defp do_safe_ts_send(_ts_stream, []), do: :ok
-
-  defp do_safe_ts_send(ts_stream, byte_list) do
     case Tailscale.Native.tcp_send(ts_stream, byte_list) do
       {:ok, n} when n > 0 ->
-        case Enum.drop(byte_list, n) do
-          [] -> :ok
-          rest -> do_safe_ts_send(ts_stream, rest)
+        case binary_data do
+          <<_::binary-size(n), rest::binary>> ->
+            safe_ts_send(ts_stream, rest)
+
+          _ ->
+            :ok
         end
 
       {:ok, 0} ->

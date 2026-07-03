@@ -29,16 +29,49 @@ defmodule Caudata.MixProject do
     ]
   end
 
+  defp host_target do
+    case :os.type() do
+      {:unix, :darwin} ->
+        arch = :erlang.system_info(:system_architecture) |> to_string()
+        if String.contains?(arch, "aarch64") or String.contains?(arch, "arm64") do
+          :macos_aarch64
+        else
+          :macos_x86_64
+        end
+      {:unix, :linux} ->
+        arch = :erlang.system_info(:system_architecture) |> to_string()
+        if String.contains?(arch, "x86_64") or String.contains?(arch, "amd64") do
+          :linux_x86_64
+        else
+          nil
+        end
+      _ ->
+        nil
+    end
+  end
+
   def releases do
+    local_erts = to_string(:code.root_dir())
+    host = host_target()
+
     targets = [
       macos_aarch64: [os: :darwin, cpu: :aarch64],
       linux_x86_64: [os: :linux, cpu: :x86_64]
     ]
 
     targets =
+      Enum.map(targets, fn {name, opts} ->
+        if name == host do
+          {name, Keyword.put(opts, :custom_erts, local_erts)}
+        else
+          {name, opts}
+        end
+      end)
+
+    targets =
       case System.get_env("BURRITO_TARGET") do
-        "macos_aarch64" -> [macos_aarch64: [os: :darwin, cpu: :aarch64]]
-        "linux_x86_64" -> [linux_x86_64: [os: :linux, cpu: :x86_64]]
+        "macos_aarch64" -> Keyword.take(targets, [:macos_aarch64])
+        "linux_x86_64" -> Keyword.take(targets, [:linux_x86_64])
         _ -> targets
       end
 

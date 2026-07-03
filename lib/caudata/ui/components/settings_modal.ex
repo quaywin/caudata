@@ -1129,6 +1129,7 @@ defmodule Caudata.UI.Components.SettingsModal do
                              | profiles: [],
                                selected_profile_id: nil,
                                selected_container_id: nil,
+                               selected_container_name: nil,
                                modal_visible: false,
                                settings_selected_profile_idx: 0,
                                settings_container_idx: 0,
@@ -1160,6 +1161,13 @@ defmodule Caudata.UI.Components.SettingsModal do
                               model.selected_container_id
                             end
 
+                          new_selected_container_name =
+                            if model.selected_profile_id == server_id_to_delete do
+                              nil
+                            else
+                              model.selected_container_name
+                            end
+
                           connection_fields =
                             if next_profile do
                               %{
@@ -1178,6 +1186,7 @@ defmodule Caudata.UI.Components.SettingsModal do
                              | profiles: new_profiles,
                                selected_profile_id: new_selected_profile_id,
                                selected_container_id: new_selected_container_id,
+                               selected_container_name: new_selected_container_name,
                                settings_selected_profile_idx: new_idx,
                                settings_container_idx: 0,
                                settings_service_idx: 0,

@@ -323,6 +323,7 @@ defmodule Caudata.UI.Components.AddServerModal do
                    | profiles: updated_profiles,
                      selected_profile_id: added_profile.id,
                      selected_container_id: nil,
+                     selected_container_name: nil,
                      logs_scroll_y: :bottom,
                      modal_visible: false
                  }, []}
@@ -470,6 +471,7 @@ defmodule Caudata.UI.Components.AddServerModal do
                | profiles: updated_profiles,
                  selected_profile_id: added_profile.id,
                  selected_container_id: nil,
+                 selected_container_name: nil,
                  logs_scroll_y: :bottom,
                  modal_visible: false,
                  modal_error: nil
@@ -596,6 +598,7 @@ defmodule Caudata.UI.Components.AddServerModal do
                | profiles: updated_profiles,
                  selected_profile_id: added_profile.id,
                  selected_container_id: nil,
+                 selected_container_name: nil,
                  logs_scroll_y: :bottom,
                  modal_visible: false,
                  modal_error: nil

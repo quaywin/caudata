@@ -1258,6 +1258,7 @@ defmodule Caudata.UI.AppTest do
     server_id = "test-server-rebuilt"
     old_id = "container-old"
     new_id = "container-new"
+    container_name = "test-container"
     source_id = "#{server_id}/#{new_id}"
 
     Caudata.LogStore.clear_logs(source_id)
@@ -1276,6 +1277,7 @@ defmodule Caudata.UI.AppTest do
       state
       | selected_profile_id: server_id,
         selected_container_id: old_id,
+        selected_container_name: container_name,
         logs: [
           %{timestamp: nil, stream: :stdout, message: "old log line 1"},
           %{timestamp: nil, stream: :stdout, message: "old log line 2"}
@@ -1283,12 +1285,23 @@ defmodule Caudata.UI.AppTest do
     }
 
     # Simulate container rebuild event
-    msg = {:container_rebuilt, server_id, old_id, new_id}
+    msg = {:container_rebuilt, server_id, container_name, old_id, new_id}
     assert {:noreply, updated_state} = App.handle_info(msg, state)
 
     assert updated_state.selected_container_id == new_id
+    assert updated_state.selected_container_name == container_name
     assert updated_state.logs_dirty == true
     assert updated_state.logs == new_logs
+
+    # Simulate container rebuild event matching by name (when old_id is nil)
+    state_with_nil_id = %{state | selected_container_id: "some-other-old-id"}
+    msg_with_nil = {:container_rebuilt, server_id, container_name, nil, new_id}
+    assert {:noreply, updated_state_nil} = App.handle_info(msg_with_nil, state_with_nil_id)
+
+    assert updated_state_nil.selected_container_id == new_id
+    assert updated_state_nil.selected_container_name == container_name
+    assert updated_state_nil.logs_dirty == true
+    assert updated_state_nil.logs == new_logs
   end
 
   test "General settings tab handles keyboard events and saves global log capacity" do

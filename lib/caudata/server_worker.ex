@@ -1240,7 +1240,7 @@ defmodule Caudata.ServerWorker do
         Phoenix.PubSub.broadcast(
           Caudata.PubSub,
           "servers",
-          {:container_rebuilt, state.profile.id, old_active_id, id}
+          {:container_rebuilt, state.profile.id, name, old_active_id, id}
         )
 
         source_id = "#{state.profile.id}/#{id}"

@@ -59,6 +59,7 @@ defmodule Caudata.UI.App do
       profiles: profiles,
       selected_profile_id: selected_id,
       selected_container_id: nil,
+      selected_container_name: nil,
       sidebar_focus: :servers,
       containers: %{},
       metrics: %{},
@@ -366,7 +367,7 @@ defmodule Caudata.UI.App do
           end
 
         # Auto-select first container of selected profile if none selected
-        {selected_container_id, logs_scroll_y} =
+        {selected_container_id, selected_container_name, logs_scroll_y} =
           if is_nil(state.selected_container_id) and state.selected_profile_id do
             case enabled_conts_for_profile do
               [first_container | _] ->
@@ -386,13 +387,13 @@ defmodule Caudata.UI.App do
                     :ok
                 end
 
-                {first_container.id, :bottom}
+                {first_container.id, first_container.name, :bottom}
 
               _ ->
-                {state.selected_container_id, state.logs_scroll_y}
+                {state.selected_container_id, state.selected_container_name, state.logs_scroll_y}
             end
           else
-            {state.selected_container_id, state.logs_scroll_y}
+            {state.selected_container_id, state.selected_container_name, state.logs_scroll_y}
           end
 
         # If logs are dirty or we are loading history, fetch latest snapshot from LogStore
@@ -509,6 +510,7 @@ defmodule Caudata.UI.App do
         new_state = %{
           state
           | selected_container_id: selected_container_id,
+            selected_container_name: selected_container_name,
             logs: logs,
             logs_scroll_y: scroll_y,
             loading_history: loading_history,
@@ -573,9 +575,11 @@ defmodule Caudata.UI.App do
         new_state = maybe_auto_select_container(new_state)
         {:noreply, new_state}
 
-      {:container_rebuilt, server_id, old_id, new_id} ->
+      {:container_rebuilt, server_id, name, old_id, new_id} ->
         new_state =
-          if state.selected_profile_id == server_id && state.selected_container_id == old_id do
+          if state.selected_profile_id == server_id &&
+               (state.selected_container_id == old_id ||
+                  (state.selected_container_name == name && name != nil)) do
             source_id = "#{server_id}/#{new_id}"
 
             initial_logs =
@@ -585,7 +589,7 @@ defmodule Caudata.UI.App do
                 []
               end
 
-            new_state = %{state | selected_container_id: new_id, logs: initial_logs}
+            new_state = %{state | selected_container_id: new_id, selected_container_name: name, logs: initial_logs}
             adjust_log_subscription(state, new_state)
           else
             state

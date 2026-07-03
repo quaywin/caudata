@@ -239,6 +239,7 @@ defmodule Caudata.UI.Components.Sidebar do
            model
            | selected_profile_id: server_id,
              selected_container_id: nil,
+             selected_container_name: nil,
              logs: [],
              logs_scroll_y: :bottom,
              logs_fetch_limit: 100,
@@ -307,7 +308,7 @@ defmodule Caudata.UI.Components.Sidebar do
     end
   end
 
-  def select_container(server_id, container_id, _container_name, model) do
+  def select_container(server_id, container_id, container_name, model) do
     case Caudata.ServerSupervisor.lookup_worker(server_id) do
       {:ok, pid} ->
         Task.start(fn ->
@@ -338,6 +339,7 @@ defmodule Caudata.UI.Components.Sidebar do
        model
        | selected_profile_id: server_id,
          selected_container_id: container_id,
+         selected_container_name: container_name,
          logs: logs,
          logs_scroll_y: :bottom,
          logs_fetch_limit: 100,

@@ -746,10 +746,10 @@ defmodule Caudata.UI.App do
         receive do
           {:DOWN, ^ref, :process, ^self_pid, _reason} ->
             Process.sleep(50)
-            System.halt(0)
+            System.stop(0)
         after
           2000 ->
-            System.halt(0)
+            System.stop(0)
         end
       end)
     end

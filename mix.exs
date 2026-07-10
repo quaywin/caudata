@@ -33,18 +33,22 @@ defmodule Caudata.MixProject do
     case :os.type() do
       {:unix, :darwin} ->
         arch = :erlang.system_info(:system_architecture) |> to_string()
+
         if String.contains?(arch, "aarch64") or String.contains?(arch, "arm64") do
           :macos_aarch64
         else
           :macos_x86_64
         end
+
       {:unix, :linux} ->
         arch = :erlang.system_info(:system_architecture) |> to_string()
+
         if String.contains?(arch, "x86_64") or String.contains?(arch, "amd64") do
           :linux_x86_64
         else
           nil
         end
+
       _ ->
         nil
     end
@@ -153,7 +157,8 @@ defmodule Caudata.MixProject do
   defp deps do
     [
       {:burrito, "~> 1.0"},
-      {:ex_ratatui, "~> 0.10"},
+      {:ex_ratatui,
+       git: "https://github.com/quaywin/ex_ratatui.git", branch: "main", override: true},
       {:phoenix_ex_ratatui, "~> 0.1"},
       {:plug_cowboy, "~> 2.7"},
       {:phoenix, "~> 1.7"},

@@ -753,13 +753,21 @@ defmodule Caudata.ServerWorker do
 
     # 1. Stop all container workers in parallel while SSH connection is still active
     # This allows container workers to close their channels cleanly.
+    # We use Process.exit/2 with :shutdown to avoid circular GenServer deadlock on the supervisor.
     start_time = System.monotonic_time(:millisecond)
 
     state.container_pids
     |> Enum.map(fn {_id, pid} ->
       Task.async(fn ->
         if Process.alive?(pid) do
-          _ = Caudata.ServerSupervisor.stop_container_worker(pid)
+          ref = Process.monitor(pid)
+          Process.exit(pid, :shutdown)
+
+          receive do
+            {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+          after
+            1000 -> :ok
+          end
         end
       end)
     end)

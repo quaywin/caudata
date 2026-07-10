@@ -264,6 +264,11 @@ defmodule Caudata.ContainerWorker do
   end
 
   @impl true
+  def handle_info({:EXIT, _from, reason}, state) do
+    {:stop, reason, state}
+  end
+
+  @impl true
   def terminate(_reason, state) do
     # Force flush any buffered lines and pending logs on termination
     state = flush_pending_logs(state)
@@ -458,7 +463,10 @@ defmodule Caudata.ContainerWorker do
 
       true ->
         escaped_cmd = String.replace(base_cmd, "'", "'\\''")
-        inner_script = "if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then exec sudo -n #{escaped_cmd}; else exec #{escaped_cmd}; fi & pid=$!; trap 'kill $pid 2>/dev/null' EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null"
+
+        inner_script =
+          "if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then exec sudo -n #{escaped_cmd}; else exec #{escaped_cmd}; fi & pid=$!; trap 'kill $pid 2>/dev/null' EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null"
+
         escaped_for_dq =
           inner_script
           |> String.replace("\\", "\\\\")

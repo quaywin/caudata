@@ -198,7 +198,7 @@ defmodule Caudata.Tailscale.Service do
       DynamicSupervisor.which_children(Caudata.ServerSupervisor)
       |> Enum.each(fn
         {_, pid, _, [Caudata.Tailscale.SSHProxy]} ->
-          DynamicSupervisor.terminate_child(Caudata.ServerSupervisor, pid)
+          Caudata.Tailscale.SSHProxy.stop_proxy(pid)
 
         _ ->
           :ok

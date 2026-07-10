@@ -1,5 +1,5 @@
 defmodule Caudata.Tailscale.SSHProxy do
-  use GenServer
+  use GenServer, restart: :temporary
   require Logger
 
   def start_proxy(dev, host, port) do
@@ -17,7 +17,14 @@ defmodule Caudata.Tailscale.SSHProxy do
 
   def stop_proxy(pid) do
     if Process.alive?(pid) do
-      DynamicSupervisor.terminate_child(Caudata.ServerSupervisor, pid)
+      ref = Process.monitor(pid)
+      Process.exit(pid, :shutdown)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      after
+        1000 -> :ok
+      end
     else
       :ok
     end

@@ -220,12 +220,27 @@ defmodule Caudata.UI.Components.LogsPane do
     visual_suffix =
       if state.mode == :selecting and selection_range != nil do
         count = Enum.count(selection_range)
-        " [VISUAL: #{count} lines] "
+        " [VISUAL: #{count} lines]"
       else
-        " "
+        ""
       end
 
-    base <> visual_suffix
+    freeze_suffix =
+      if Map.get(state, :freeze, false) do
+        " [PAUSED]"
+      else
+        ""
+      end
+
+    suffix =
+      case {visual_suffix, freeze_suffix} do
+        {"", ""} -> " "
+        {vis, ""} -> " " <> vis <> " "
+        {"", frz} -> " " <> frz <> " "
+        {vis, frz} -> " " <> vis <> frz <> " "
+      end
+
+    base <> suffix
   end
 
   defp render_filter_widget(state) do

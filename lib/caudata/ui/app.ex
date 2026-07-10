@@ -589,7 +589,13 @@ defmodule Caudata.UI.App do
                 []
               end
 
-            new_state = %{state | selected_container_id: new_id, selected_container_name: name, logs: initial_logs}
+            new_state = %{
+              state
+              | selected_container_id: new_id,
+                selected_container_name: name,
+                logs: initial_logs
+            }
+
             adjust_log_subscription(state, new_state)
           else
             state
@@ -765,24 +771,48 @@ defmodule Caudata.UI.App do
     {:noreply, new_state}
   end
 
+  defp update_freeze_state(state) do
+    case state.logs_scroll_y do
+      :bottom ->
+        if state.freeze do
+          state = %{state | freeze: false, logs_dirty: true}
+
+          if not Map.get(state, :tick_scheduled, false) do
+            Process.send_after(self(), :tick, 100)
+            %{state | tick_scheduled: true}
+          else
+            state
+          end
+        else
+          state
+        end
+
+      val when is_integer(val) ->
+        %{state | freeze: true}
+    end
+  end
+
   defp adjust_log_subscription(old_state, new_state) do
     old_source = if old_state, do: current_source_id(old_state), else: nil
     new_source = current_source_id(new_state)
 
-    if old_source != new_source do
-      if old_source && Process.whereis(Caudata.PubSub) do
-        Phoenix.PubSub.unsubscribe(Caudata.PubSub, "logs:#{old_source}")
+    new_state =
+      if old_source != new_source do
+        if old_source && Process.whereis(Caudata.PubSub) do
+          Phoenix.PubSub.unsubscribe(Caudata.PubSub, "logs:#{old_source}")
+        end
+
+        if new_source && Process.whereis(Caudata.PubSub) do
+          Phoenix.PubSub.subscribe(Caudata.PubSub, "logs:#{new_source}")
+        end
+
+        # Force log fetch and reset scroll/freeze on source change
+        %{new_state | logs_dirty: true, freeze: false, logs_scroll_y: :bottom}
+      else
+        new_state
       end
 
-      if new_source && Process.whereis(Caudata.PubSub) do
-        Phoenix.PubSub.subscribe(Caudata.PubSub, "logs:#{new_source}")
-      end
-
-      # Force log fetch on source change
-      %{new_state | logs_dirty: true}
-    else
-      new_state
-    end
+    update_freeze_state(new_state)
   end
 
   defp maybe_auto_select_container(state) do

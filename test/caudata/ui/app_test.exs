@@ -572,6 +572,7 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, state_scrolled} = App.handle_event(event_k, state1)
     # max_scroll is 15 - 6 = 9. Scrolling up by 3 steps should set it to 9 - 3 = 6.
     assert state_scrolled.logs_scroll_y == 6
+    assert state_scrolled.freeze == true
 
     # 3. Now 5 new logs are appended to LogStore (total 20 logs).
     # Since logs_fetch_limit is 15, the new snapshot will be lines 6 to 20.
@@ -587,13 +588,24 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, state_msg} = App.handle_info(msg, state_scrolled)
     # remains 6 before tick
     assert state_msg.logs_scroll_y == 6
+    assert state_msg.freeze == true
 
-    # 4. Handle tick
+    # 4. Handle tick (should not fetch new logs since we are frozen)
     assert {:noreply, state_ticked} = App.handle_info(:tick, state_msg)
+    assert state_ticked.logs == initial_logs
+    assert state_ticked.logs_scroll_y == 6
 
-    # Since the first 5 logs were dropped, logs_scroll_y should be adjusted: 6 - 5 = 1.
-    assert state_ticked.logs == new_store_logs
-    assert state_ticked.logs_scroll_y == 1
+    # 5. Scroll down by 3 lines (simulating pressing 'j')
+    # 6 + 3 = 9. Since max_scroll is 9, it should set scroll_y to :bottom and unfreeze.
+    event_j = %ExRatatui.Event.Key{code: "j", modifiers: []}
+    assert {:noreply, state_bottom} = App.handle_event(event_j, state_ticked)
+    assert state_bottom.logs_scroll_y == :bottom
+    assert state_bottom.freeze == false
+
+    # 6. Now handle tick (should fetch new logs because we are unfrozen)
+    assert {:noreply, state_final} = App.handle_info(:tick, state_bottom)
+    assert state_final.logs == new_store_logs
+    assert state_final.logs_scroll_y == :bottom
   end
 
   test "handle_event/2 handles loading older logs when scrolling up with k" do

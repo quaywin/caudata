@@ -183,7 +183,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
 
     new_scroll = min(new_scroll, max_scroll)
 
-    if new_scroll >= max_scroll do
+    if model.mode != :selecting and new_scroll >= max_scroll do
       %{model | logs_scroll_y: :bottom}
     else
       %{model | logs_scroll_y: new_scroll}

@@ -1373,6 +1373,54 @@ defmodule Caudata.UI.AppTest do
       assert visual_state.visual_cursor == 2
     end
 
+    test "entering visual select mode when scroll is at bottom keeps logs_scroll_y as integer, freezes logs, and does not auto-scroll on new logs tick" do
+      u_id = System.unique_integer([:positive])
+      profile_id = "test-server-#{u_id}"
+      container_id = "container-1"
+      source_id = "#{profile_id}/#{container_id}"
+      Caudata.LogStore.clear_logs(source_id)
+
+      initial_logs = Enum.map(1..10, &%{timestamp: nil, stream: :stdout, message: "log #{&1}"})
+      Caudata.LogStore.append_logs(source_id, initial_logs)
+      :sys.get_state(Caudata.LogStore)
+
+      {:ok, state} = App.mount([])
+
+      state = %{
+        state
+        | selected_profile_id: profile_id,
+          selected_container_id: container_id,
+          logs: initial_logs,
+          logs_fetch_limit: 10,
+          height: 10,
+          logs_scroll_y: :bottom
+      }
+
+      event_v = %ExRatatui.Event.Key{code: "v", modifiers: []}
+      assert {:noreply, visual_state} = App.handle_event(event_v, state)
+      assert visual_state.mode == :selecting
+      assert is_integer(visual_state.logs_scroll_y)
+      assert visual_state.logs_scroll_y == 4
+      assert visual_state.freeze == true
+
+      # Now, new logs are appended to LogStore (total 12 logs, first 2 are dropped in 10-limit snapshot)
+      new_store_logs = Enum.map(3..12, &%{timestamp: nil, stream: :stdout, message: "log #{&1}"})
+      Caudata.LogStore.clear_logs(source_id)
+      Caudata.LogStore.append_logs(source_id, new_store_logs)
+      :sys.get_state(Caudata.LogStore)
+
+      # Simulate receiving logs_updated PubSub event
+      msg = {:logs_updated, source_id, %{size: 10, drop_count: 2}}
+      assert {:noreply, updated_state} = App.handle_info(msg, visual_state)
+
+      # Tick
+      assert {:noreply, ticked_state} = App.handle_info(:tick, updated_state)
+      assert ticked_state.logs_scroll_y == 4
+      assert ticked_state.logs == initial_logs
+      assert ticked_state.freeze == true
+      assert ticked_state.mode == :selecting
+    end
+
     test "pressing 'y' in normal mode copies all logs and sets notification" do
       {:ok, state} = App.mount([])
 

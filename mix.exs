@@ -157,7 +157,8 @@ defmodule Caudata.MixProject do
   defp deps do
     [
       {:burrito, "~> 1.0"},
-      {:ex_ratatui, "~> 0.11.1", override: true},
+      {:ex_ratatui,
+       git: "https://github.com/quaywin/ex_ratatui.git", branch: "main", override: true},
       {:phoenix_ex_ratatui, "~> 0.1"},
       {:plug_cowboy, "~> 2.7"},
       {:phoenix, "~> 1.7"},

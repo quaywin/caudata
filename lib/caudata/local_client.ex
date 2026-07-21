@@ -41,23 +41,28 @@ defmodule Caudata.LocalClient.Channel do
 
     Task.start(fn ->
       # Monitor caller so we clean up if the calling process exits
-      Process.monitor(caller)
-      loop(nil, conn_ref, caller)
+      ref = Process.monitor(caller)
+      loop(nil, conn_ref, caller, %{caller => ref})
     end)
   end
 
-  defp loop(port, conn_ref, caller) do
+  defp loop(port, conn_ref, active_dest, monitors) do
     receive do
       {:exec, command, reply_to} ->
         if port, do: Port.close(port)
 
-        # Start the port. We use stderr_to_stdout: true to merge stdout/stderr,
-        # or we can use :stderr to split them.
-        # Since Erlang supports :stderr option, let's use [:binary, :exit_status, :stderr]
-        # and forward stdout as stream_id: 0, stderr as stream_id: 1.
+        # Monitor the new recipient if not already monitored
+        monitors =
+          if Map.has_key?(monitors, reply_to) do
+            monitors
+          else
+            ref = Process.monitor(reply_to)
+            Map.put(monitors, reply_to, ref)
+          end
+
         try do
           sh_path = System.find_executable("sh") || "/bin/sh"
-          # Note: we use :stderr_to_stdout to merge stdout and stderr.
+
           new_port =
             Port.open({:spawn_executable, sh_path}, [
               :binary,
@@ -66,33 +71,37 @@ defmodule Caudata.LocalClient.Channel do
               args: ["-c", command]
             ])
 
-          loop(new_port, conn_ref, reply_to)
+          loop(new_port, conn_ref, reply_to, monitors)
         rescue
           e ->
             Logger.error("Failed to open local port for command: #{inspect(e)}")
             send(reply_to, {:ssh_cm, conn_ref, {:exit_status, self(), 1}})
             send(reply_to, {:ssh_cm, conn_ref, {:closed, self()}})
-            loop(nil, conn_ref, reply_to)
+            loop(nil, conn_ref, reply_to, monitors)
         end
 
       # stdout and stderr data from port
       {^port, {:data, chunk}} when is_binary(chunk) ->
-        send(caller, {:ssh_cm, conn_ref, {:data, self(), 0, chunk}})
-        loop(port, conn_ref, caller)
+        send(active_dest, {:ssh_cm, conn_ref, {:data, self(), 0, chunk}})
+        loop(port, conn_ref, active_dest, monitors)
 
       # port exit status
       {^port, {:exit_status, status}} ->
-        send(caller, {:ssh_cm, conn_ref, {:eof, self()}})
-        send(caller, {:ssh_cm, conn_ref, {:exit_status, self(), status}})
-        send(caller, {:ssh_cm, conn_ref, {:closed, self()}})
-        loop(nil, conn_ref, caller)
+        send(active_dest, {:ssh_cm, conn_ref, {:eof, self()}})
+        send(active_dest, {:ssh_cm, conn_ref, {:exit_status, self(), status}})
+        send(active_dest, {:ssh_cm, conn_ref, {:closed, self()}})
+        loop(nil, conn_ref, active_dest, monitors)
 
-      {:DOWN, _ref, :process, ^caller, _reason} ->
+      {:DOWN, _ref, :process, _pid, _reason} ->
         if port, do: Port.close(port)
+        # Clean up all monitors
+        Enum.each(monitors, fn {_pid, ref} -> Process.demonitor(ref, [:flush]) end)
         :ok
 
       :close ->
         if port, do: Port.close(port)
+        # Demonitor all to be clean
+        Enum.each(monitors, fn {_pid, ref} -> Process.demonitor(ref, [:flush]) end)
         :ok
     end
   end

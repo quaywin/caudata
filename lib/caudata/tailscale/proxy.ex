@@ -86,8 +86,10 @@ defmodule Caudata.Tailscale.SSHProxy do
               # Wait for either forwarding task to exit, then terminate both to prevent hangs/leaks
               receive do
                 {:DOWN, _ref, :process, _pid, _reason} ->
-                  Task.shutdown(t1, :brutal_kill)
-                  Task.shutdown(t2, :brutal_kill)
+                  # Close the local TCP socket first to unblock the tasks gracefully
+                  _ = :gen_tcp.close(local_socket)
+                  _ = Task.shutdown(t1, 500)
+                  _ = Task.shutdown(t2, 500)
               end
 
             {:error, err} ->

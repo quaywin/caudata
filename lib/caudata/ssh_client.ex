@@ -53,8 +53,7 @@ defmodule Caudata.SSHClient do
         silently_accept_hosts: true,
         user_interaction: false,
         keepalive: true,
-        keepalive_interval: 15_000,
-        transport_options: [socket_opts: [keepalive: true]],
+        idle_time: 300_000,
         preferred_algorithms: [
           compression: [:zlib, :"zlib@openssh.com", :none]
         ]

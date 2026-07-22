@@ -696,7 +696,12 @@ defmodule Caudata.UI.Components.SettingsModal do
                     Task.start(fn ->
                       result =
                         case Caudata.ServerSupervisor.lookup_worker(server_id) do
-                          {:ok, pid} -> GenServer.call(pid, {:validate_path, path}, 5000)
+                          {:ok, pid} ->
+                            try do
+                              GenServer.call(pid, {:validate_path, path}, 5000)
+                            catch
+                              :exit, _ -> {:error, :timeout}
+                            end
                           _ -> {:error, :not_connected}
                         end
 

@@ -54,6 +54,7 @@ defmodule Caudata.SSHClient do
         user_interaction: false,
         keepalive: true,
         idle_time: 300_000,
+        connect_timeout: 15_000,
         preferred_algorithms: [
           compression: [:zlib, :"zlib@openssh.com", :none]
         ]

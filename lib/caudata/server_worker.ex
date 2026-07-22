@@ -805,6 +805,8 @@ defmodule Caudata.ServerWorker do
   # Helpers
 
   defp stop_existing_conn_task(state) do
+    state = maybe_stop_ts_proxy(state)
+
     if state.conn_task_pid && Process.alive?(state.conn_task_pid) do
       ref = Process.monitor(state.conn_task_pid)
       send(state.conn_task_pid, :stop)

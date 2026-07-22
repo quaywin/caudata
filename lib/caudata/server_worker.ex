@@ -2,8 +2,6 @@ defmodule Caudata.ServerWorker do
   use GenServer, restart: :temporary
   require Logger
 
-  @env Application.compile_env(:caudata, :env, :prod)
-
   @max_reconnect_delay 30_000
   @initial_reconnect_delay 1000
   @max_active_streams 5
@@ -44,7 +42,6 @@ defmodule Caudata.ServerWorker do
     :metrics_channel_id,
     :enable_metrics,
     :metrics,
-    :ts_proxy_pid,
     container_order: [],
     metrics_buffer: "",
     events_buffer: "",
@@ -155,17 +152,11 @@ defmodule Caudata.ServerWorker do
       container_stats_buffer: "",
       log_stream_timer: nil,
       log_debounce_delay: log_delay,
-      stats_debounce_delay: stats_delay,
-      ts_proxy_pid: nil
+      stats_debounce_delay: stats_delay
     }
 
     # Broadcast initial connecting status
     broadcast_status(profile.id, :connecting)
-
-    # Subscribe to tailscale events
-    if @env != :test do
-      Phoenix.PubSub.subscribe(Caudata.PubSub, "tailscale")
-    end
 
     # Trigger async connect
     send(self(), :connect)
@@ -330,23 +321,7 @@ defmodule Caudata.ServerWorker do
 
     {:ok, task_pid} =
       Task.start(fn ->
-        {host_to_connect, port_to_connect, proxy_pid} =
-          if Caudata.Tailscale.Service.tailscale_host?(host) &&
-               Caudata.Tailscale.Service.active?() do
-            case Caudata.Tailscale.Service.get_ssh_proxy(host, port) do
-              {:ok, pid, {local_host, local_port}} ->
-                {local_host, local_port, pid}
-
-              _ ->
-                {host, port, nil}
-            end
-          else
-            {host, port, nil}
-          end
-
-        if proxy_pid, do: send(parent, {:ssh_proxy_started, proxy_pid})
-
-        case ssh_client.connect(host_to_connect, port_to_connect, connect_opts) do
+        case ssh_client.connect(host, port, connect_opts) do
           {:ok, conn_ref} ->
             send(parent, {:ssh_connected, conn_ref, self()})
 
@@ -366,28 +341,6 @@ defmodule Caudata.ServerWorker do
       end)
 
     {:noreply, %{state | conn_task_pid: task_pid}}
-  end
-
-  @impl true
-  def handle_info({:ssh_proxy_started, proxy_pid}, state) do
-    {:noreply, %{state | ts_proxy_pid: proxy_pid}}
-  end
-
-  @impl true
-  def handle_info(:tailscale_connected, state) do
-    host = state.profile.host_name
-
-    if Caudata.Tailscale.Service.tailscale_host?(host) and state.status == :connecting do
-      Logger.info(
-        "Tailscale service became active. Triggering immediate reconnect for #{state.profile.id}..."
-      )
-
-      state = cancel_reconnect_timer(state)
-      send(self(), :connect)
-      {:noreply, %{state | reconnect_delay: @initial_reconnect_delay}}
-    else
-      {:noreply, state}
-    end
   end
 
   @impl true
@@ -795,9 +748,6 @@ defmodule Caudata.ServerWorker do
       end
     end
 
-    # Stop Tailscale SSH proxy if active
-    state = maybe_stop_ts_proxy(state)
-
     broadcast_status(state.profile.id, :disconnected)
     :ok
   end
@@ -805,8 +755,6 @@ defmodule Caudata.ServerWorker do
   # Helpers
 
   defp stop_existing_conn_task(state) do
-    state = maybe_stop_ts_proxy(state)
-
     if state.conn_task_pid && Process.alive?(state.conn_task_pid) do
       ref = Process.monitor(state.conn_task_pid)
       send(state.conn_task_pid, :stop)
@@ -825,14 +773,6 @@ defmodule Caudata.ServerWorker do
     end
 
     %{state | conn_task_pid: nil}
-  end
-
-  defp maybe_stop_ts_proxy(state) do
-    if state.ts_proxy_pid do
-      Caudata.Tailscale.SSHProxy.stop_proxy(state.ts_proxy_pid)
-    end
-
-    %{state | ts_proxy_pid: nil}
   end
 
   @max_buffer_size 10_000
@@ -885,9 +825,6 @@ defmodule Caudata.ServerWorker do
     Enum.each(state.container_pids, fn {_id, pid} ->
       if Process.alive?(pid), do: Caudata.ContainerWorker.stop_streaming(pid)
     end)
-
-    # Stop Tailscale SSH proxy if active
-    state = maybe_stop_ts_proxy(state)
 
     broadcast_status(state.profile.id, :connecting)
 

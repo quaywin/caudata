@@ -94,14 +94,6 @@ defmodule Caudata.Config do
     }
   end
 
-  def tailscale_settings(config) do
-    %{
-      enabled: get_in(config, ["tailscale", "enabled"]) || false,
-      auth_key: get_in(config, ["tailscale", "auth_key"]) || "",
-      hostname: get_in(config, ["tailscale", "hostname"]) || "caudata"
-    }
-  end
-
   def custom_profiles(config) do
     Map.get(config, "profiles") || []
   end
@@ -182,24 +174,6 @@ defmodule Caudata.Config do
         _ -> "~/.caudata/ssh_keys"
       end
 
-    ts_enabled =
-      case :ets.lookup(tab, {:tailscale, :enabled}) do
-        [{_, val}] -> val
-        _ -> false
-      end
-
-    ts_auth_key =
-      case :ets.lookup(tab, {:tailscale, :auth_key}) do
-        [{_, val}] -> val
-        _ -> ""
-      end
-
-    ts_hostname =
-      case :ets.lookup(tab, {:tailscale, :hostname}) do
-        [{_, val}] -> val
-        _ -> "caudata"
-      end
-
     profiles =
       :ets.match_object(tab, {{:profile, :_}, :_})
       |> Enum.map(fn {_, profile} ->
@@ -217,11 +191,6 @@ defmodule Caudata.Config do
         "port" => ssh_port,
         "host_keys_dir" => ssh_keys_dir
       },
-      "tailscale" => %{
-        "enabled" => ts_enabled,
-        "auth_key" => ts_auth_key,
-        "hostname" => ts_hostname
-      },
       "profiles" => profiles
     }
   end
@@ -237,11 +206,6 @@ defmodule Caudata.Config do
         "ip" => "127.0.0.1",
         "port" => 2222,
         "host_keys_dir" => "~/.caudata/ssh_keys"
-      },
-      "tailscale" => %{
-        "enabled" => false,
-        "auth_key" => "",
-        "hostname" => "caudata"
       },
       "profiles" => []
     }
@@ -263,10 +227,6 @@ defmodule Caudata.Config do
       tab,
       {{:ssh_server, :host_keys_dir}, get_in(map, ["ssh_server", "host_keys_dir"])}
     )
-
-    :ets.insert(tab, {{:tailscale, :enabled}, get_in(map, ["tailscale", "enabled"])})
-    :ets.insert(tab, {{:tailscale, :auth_key}, get_in(map, ["tailscale", "auth_key"])})
-    :ets.insert(tab, {{:tailscale, :hostname}, get_in(map, ["tailscale", "hostname"])})
 
     profiles = Map.get(map, "profiles") || []
 

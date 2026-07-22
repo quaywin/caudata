@@ -74,9 +74,6 @@ defmodule Caudata.Application do
       # Server registry for worker naming lookup
       {Registry, keys: :unique, name: Caudata.ServerRegistry},
 
-      # Tailscale Service
-      {Caudata.Tailscale.Service, []},
-
       # Server DynamicSupervisor for dynamically spawned server workers
       Caudata.ServerSupervisor
     ]

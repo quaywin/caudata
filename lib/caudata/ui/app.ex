@@ -23,7 +23,6 @@ defmodule Caudata.UI.App do
     if Process.whereis(Caudata.PubSub) do
       Phoenix.PubSub.subscribe(Caudata.PubSub, "config:profiles")
       Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
-      Phoenix.PubSub.subscribe(Caudata.PubSub, "tailscale")
     end
 
     {width, height} =
@@ -107,7 +106,6 @@ defmodule Caudata.UI.App do
       settings_ts_enabled: false,
       settings_ts_auth_key: "",
       settings_ts_hostname: "caudata",
-      settings_tailscale_focus_idx: 0,
       settings_input_active: false,
       settings_input_value: "",
       settings_service_search: "",
@@ -335,22 +333,6 @@ defmodule Caudata.UI.App do
           }
           |> maybe_auto_select_container()
 
-        # Check Tailscale status and set initial notification if applicable
-        new_state =
-          case Caudata.Tailscale.Service.get_status() do
-            :connecting ->
-              %{new_state | notification: {"Connecting to Tailscale network...", 25}}
-
-            {:connected, ip_str} ->
-              %{new_state | notification: {"Tailscale connected successfully! IP: #{ip_str}", 25}}
-
-            {:error, err} ->
-              %{new_state | notification: {"Error connecting to Tailscale: #{inspect(err)}", 25}}
-
-            _ ->
-              new_state
-          end
-
         noreply(state, new_state)
 
       :tick ->
@@ -551,21 +533,6 @@ defmodule Caudata.UI.App do
              containers: new_containers,
              metrics: new_metrics
          }}
-
-      {:tailscale_status, :connecting} ->
-        noreply(state, %{state | notification: {"Connecting to Tailscale network...", 25}})
-
-      {:tailscale_status, {:connected, ip_str}} ->
-        noreply(state, %{
-          state
-          | notification: {"Tailscale connected successfully! IP: #{ip_str}", 25}
-        })
-
-      {:tailscale_status, {:error, err}} ->
-        noreply(state, %{
-          state
-          | notification: {"Error connecting to Tailscale: #{inspect(err)}", 25}
-        })
 
       {:metrics_updated, server_id, metrics} ->
         {:noreply, %{state | metrics: Map.put(state.metrics, server_id, metrics)}}

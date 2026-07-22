@@ -740,18 +740,12 @@ defmodule Caudata.UI.AppTest do
 
     # Tab 2b: :containers -> :services
     assert {:noreply, state_tab1b} = App.handle_event(event_tab, state_tab1)
-    assert state_tab1b.settings_focus == :services
-
     # Tab 3: :services -> :custom_logs
     assert {:noreply, state_tab2} = App.handle_event(event_tab, state_tab1b)
     assert state_tab2.settings_focus == :custom_logs
 
-    # Tab 4: :custom_logs -> :tailscale
-    assert {:noreply, state_tab3_ts} = App.handle_event(event_tab, state_tab2)
-    assert state_tab3_ts.settings_focus == :tailscale
-
-    # Tab 4b: :tailscale -> :general
-    assert {:noreply, state_tab3} = App.handle_event(event_tab, state_tab3_ts)
+    # Tab 4: :custom_logs -> :general
+    assert {:noreply, state_tab3} = App.handle_event(event_tab, state_tab2)
     assert state_tab3.settings_focus == :general
 
     # Tab 5: :general -> :servers

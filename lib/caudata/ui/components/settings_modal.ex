@@ -38,7 +38,6 @@ defmodule Caudata.UI.Components.SettingsModal do
       {:containers, "Docker Containers"},
       {:services, "System Services"},
       {:custom_logs, "Custom Logs"},
-      {:tailscale, "Tailscale"},
       {:general, "General"}
     ]
 
@@ -75,9 +74,6 @@ defmodule Caudata.UI.Components.SettingsModal do
 
         :custom_logs ->
           render_custom_logs_tab(state, profile, custom_logs)
-
-        :tailscale ->
-          render_tailscale_tab(state)
 
         :general ->
           render_general_tab(state)
@@ -659,9 +655,6 @@ defmodule Caudata.UI.Components.SettingsModal do
       model.settings_focus == :connection ->
         handle_connection_key(key, key_data, model, profile)
 
-      model.settings_focus == :tailscale ->
-        handle_tailscale_key(key, key_data, model)
-
       model.settings_focus == :general ->
         handle_general_key(key, key_data, model)
 
@@ -747,8 +740,7 @@ defmodule Caudata.UI.Components.SettingsModal do
                     :connection -> :containers
                     :containers -> :services
                     :services -> :custom_logs
-                    :custom_logs -> :tailscale
-                    :tailscale -> :general
+                    :custom_logs -> :general
                     :general -> :servers
                   end
 
@@ -770,8 +762,7 @@ defmodule Caudata.UI.Components.SettingsModal do
                     :containers -> :connection
                     :services -> :containers
                     :custom_logs -> :services
-                    :tailscale -> :custom_logs
-                    :general -> :tailscale
+                    :general -> :custom_logs
                   end
 
                 # Reset search state when leaving the services tab
@@ -1728,295 +1719,6 @@ defmodule Caudata.UI.Components.SettingsModal do
 
       _ ->
         {%{model | settings_status_msg: "Error: Capacity must be a positive integer"}, []}
-    end
-  end
-
-  defp render_tailscale_tab(state) do
-    # Fields:
-    # 0: [ ] Enable Tailscale
-    # 1: Tailscale Auth Key
-    # 2: Node Hostname on Tailnet
-    # 3: Save button
-    # 4: Cancel button
-    active_idx = state.settings_tailscale_focus_idx || 0
-
-    ts_enabled = state.settings_ts_enabled || false
-    ts_auth_key = state.settings_ts_auth_key || ""
-    ts_hostname = state.settings_ts_hostname || "caudata"
-
-    enable_checkbox = if ts_enabled, do: "[X] Enable Tailscale", else: "[ ] Enable Tailscale"
-    enable_color = if active_idx == 0, do: :green, else: :white
-
-    display_auth_key =
-      if active_idx == 1 do
-        ts_auth_key <> "█"
-      else
-        String.duplicate("*", min(15, String.length(ts_auth_key)))
-      end
-
-    display_hostname = ts_hostname <> if(active_idx == 2, do: "█", else: "")
-
-    lines = [
-      Line.new([]),
-      Line.new([
-        Span.new(if(active_idx == 0, do: "> ", else: "  ")),
-        Span.new(enable_checkbox, style: %Style{fg: enable_color})
-      ]),
-      Line.new([]),
-      Line.new([
-        Span.new(if(active_idx == 1, do: "> ", else: "  ")),
-        Span.new("Tailscale Auth Key (tskey-auth-...):",
-          style: %Style{fg: if(active_idx == 1, do: :cyan, else: :white)}
-        )
-      ]),
-      Line.new([
-        Span.new("    "),
-        Span.new(display_auth_key,
-          style: %Style{fg: if(active_idx == 1, do: :green, else: :white)}
-        )
-      ]),
-      Line.new([]),
-      Line.new([
-        Span.new(if(active_idx == 2, do: "> ", else: "  ")),
-        Span.new("Node Hostname on Tailnet:",
-          style: %Style{fg: if(active_idx == 2, do: :cyan, else: :white)}
-        )
-      ]),
-      Line.new([
-        Span.new("    "),
-        Span.new(display_hostname,
-          style: %Style{fg: if(active_idx == 2, do: :green, else: :white)}
-        )
-      ]),
-      Line.new([]),
-      Line.new([
-        Span.new(
-          if(active_idx == 3,
-            do: "> [ Save Tailscale Settings ]   ",
-            else: "  [ Save Tailscale Settings ]   "
-          ),
-          style: %Style{fg: if(active_idx == 3, do: :green, else: :white)}
-        ),
-        Span.new(
-          if(active_idx == 4, do: "> [ Cancel ]", else: "  [ Cancel ]"),
-          style: %Style{fg: if(active_idx == 4, do: :red, else: :white)}
-        )
-      ])
-    ]
-
-    status_lines =
-      if state.settings_status_msg do
-        color =
-          if String.starts_with?(state.settings_status_msg, "Error"), do: :red, else: :yellow
-
-        [
-          Line.new([]),
-          Line.new([
-            Span.new("  ℹ ", style: %Style{fg: color}),
-            Span.new(state.settings_status_msg, style: %Style{fg: color})
-          ])
-        ]
-      else
-        []
-      end
-
-    lines ++ status_lines
-  end
-
-  defp handle_tailscale_key(key, key_data, model) do
-    # fields are:
-    # 0 -> enable checkbox
-    # 1 -> auth key
-    # 2 -> hostname
-    # 3 -> save button
-    # 4 -> cancel button
-    active_idx = model.settings_tailscale_focus_idx || 0
-    num_fields = 5
-
-    norm_key = if key == :char, do: Map.get(key_data, :char), else: key
-
-    case norm_key do
-      :down ->
-        new_focus = rem(active_idx + 1, num_fields)
-        {%{model | settings_tailscale_focus_idx: new_focus, settings_status_msg: nil}, []}
-
-      :up ->
-        new_focus = rem(active_idx - 1 + num_fields, num_fields)
-        {%{model | settings_tailscale_focus_idx: new_focus, settings_status_msg: nil}, []}
-
-      k when k in [:tab, :right] ->
-        {%{model | settings_focus: :general, settings_status_msg: nil}, []}
-
-      :left ->
-        {%{model | settings_focus: :custom_logs, settings_status_msg: nil}, []}
-
-      k when k in [:space, " "] ->
-        if active_idx == 0 do
-          current = model.settings_ts_enabled || false
-          {%{model | settings_ts_enabled: !current}, []}
-        else
-          {model, []}
-        end
-
-      :enter ->
-        case active_idx do
-          # enable checkbox toggle
-          0 ->
-            current = model.settings_ts_enabled || false
-            {%{model | settings_ts_enabled: !current}, []}
-
-          # text inputs move down on enter
-          i when i in [1, 2] ->
-            {%{model | settings_tailscale_focus_idx: i + 1}, []}
-
-          # save
-          3 ->
-            save_tailscale_settings(model)
-
-          # cancel
-          4 ->
-            # Revert from DB
-            ts_enabled =
-              if Process.whereis(Caudata.ConfigStore),
-                do:
-                  Caudata.ConfigStore.get_setting(
-                    Caudata.ConfigStore,
-                    :tailscale,
-                    :enabled,
-                    false
-                  ),
-                else: false
-
-            ts_auth_key =
-              if Process.whereis(Caudata.ConfigStore),
-                do:
-                  Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :tailscale, :auth_key, ""),
-                else: ""
-
-            ts_hostname =
-              if Process.whereis(Caudata.ConfigStore),
-                do:
-                  Caudata.ConfigStore.get_setting(
-                    Caudata.ConfigStore,
-                    :tailscale,
-                    :hostname,
-                    "caudata"
-                  ),
-                else: "caudata"
-
-            {%{
-               model
-               | settings_focus: :servers,
-                 settings_tailscale_focus_idx: 0,
-                 settings_ts_enabled: ts_enabled,
-                 settings_ts_auth_key: ts_auth_key,
-                 settings_ts_hostname: ts_hostname,
-                 settings_status_msg: nil
-             }, []}
-        end
-
-      _ ->
-        cond do
-          active_idx == 1 ->
-            handle_tailscale_text_input(key, key_data, model, :settings_ts_auth_key)
-
-          active_idx == 2 ->
-            handle_tailscale_text_input(key, key_data, model, :settings_ts_hostname)
-
-          true ->
-            {model, []}
-        end
-    end
-  end
-
-  defp handle_tailscale_text_input(key, key_data, model, field_key) do
-    case key do
-      :paste ->
-        text = Map.get(key_data, :content, "")
-        current_val = Map.get(model, field_key) || ""
-        {%{model | field_key => current_val <> text}, []}
-
-      :backspace ->
-        current_val = Map.get(model, field_key) || ""
-        new_val = String.slice(current_val, 0..-2//1)
-        {%{model | field_key => new_val}, []}
-
-      :char ->
-        char = Map.get(key_data, :char, "")
-
-        if is_binary(char) and char != "" do
-          current_val = Map.get(model, field_key) || ""
-          {%{model | field_key => current_val <> char}, []}
-        else
-          {model, []}
-        end
-
-      ch when is_binary(ch) and byte_size(ch) == 1 ->
-        current_val = Map.get(model, field_key) || ""
-        {%{model | field_key => current_val <> ch}, []}
-
-      _ ->
-        {model, []}
-    end
-  end
-
-  defp save_tailscale_settings(model) do
-    enabled = model.settings_ts_enabled || false
-    auth_key = String.trim(model.settings_ts_auth_key || "")
-    hostname = String.trim(model.settings_ts_hostname || "caudata")
-
-    if enabled && auth_key == "" do
-      {%{
-         model
-         | settings_status_msg: "Error: Auth Key cannot be empty when Tailscale is enabled"
-       }, []}
-    else
-      # Retrieve current values from ConfigStore to compare
-      current_enabled =
-        if Process.whereis(Caudata.ConfigStore),
-          do: Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :tailscale, :enabled, false),
-          else: false
-
-      current_auth_key =
-        if Process.whereis(Caudata.ConfigStore),
-          do: Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :tailscale, :auth_key, ""),
-          else: ""
-
-      current_hostname =
-        if Process.whereis(Caudata.ConfigStore),
-          do:
-            Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :tailscale, :hostname, "caudata"),
-          else: "caudata"
-
-      settings_changed? =
-        enabled != current_enabled ||
-          auth_key != current_auth_key ||
-          hostname != current_hostname
-
-      if settings_changed? do
-        if Process.whereis(Caudata.ConfigStore) do
-          Caudata.ConfigStore.put_settings(Caudata.ConfigStore, [
-            {:tailscale, :enabled, enabled},
-            {:tailscale, :auth_key, auth_key},
-            {:tailscale, :hostname, hostname}
-          ])
-        end
-
-        # Asynchronously restart the Service
-        if Process.whereis(Caudata.Tailscale.Service) do
-          Process.exit(Process.whereis(Caudata.Tailscale.Service), :kill)
-        end
-
-        {%{
-           model
-           | settings_status_msg: "Tailscale settings saved successfully. Service restarted."
-         }, []}
-      else
-        {%{
-           model
-           | settings_status_msg: "Tailscale settings saved (no changes)."
-         }, []}
-      end
     end
   end
 end

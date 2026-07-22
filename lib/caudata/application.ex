@@ -40,10 +40,24 @@ defmodule Caudata.Application do
     capacity = Caudata.Config.global_capacity(config)
     _ssh_settings = Caudata.Config.ssh_server_settings(config)
 
+    # Setup file logging in ~/.caudata/caudata.log
+    log_dir = Path.expand("~/.caudata")
+    File.mkdir_p!(log_dir)
+    log_file = Path.join(log_dir, "caudata.log")
+
+    try do
+      :logger.add_handler(:caudata_file_log, :logger_std_h, %{
+        config: %{type: :file, file: String.to_charlist(log_file)},
+        level: :info
+      })
+    catch
+      _, _ -> :ok
+    end
+
     # Disable console logging if starting TUI to prevent corrupting the terminal render
     if start_tui?(mode) do
       Logger.configure(backends: [])
-      :logger.set_primary_config(:level, :none)
+      :logger.set_primary_config(:level, :info)
     end
 
     children = [

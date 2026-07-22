@@ -289,16 +289,29 @@ defmodule Caudata.ContainerWorker do
 
   # Helpers
 
+  @max_buffer_size 10_000
+
   defp process_chunk(chunk, buffer) do
     combined = buffer <> chunk
 
     case String.split(combined, ~r{\r?\n}) do
       [single_part] ->
-        {[], single_part}
+        if byte_size(single_part) > @max_buffer_size do
+          {chunk_part, rest_part} = String.split_at(single_part, @max_buffer_size)
+          {[chunk_part], rest_part}
+        else
+          {[], single_part}
+        end
 
       parts ->
         {lines, [last_part]} = Enum.split(parts, -1)
-        {lines, last_part}
+
+        if byte_size(last_part) > @max_buffer_size do
+          {chunk_part, rest_part} = String.split_at(last_part, @max_buffer_size)
+          {lines ++ [chunk_part], rest_part}
+        else
+          {lines, last_part}
+        end
     end
   end
 

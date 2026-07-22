@@ -93,8 +93,8 @@ defmodule Caudata.UI.Components.LogsPane do
       displayed_logs
       |> Enum.with_index()
       |> Enum.flat_map(fn {%{timestamp: ts, stream: stream, message: line}, idx} ->
-        spans = LogFormatter.format_line(line)
-        is_error = stream == :stderr or error_line?(line)
+        {spans, is_err_level} = LogFormatter.format_line_with_meta(line)
+        is_error = stream == :stderr or is_err_level
 
         ViewHelper.wrap_spans(spans, wrap_width)
         |> Enum.with_index()
@@ -287,26 +287,4 @@ defmodule Caudata.UI.Components.LogsPane do
   end
 
   defp format_docker_timestamp(_), do: String.duplicate(" ", 19)
-
-  defp error_line?(line) do
-    case Regex.named_captures(LogFormatter.log_regex(), line) do
-      %{
-        "bracket_lvl" => bracket_lvl,
-        "colon_lvl" => colon_lvl,
-        "bare_lvl" => bare_lvl
-      } ->
-        lvl =
-          cond do
-            bracket_lvl != "" -> bracket_lvl
-            colon_lvl != "" -> colon_lvl
-            bare_lvl != "" -> bare_lvl
-            true -> nil
-          end
-
-        if lvl, do: LogFormatter.error_level?(lvl), else: false
-
-      _ ->
-        false
-    end
-  end
 end

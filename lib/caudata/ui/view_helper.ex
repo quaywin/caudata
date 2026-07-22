@@ -307,20 +307,24 @@ defmodule Caudata.UI.ViewHelper do
   def find_overlap_index(_old_logs, []), do: nil
 
   def find_overlap_index(old_logs, new_logs) do
-    first_new = hd(new_logs)
+    if old_logs == new_logs do
+      0
+    else
+      first_new = hd(new_logs)
 
-    old_logs
-    |> Stream.with_index()
-    |> Stream.filter(fn {item, _idx} -> item == first_new end)
-    |> Enum.find_value(fn {_item, idx} ->
-      remaining_old = Enum.drop(old_logs, idx)
+      old_logs
+      |> Stream.with_index()
+      |> Stream.filter(fn {item, _idx} -> item == first_new end)
+      |> Enum.find_value(fn {_item, idx} ->
+        remaining_old = Enum.drop(old_logs, idx)
 
-      if List.starts_with?(new_logs, remaining_old) do
-        idx
-      else
-        nil
-      end
-    end)
+        if List.starts_with?(new_logs, remaining_old) do
+          idx
+        else
+          nil
+        end
+      end)
+    end
   end
 
   @doc """

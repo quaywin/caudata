@@ -28,19 +28,32 @@ defmodule Caudata.LogSanitizer do
       valid when is_binary(valid) ->
         valid
 
-      {:incomplete, valid, _} ->
-        valid <> ""
+      {:incomplete, valid, rest} ->
+        valid <> scrub_invalid_utf8(rest)
 
-      {:error, _valid, _} ->
-        # If it's a completely invalid binary, handle character by character
-        binary
-        |> String.codepoints()
-        |> Enum.map(fn cp ->
-          if String.printable?(cp), do: cp, else: ""
-        end)
-        |> Enum.join()
+      {:error, valid, rest} ->
+        valid <> scrub_invalid_utf8(rest)
     end
   end
+
+  def scrub_invalid_utf8(binary) when is_binary(binary) do
+    case :unicode.characters_to_binary(binary, :utf8, :utf8) do
+      valid when is_binary(valid) ->
+        valid
+
+      {:incomplete, valid, rest} ->
+        valid <> scrub_bytes(rest)
+
+      {:error, valid, rest} ->
+        valid <> scrub_bytes(rest)
+    end
+  end
+
+  defp scrub_bytes(<<_byte, rest::binary>>) do
+    "" <> scrub_invalid_utf8(rest)
+  end
+
+  defp scrub_bytes(<<>>), do: ""
 
   # Strips standard ANSI color and formatting escape sequences
   def strip_ansi_escapes(binary) do

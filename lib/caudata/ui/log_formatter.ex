@@ -9,9 +9,9 @@ defmodule Caudata.UI.LogFormatter do
   @log_regex ~r/^(?:(?=\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}|\d{2}:\d{2}:\d{2}|\[[a-zA-Z0-9_-]+\]|\b(?:info|warn|warning|error|err|debug|fatal|trace|critical|crit|emerg|emergency|stderr|fail|failure)\b)(?:(?<ts>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?|\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s)?(?:(?:\[(?<bracket_lvl>[a-zA-Z0-9_-]+)\]|(?<colon_lvl>\b(?:info|warn|warning|error|err|debug|fatal|trace|critical|crit|emerg|emergency|stderr|fail|failure)\b):|(?<bare_lvl>\b(?:info|warn|warning|error|err|debug|fatal|trace|critical|crit|emerg|emergency|stderr|fail|failure)\b))\s?)?)?(?<msg>.*)$/i
 
   @doc """
-  Formats a single log line into a list of spans.
+  Formats a single log line into a tuple `{spans, is_error}`.
   """
-  def format_line(line) do
+  def format_line_with_meta(line) do
     case Regex.named_captures(@log_regex, line) do
       %{
         "ts" => ts,
@@ -20,13 +20,15 @@ defmodule Caudata.UI.LogFormatter do
         "bare_lvl" => bare_lvl,
         "msg" => msg
       } ->
-        {_level, lvl_style} =
+        {level, lvl_style} =
           cond do
             bracket_lvl != "" -> {bracket_lvl, level_style(bracket_lvl)}
             colon_lvl != "" -> {colon_lvl, level_style(colon_lvl)}
             bare_lvl != "" -> {bare_lvl, level_style(bare_lvl)}
             true -> {nil, nil}
           end
+
+        is_error = if level, do: error_level?(level), else: false
 
         msg_style = %Style{fg: :white}
 
@@ -55,11 +57,19 @@ defmodule Caudata.UI.LogFormatter do
               spans
           end
 
-        spans ++ [Span.new(msg, style: msg_style)]
+        {spans ++ [Span.new(msg, style: msg_style)], is_error}
 
       nil ->
-        [Span.new(line, style: %Style{fg: :white})]
+        {[Span.new(line, style: %Style{fg: :white})], false}
     end
+  end
+
+  @doc """
+  Formats a single log line into a list of spans.
+  """
+  def format_line(line) do
+    {spans, _is_error} = format_line_with_meta(line)
+    spans
   end
 
   defp level_style(level) do

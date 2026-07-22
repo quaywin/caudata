@@ -57,6 +57,7 @@ defmodule Caudata.Application do
     # Disable console logging if starting TUI to prevent corrupting the terminal render
     if start_tui?(mode) do
       Logger.configure(backends: [])
+      _ = :logger.remove_handler(:default)
       :logger.set_primary_config(:level, :info)
     end
 

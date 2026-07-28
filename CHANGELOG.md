@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.59] - 2026-07-29
+
+### Refactored & Cleaned
+
+- Resolved all Elixir compiler warnings (0 warnings)
+- Extracted duplicate `process_chunk/2` stream buffer splitting logic into `Caudata.LogSanitizer.process_chunk/2`
+- Consolidated ANSI escape code stripping via `Caudata.LogSanitizer.strip_ansi_escapes/1`
+- Unified `docker_container?/1` identification logic into `Caudata.UI.ViewHelper.docker_container?/1`
+
 ## [0.1.58] - 2026-07-29
 
 ### Fixed

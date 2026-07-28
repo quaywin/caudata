@@ -246,16 +246,7 @@ defmodule Caudata.UI.Components.Footer do
           &(to_string(&1.id) == to_string(Map.get(state, :selected_container_id)))
         )
 
-      case selected_container do
-        %{image: image, id: id} ->
-          image not in ["file", "systemd", "launchd"] and
-            not String.starts_with?(to_string(id), "file:") and
-            not String.starts_with?(to_string(id), "systemd:") and
-            not String.starts_with?(to_string(id), "launchd:")
-
-        _ ->
-          false
-      end
+      Caudata.UI.ViewHelper.docker_container?(selected_container)
     else
       false
     end

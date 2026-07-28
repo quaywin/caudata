@@ -1,6 +1,7 @@
 defmodule Caudata.ServerWorker do
   use GenServer, restart: :temporary
   require Logger
+  alias Caudata.LogSanitizer
 
   @max_reconnect_delay 30_000
   @initial_reconnect_delay 1000
@@ -530,19 +531,19 @@ defmodule Caudata.ServerWorker do
 
       conn_ref == state.conn_ref && channel_id == state.events_channel_id ->
         chunk_str = to_string(chunk)
-        {lines, new_events_buffer} = process_chunk(chunk_str, state.events_buffer)
+        {lines, new_events_buffer} = LogSanitizer.process_chunk(chunk_str, state.events_buffer)
         state = Enum.reduce(lines, state, &handle_docker_event/2)
         {:noreply, %{state | events_buffer: new_events_buffer, last_activity_at: now}}
 
       conn_ref == state.conn_ref && channel_id == state.metrics_channel_id ->
         chunk_str = to_string(chunk)
-        {lines, new_metrics_buffer} = process_chunk(chunk_str, state.metrics_buffer)
+        {lines, new_metrics_buffer} = LogSanitizer.process_chunk(chunk_str, state.metrics_buffer)
         state = Enum.reduce(lines, state, &handle_metrics_line/2)
         {:noreply, %{state | metrics_buffer: new_metrics_buffer, last_activity_at: now}}
 
       conn_ref == state.conn_ref && channel_id == state.container_stats_channel_id ->
         chunk_str = to_string(chunk)
-        {lines, new_stats_buffer} = process_chunk(chunk_str, state.container_stats_buffer)
+        {lines, new_stats_buffer} = LogSanitizer.process_chunk(chunk_str, state.container_stats_buffer)
         state = Enum.reduce(lines, state, &handle_metrics_line/2)
         {:noreply, %{state | container_stats_buffer: new_stats_buffer, last_activity_at: now}}
 
@@ -862,31 +863,6 @@ defmodule Caudata.ServerWorker do
     %{state | conn_task_pid: nil}
   end
 
-  @max_buffer_size 10_000
-
-  defp process_chunk(chunk, buffer) do
-    combined = buffer <> chunk
-
-    case String.split(combined, ~r{\r?\n}) do
-      [single_part] ->
-        if byte_size(single_part) > @max_buffer_size do
-          {chunk_part, rest_part} = String.split_at(single_part, @max_buffer_size)
-          {[chunk_part], rest_part}
-        else
-          {[], single_part}
-        end
-
-      parts ->
-        {lines, [last_part]} = Enum.split(parts, -1)
-
-        if byte_size(last_part) > @max_buffer_size do
-          {chunk_part, rest_part} = String.split_at(last_part, @max_buffer_size)
-          {lines ++ [chunk_part], rest_part}
-        else
-          {lines, last_part}
-        end
-    end
-  end
 
   defp handle_disconnect(state, reason) do
     # Reply to any pending validation channels
@@ -1163,7 +1139,7 @@ defmodule Caudata.ServerWorker do
   defp handle_metrics_line(line, state) do
     clean_line =
       line
-      |> String.replace(~r/\e\[[0-9;]*[a-zA-Z]/, "")
+      |> LogSanitizer.strip_ansi_escapes()
       |> String.replace("\r", "")
       |> String.trim()
 

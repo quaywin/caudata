@@ -76,4 +76,44 @@ defmodule Caudata.LogSanitizer do
       binary
     end
   end
+
+  @max_buffer_size 10_000
+
+  @doc """
+  Processes an incoming binary log chunk accumulated with a buffer.
+  Splits lines by newline while capping line lengths to max_buffer_size.
+  Returns `{complete_lines, remaining_buffer}`.
+  """
+  def process_chunk(chunk, buffer, max_size \\ @max_buffer_size) do
+    combined = buffer <> chunk
+
+    case String.split(combined, ~r{\r?\n}) do
+      [single_part] ->
+        if byte_size(single_part) > max_size do
+          {chunk_part, rest_part} = String.split_at(single_part, max_size)
+          {[chunk_part], rest_part}
+        else
+          {[], single_part}
+        end
+
+      parts ->
+        {complete_lines, [incomplete_part]} = Enum.split(parts, -1)
+
+        cleaned_complete_lines =
+          Enum.map(complete_lines, fn line ->
+            if byte_size(line) > max_size do
+              String.slice(line, 0, max_size)
+            else
+              line
+            end
+          end)
+
+        if byte_size(incomplete_part) > max_size do
+          {chunk_part, rest_part} = String.split_at(incomplete_part, max_size)
+          {cleaned_complete_lines ++ [chunk_part], rest_part}
+        else
+          {cleaned_complete_lines, incomplete_part}
+        end
+    end
+  end
 end

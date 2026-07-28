@@ -237,18 +237,7 @@ defmodule Caudata.UI.KeyHandler do
     end
   end
 
-  defp docker_container?(container) do
-    case container do
-      %{image: image, id: id} ->
-        image not in ["file", "systemd", "launchd"] and
-          not String.starts_with?(to_string(id), "file:") and
-          not String.starts_with?(to_string(id), "systemd:") and
-          not String.starts_with?(to_string(id), "launchd:")
-
-      _ ->
-        false
-    end
-  end
+  defp docker_container?(container), do: Caudata.UI.ViewHelper.docker_container?(container)
 
   # Backwards compatibility delegators for App module/tests
   def select_item(item, model), do: Sidebar.select_item(item, model)

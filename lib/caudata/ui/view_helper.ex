@@ -18,6 +18,22 @@ defmodule Caudata.UI.ViewHelper do
   end
 
   @doc """
+  Checks if a container struct represents a Docker container vs a custom file or system service.
+  """
+  def docker_container?(container) do
+    case container do
+      %{image: image, id: id} ->
+        image not in ["file", "systemd", "launchd"] and
+          not String.starts_with?(to_string(id), "file:") and
+          not String.starts_with?(to_string(id), "systemd:") and
+          not String.starts_with?(to_string(id), "launchd:")
+
+      _ ->
+        false
+    end
+  end
+
+  @doc """
   Returns the logs list, optionally filtered by regex, or a fallback message if empty.
   """
   def get_displayed_logs(model) do

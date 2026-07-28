@@ -183,10 +183,10 @@ defmodule Caudata.ContainerWorker do
 
       {lines, new_buffer, state_key} =
         if stream_id == 1 do
-          {lines, new_buf} = process_chunk(chunk_str, state.stderr_buffer)
+          {lines, new_buf} = Caudata.LogSanitizer.process_chunk(chunk_str, state.stderr_buffer)
           {lines, new_buf, :stderr_buffer}
         else
-          {lines, new_buf} = process_chunk(chunk_str, state.stdout_buffer)
+          {lines, new_buf} = Caudata.LogSanitizer.process_chunk(chunk_str, state.stdout_buffer)
           {lines, new_buf, :stdout_buffer}
         end
 
@@ -289,31 +289,6 @@ defmodule Caudata.ContainerWorker do
 
   # Helpers
 
-  @max_buffer_size 10_000
-
-  defp process_chunk(chunk, buffer) do
-    combined = buffer <> chunk
-
-    case String.split(combined, ~r{\r?\n}) do
-      [single_part] ->
-        if byte_size(single_part) > @max_buffer_size do
-          {chunk_part, rest_part} = String.split_at(single_part, @max_buffer_size)
-          {[chunk_part], rest_part}
-        else
-          {[], single_part}
-        end
-
-      parts ->
-        {lines, [last_part]} = Enum.split(parts, -1)
-
-        if byte_size(last_part) > @max_buffer_size do
-          {chunk_part, rest_part} = String.split_at(last_part, @max_buffer_size)
-          {lines ++ [chunk_part], rest_part}
-        else
-          {lines, last_part}
-        end
-    end
-  end
 
   defp handle_disconnect(state, reason) do
     # Force flush any pending logs before disconnecting

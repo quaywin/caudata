@@ -54,18 +54,23 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
               container_image == "launchd" or
                 String.starts_with?(to_string(container.id), "launchd:")
 
+            is_running =
+              Map.get(container, :state) == "running" or is_file or is_systemd or is_launchd
+
             {icon, icon_color} =
               cond do
                 is_file -> {"📄 ", :yellow}
                 is_systemd -> {"⚙ ", :magenta}
                 is_launchd -> {"⚙ ", :light_blue}
-                true -> {"🐳 ", :cyan}
+                is_running -> {"🐳 ", :cyan}
+                true -> {"🔴 ", :red}
               end
 
             fg_color =
               cond do
                 is_selected && focus == :containers -> :green
                 is_selected -> :white
+                not is_running -> :dark_gray
                 true -> :white
               end
 

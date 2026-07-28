@@ -8,7 +8,7 @@ defmodule Caudata.ServerWorker do
   @health_check_interval 15_000
   @activity_timeout 30_000
 
-  @docker_discovery_cmd "echo '===DOCKER==='; docker ps --no-trunc --format '{{json .}}' 2>/dev/null"
+  @docker_discovery_cmd "echo '===DOCKER==='; docker ps -a --no-trunc --format '{{json .}}' 2>/dev/null"
   @os_discovery_cmd "echo '===OS==='; uname -s"
   @systemd_discovery_cmd "echo '===SYSTEMD==='; if command -v systemctl >/dev/null 2>&1; then systemctl list-units --type=service --no-legend --no-pager 2>/dev/null; fi"
   @launchd_discovery_cmd "echo '===LAUNCHD==='; if command -v launchctl >/dev/null 2>&1; then launchctl list 2>/dev/null; for dir in '/System/Library/LaunchDaemons' '/Library/LaunchDaemons' '/Library/LaunchAgents' \"$HOME/Library/LaunchAgents\"; do if [ -d \"$dir\" ]; then find \"$dir\" -name '*.plist' -maxdepth 1 2>/dev/null | while read -r plist; do label=$(basename \"$plist\" .plist); echo \"- 0 $label\"; done; fi; done; fi"
@@ -94,6 +94,17 @@ defmodule Caudata.ServerWorker do
       GenServer.call(pid, :get_metrics, 100)
     catch
       :exit, _ -> nil
+    end
+  end
+
+  @doc """
+  Executes a Docker action on a container (e.g. :start, :stop, :restart, :kill, :remove, :inspect).
+  """
+  def exec_container_action(pid, action, container_id) do
+    try do
+      GenServer.call(pid, {:exec_container_action, action, container_id}, 30_000)
+    catch
+      :exit, reason -> {:error, {:exit, reason}}
     end
   end
 
@@ -196,7 +207,53 @@ defmodule Caudata.ServerWorker do
               {:noreply, %{state | validation_channels: new_validations}}
 
             {:error, reason} ->
+              state.ssh_client.close_channel(state.conn_ref, channel_id)
               {:reply, {:error, reason}, state}
+          end
+
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+      end
+    end
+  end
+
+  @impl true
+  def handle_call({:exec_container_action, action, container_id}, from, state) do
+    if is_nil(state.conn_ref) do
+      {:reply, {:error, :not_connected}, state}
+    else
+      case state.ssh_client.open_channel(state.conn_ref) do
+        {:ok, channel_id} ->
+          escaped_id = String.replace(to_string(container_id), "'", "'\\''")
+
+          cmd =
+            case action do
+              :start -> "docker start '#{escaped_id}'"
+              :stop -> "docker stop '#{escaped_id}'"
+              :restart -> "docker restart '#{escaped_id}'"
+              :kill -> "docker kill '#{escaped_id}'"
+              :remove -> "docker rm '#{escaped_id}'"
+              :inspect -> "docker inspect '#{escaped_id}'"
+              _ -> nil
+            end
+
+          if cmd do
+            wrapped_cmd = wrap_sudo(cmd, state.profile.password)
+
+            case state.ssh_client.exec(state.conn_ref, channel_id, wrapped_cmd) do
+              :ok ->
+                new_validations =
+                  Map.put(state.validation_channels, channel_id, {from, action, ""})
+
+                {:noreply, %{state | validation_channels: new_validations}}
+
+              {:error, reason} ->
+                state.ssh_client.close_channel(state.conn_ref, channel_id)
+                {:reply, {:error, reason}, state}
+            end
+          else
+            state.ssh_client.close_channel(state.conn_ref, channel_id)
+            {:reply, {:error, :invalid_action}, state}
           end
 
         {:error, reason} ->
@@ -340,7 +397,25 @@ defmodule Caudata.ServerWorker do
         end
       end)
 
+    Process.monitor(task_pid)
+
     {:noreply, %{state | conn_task_pid: task_pid}}
+  end
+
+  @impl true
+  def handle_info({:ssh_connect_failed, reason}, state) do
+    Logger.info("Failed to establish SSH connection to #{state.profile.id}: #{inspect(reason)}")
+    handle_disconnect(state, "Connection failed: #{inspect(reason)}")
+  end
+
+  @impl true
+  def handle_info({:DOWN, _ref, :process, pid, reason}, %{conn_task_pid: pid} = state) when not is_nil(pid) do
+    if state.status == :connecting do
+      Logger.warning("Connection task process crashed for #{state.profile.id}: #{inspect(reason)}")
+      handle_disconnect(state, "Connection task process crashed: #{inspect(reason)}")
+    else
+      {:noreply, state}
+    end
   end
 
   @impl true
@@ -443,9 +518,15 @@ defmodule Caudata.ServerWorker do
 
     cond do
       conn_ref == state.conn_ref && Map.has_key?(state.validation_channels, channel_id) ->
-        {from, buffer} = Map.get(state.validation_channels, channel_id)
-        new_buffer = buffer <> to_string(chunk)
-        new_validations = Map.put(state.validation_channels, channel_id, {from, new_buffer})
+        val_entry = Map.get(state.validation_channels, channel_id)
+
+        new_val_entry =
+          case val_entry do
+            {from, buffer} -> {from, buffer <> to_string(chunk)}
+            {from, action, buffer} -> {from, action, buffer <> to_string(chunk)}
+          end
+
+        new_validations = Map.put(state.validation_channels, channel_id, new_val_entry)
         {:noreply, %{state | validation_channels: new_validations, last_activity_at: now}}
 
       conn_ref == state.conn_ref && channel_id == state.list_channel_id ->
@@ -510,16 +591,27 @@ defmodule Caudata.ServerWorker do
       ) do
     cond do
       conn_ref == state.conn_ref && Map.has_key?(state.validation_channels, channel_id) ->
-        {{from, buffer}, remaining_validations} = Map.pop(state.validation_channels, channel_id)
+        {val_entry, remaining_validations} = Map.pop(state.validation_channels, channel_id)
 
-        result =
-          if String.trim(buffer) == "valid" do
-            :ok
-          else
-            {:error, :not_readable_or_not_found}
-          end
+        case val_entry do
+          {from, action, buffer} when action in [:start, :stop, :restart, :kill, :remove, :inspect] ->
+            GenServer.reply(from, {:ok, String.trim(buffer)})
 
-        GenServer.reply(from, result)
+            if action != :inspect do
+              GenServer.cast(self(), :refresh_containers)
+            end
+
+          {from, buffer} ->
+            result =
+              if String.trim(buffer) == "valid" do
+                :ok
+              else
+                {:error, :not_readable_or_not_found}
+              end
+
+            GenServer.reply(from, result)
+        end
+
         {:noreply, %{state | validation_channels: remaining_validations}}
 
       conn_ref == state.conn_ref && channel_id == state.list_channel_id ->
@@ -724,7 +816,7 @@ defmodule Caudata.ServerWorker do
         end
       end)
     end)
-    |> Task.await_many(:infinity)
+    |> Task.await_many(10_000)
 
     duration = System.monotonic_time(:millisecond) - start_time
     Logger.info("Stopped all container workers for #{state.profile.id} in #{duration}ms")
@@ -884,7 +976,7 @@ defmodule Caudata.ServerWorker do
       case state.ssh_client.open_channel(state.conn_ref) do
         {:ok, events_channel_id} ->
           event_cmd =
-            "docker events --filter 'type=container' --filter 'event=start' --filter 'event=die' --filter 'event=destroy' --format '{{json .}}'"
+            "docker events --filter 'type=container' --filter 'event=start' --filter 'event=die' --filter 'event=destroy' --filter 'event=stop' --filter 'event=restart' --format '{{json .}}'"
 
           wrapped_cmd = wrap_sudo(event_cmd, state.profile.password)
 
@@ -1265,6 +1357,14 @@ defmodule Caudata.ServerWorker do
 
     updated_containers = Enum.reject(state.containers, &(&1.id == id))
     sync_container_workers(state, updated_containers)
+  end
+
+  defp process_parsed_event(state, "stop", id, name, image) do
+    process_parsed_event(state, "die", id, name, image)
+  end
+
+  defp process_parsed_event(state, "restart", id, name, image) do
+    process_parsed_event(state, "start", id, name, image)
   end
 
   defp process_parsed_event(state, _status, _id, _name, _image) do

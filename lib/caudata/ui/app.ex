@@ -120,7 +120,10 @@ defmodule Caudata.UI.App do
       visual_anchor: nil,
       visual_cursor: nil,
       notification: nil,
-      tick_scheduled: false
+      tick_scheduled: false,
+      container_action_modal_selected_index: 0,
+      container_inspect_data: "",
+      container_inspect_scroll_y: 0
     }
 
     state = adjust_log_subscription(nil, state)
@@ -220,6 +223,10 @@ defmodule Caudata.UI.App do
 
       {new_state, [{:command, :quit}]} ->
         {:stop, new_state}
+
+      {new_state, [{:dispatch_docker_action, action}]} ->
+        state_after_action = dispatch_docker_action(action, new_state)
+        noreply(state, state_after_action)
 
       {new_state, [{:command, {:load_history, new_limit}}]} ->
         source_id = current_source_id(new_state)
@@ -570,6 +577,31 @@ defmodule Caudata.UI.App do
 
         {:noreply, new_state}
 
+      {:docker_action_result, _server_id, _container_id, container_name, action, res} ->
+        case res do
+          {:ok, output} ->
+            if action == :inspect do
+              new_state = %{
+                state
+                | modal_visible: true,
+                  modal_type: :container_inspect,
+                  container_inspect_data: output,
+                  container_inspect_scroll_y: 0,
+                  notification: {"Loaded inspect details for #{container_name}", 25}
+              }
+
+              {:noreply, new_state}
+            else
+              action_str = String.capitalize(to_string(action))
+              notif = "#{action_str} succeeded on #{container_name}"
+              {:noreply, %{state | notification: {notif, 30}}}
+            end
+
+          {:error, reason} ->
+            notif = "Failed to #{action} #{container_name}: #{inspect(reason)}"
+            {:noreply, %{state | notification: {notif, 35}}}
+        end
+
       {:logs_updated, source_id, %{size: size, drop_count: drops}} ->
         current_src = current_source_id(state)
         logs_dirty = state.logs_dirty || source_id == current_src
@@ -816,6 +848,34 @@ defmodule Caudata.UI.App do
 
       true ->
         nil
+    end
+  end
+
+  defp dispatch_docker_action(action, model) do
+    profile_id = model.selected_profile_id
+    container_id = model.selected_container_id
+    container_name = model.selected_container_name || container_id
+
+    if profile_id && container_id && Process.whereis(Caudata.ServerSupervisor) do
+      case Caudata.ServerSupervisor.lookup_worker(profile_id) do
+        {:ok, worker_pid} ->
+          action_name = String.capitalize(to_string(action))
+          notif_msg = "Executing #{action_name} on #{container_name}..."
+
+          caller = self()
+
+          Task.start(fn ->
+            res = Caudata.ServerWorker.exec_container_action(worker_pid, action, container_id)
+            send(caller, {:docker_action_result, profile_id, container_id, container_name, action, res})
+          end)
+
+          %{model | notification: {notif_msg, 35}}
+
+        _ ->
+          %{model | notification: {"Server not connected", 25}}
+      end
+    else
+      model
     end
   end
 

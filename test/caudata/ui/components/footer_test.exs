@@ -63,4 +63,16 @@ defmodule Caudata.UI.Components.FooterTest do
     spans_text = Enum.map(line.spans, & &1.content) |> Enum.join()
     assert String.contains?(spans_text, "[/] Search/Filter")
   end
+
+  test "renders successfully for container_action, container_inspect and confirm_docker_action modals" do
+    for modal_type <- [:container_action, :container_inspect, :confirm_docker_action] do
+      state = %{
+        modal_visible: true,
+        modal_type: modal_type
+      }
+
+      paragraph = Footer.render(state)
+      assert %ExRatatui.Widgets.Paragraph{} = paragraph
+    end
+  end
 end

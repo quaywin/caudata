@@ -48,6 +48,13 @@ defmodule Caudata.LogStore do
     GenServer.call(server, {:set_capacity, new_capacity})
   end
 
+  @doc """
+  Deletes a log stream asynchronously.
+  """
+  def delete_stream(server \\ __MODULE__, source_id) do
+    GenServer.cast(server, {:delete_stream, source_id})
+  end
+
   # GenServer Callbacks
 
   @impl true
@@ -119,6 +126,19 @@ defmodule Caudata.LogStore do
       Caudata.PubSub,
       "logs:#{source_id}",
       {:logs_updated, source_id, %{size: new_size, drop_count: new_drops}}
+    )
+
+    {:noreply, %{state | sources: new_sources}}
+  end
+
+  @impl true
+  def handle_cast({:delete_stream, source_id}, state) do
+    new_sources = Map.delete(state.sources, source_id)
+
+    Phoenix.PubSub.broadcast(
+      Caudata.PubSub,
+      "logs:#{source_id}",
+      {:logs_cleared, source_id}
     )
 
     {:noreply, %{state | sources: new_sources}}

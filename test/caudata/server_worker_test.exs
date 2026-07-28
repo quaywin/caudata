@@ -1316,4 +1316,52 @@ defmodule Caudata.ServerWorkerTest do
 
     stop_supervised(ServerWorker)
   end
+
+  test "exec_container_action executes docker command and returns result" do
+    profile = Profile.new(%{"id" => "action-test-server", "host_name" => "10.0.0.99", "host_pattern" => "action-test-server", "port" => 22, "user" => "root"})
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, fn "10.0.0.99", 22, _opts -> {:ok, :dummy_conn} end)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_list_channel)
+      {:ok, :dummy_list_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_list_channel, cmd ->
+      assert String.contains?(cmd, "docker ps -a")
+      :ok
+    end)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :opened_action_channel)
+      {:ok, :dummy_action_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_action_channel, cmd ->
+      assert String.contains?(cmd, "docker stop")
+      :ok
+    end)
+    |> stub(:open_channel, fn _conn -> {:ok, :dummy_channel} end)
+    |> stub(:exec, fn _conn, _chan, _cmd -> :ok end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: false}})
+
+    assert_receive :opened_list_channel, 1000
+
+    task =
+      Task.async(fn ->
+        ServerWorker.exec_container_action(worker_pid, :stop, "c1")
+      end)
+
+    assert_receive :opened_action_channel, 1000
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_action_channel, 0, "c1\n"}})
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_action_channel}})
+
+    res = Task.await(task)
+    assert res == {:ok, "c1"}
+
+    stop_supervised(ServerWorker)
+  end
 end

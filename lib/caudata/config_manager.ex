@@ -258,8 +258,8 @@ defmodule Caudata.ConfigManager do
 
   @impl true
   def handle_call({:delete_profile, id}, _from, state) do
-    # Stop worker asynchronously to avoid blocking GenServer calls
-    _ = Task.start(fn -> Caudata.ServerSupervisor.stop_worker(id) end)
+    # Stop worker before deleting profile from store
+    Caudata.ServerSupervisor.stop_worker(id)
 
     :ok = Caudata.ConfigStore.delete_profile(state.store, id)
 

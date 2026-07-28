@@ -8,7 +8,15 @@ defmodule Caudata.UI.Renderer do
   alias ExRatatui.Style
   alias ExRatatui.Widgets.Paragraph
 
-  alias Caudata.UI.Components.{Sidebar, LogsPane, Footer, AddServerModal, SettingsModal}
+  alias Caudata.UI.Components.{
+    Sidebar,
+    LogsPane,
+    Footer,
+    AddServerModal,
+    SettingsModal,
+    ContainerActionModal,
+    ContainerInspectModal
+  }
 
   @doc """
   Splits the main window vertically and coordinates rendering of all components.
@@ -64,12 +72,26 @@ defmodule Caudata.UI.Renderer do
     main_widgets =
       if state.modal_visible do
         modal_widget =
-          if state.modal_type == :settings do
-            [widget] = SettingsModal.render(state)
-            widget
-          else
-            [widget] = AddServerModal.render(state)
-            widget
+          cond do
+            state.modal_type == :settings ->
+              [widget] = SettingsModal.render(state)
+              widget
+
+            state.modal_type == :container_action ->
+              [widget] = ContainerActionModal.render(state)
+              widget
+
+            state.modal_type == :confirm_docker_action ->
+              [widget] = ContainerActionModal.render_confirm(state)
+              widget
+
+            state.modal_type == :container_inspect ->
+              [widget] = ContainerInspectModal.render(state)
+              widget
+
+            true ->
+              [widget] = AddServerModal.render(state)
+              widget
           end
 
         base_widgets ++ [{modal_widget, main_content_area}]

@@ -248,37 +248,36 @@ defmodule Caudata.ConfigStore do
     )
 
     path = state.config_path
-    char_path = String.to_charlist(path)
     is_test = Application.get_env(:caudata, :env) == :test
 
-    if is_test do
+    do_save = fn ->
       dir = Path.dirname(path)
       File.mkdir_p!(dir)
+      tmp_path = path <> ".tmp.#{System.unique_integer([:positive])}"
+      tmp_char_path = String.to_charlist(tmp_path)
 
-      case :ets.tab2file(file_tab, char_path) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          Logger.error("Failed to persist config to disk at #{path}: #{inspect(reason)}")
-      end
-
-      :ets.delete(file_tab)
-    else
-      Task.start(fn ->
-        dir = Path.dirname(path)
-        File.mkdir_p!(dir)
-
-        case :ets.tab2file(file_tab, char_path) do
+      try do
+        case :ets.tab2file(file_tab, tmp_char_path) do
           :ok ->
-            :ok
+            File.rename!(tmp_path, path)
 
           {:error, reason} ->
             Logger.error("Failed to persist config to disk at #{path}: #{inspect(reason)}")
+            File.rm(tmp_path)
         end
-
+      rescue
+        e ->
+          Logger.error("Error persisting config: #{inspect(e)}")
+          File.rm(tmp_path)
+      after
         :ets.delete(file_tab)
-      end)
+      end
+    end
+
+    if is_test do
+      do_save.()
+    else
+      Task.start(do_save)
     end
   end
 end

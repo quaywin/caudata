@@ -5,7 +5,14 @@ defmodule Caudata.UI.KeyHandler do
   """
   require Logger
 
-  alias Caudata.UI.Components.{Sidebar, LogsPane, AddServerModal, SettingsModal}
+  alias Caudata.UI.Components.{
+    Sidebar,
+    LogsPane,
+    AddServerModal,
+    SettingsModal,
+    ContainerActionModal,
+    ContainerInspectModal
+  }
 
   @doc """
   Main dispatch function for key events.
@@ -45,10 +52,21 @@ defmodule Caudata.UI.KeyHandler do
     cond do
       # 1. Active modal intercepts all keys
       model.modal_visible ->
-        if model.modal_type == :settings do
-          SettingsModal.handle_key(key, key_data, model)
-        else
-          AddServerModal.handle_key(key, key_data, model)
+        cond do
+          model.modal_type == :settings ->
+            SettingsModal.handle_key(key, key_data, model)
+
+          model.modal_type == :container_action ->
+            ContainerActionModal.handle_key(key, key_data, model)
+
+          model.modal_type == :confirm_docker_action ->
+            ContainerActionModal.handle_key_confirm(key, key_data, model)
+
+          model.modal_type == :container_inspect ->
+            ContainerInspectModal.handle_key(key, key_data, model)
+
+          true ->
+            AddServerModal.handle_key(key, key_data, model)
         end
 
       # 2. Escape key in search/visual mode returns to browsing
@@ -85,8 +103,19 @@ defmodule Caudata.UI.KeyHandler do
     norm_key = if key == :char, do: Map.get(key_data, :char), else: key
 
     case norm_key do
+      # Open Docker Container Actions Modal
+      k when k in ["m", "M"] ->
+        open_container_action_modal(model)
+
       # Sidebar navigation
-      k when k in [:up, :down, :enter, :tab] ->
+      :enter ->
+        if Map.get(model, :sidebar_focus, :servers) == :containers and model.selected_container_id do
+          open_container_action_modal(model)
+        else
+          Sidebar.handle_key(:enter, key_data, model)
+        end
+
+      k when k in [:up, :down, :tab] ->
         Sidebar.handle_key(norm_key, key_data, model)
 
       # Log display navigation and copy/select
@@ -173,6 +202,51 @@ defmodule Caudata.UI.KeyHandler do
       # Fallback for unhandled keys
       _ ->
         {model, []}
+    end
+  end
+
+  def open_container_action_modal(model) do
+    selected_profile = Enum.find(model.profiles, &(&1.id == model.selected_profile_id))
+
+    enabled_containers =
+      if selected_profile do
+        Caudata.UI.ViewHelper.get_enabled_containers(
+          selected_profile,
+          Map.get(model.containers, selected_profile.id, [])
+        )
+      else
+        []
+      end
+
+    selected_container =
+      if selected_profile && model.selected_container_id do
+        Enum.find(
+          enabled_containers,
+          &(to_string(&1.id) == to_string(model.selected_container_id))
+        )
+      end
+
+    if selected_container && docker_container?(selected_container) do
+      new_model =
+        %{model | modal_visible: true, modal_type: :container_action}
+        |> Map.put(:container_action_modal_selected_index, 0)
+
+      {new_model, []}
+    else
+      {model, []}
+    end
+  end
+
+  defp docker_container?(container) do
+    case container do
+      %{image: image, id: id} ->
+        image not in ["file", "systemd", "launchd"] and
+          not String.starts_with?(to_string(id), "file:") and
+          not String.starts_with?(to_string(id), "systemd:") and
+          not String.starts_with?(to_string(id), "launchd:")
+
+      _ ->
+        false
     end
   end
 

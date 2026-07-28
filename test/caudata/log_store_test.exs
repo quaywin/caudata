@@ -59,4 +59,17 @@ defmodule Caudata.LogStoreTest do
     LogStore.clear_logs(TestLogStore, "source_pub")
     assert_receive {:logs_cleared, "source_pub"}, 500
   end
+
+  test "deletes stream asynchronously with delete_stream" do
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "logs:source_del")
+
+    LogStore.append_logs(TestLogStore, "source_del", ["test message"])
+    assert_receive {:logs_updated, "source_del", %{size: 1, drop_count: 0}}, 500
+
+    LogStore.delete_stream(TestLogStore, "source_del")
+    assert_receive {:logs_cleared, "source_del"}, 500
+
+    snapshot = LogStore.get_snapshot(TestLogStore, "source_del")
+    assert snapshot == []
+  end
 end

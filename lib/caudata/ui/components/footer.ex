@@ -103,6 +103,34 @@ defmodule Caudata.UI.Components.Footer do
                     Span.new("[Esc] Close ", style: %Style{fg: :red})
                   ]
               end
+
+            :container_action ->
+              actions = Caudata.UI.Components.ContainerActionModal.get_available_actions(state)
+              total = length(actions)
+
+              [
+                Span.new("[⇅/j/k] Navigate ", style: %Style{fg: :cyan}),
+                Span.new("[Enter/1-#{total}] Confirm ", style: %Style{fg: :green}),
+                Span.new("[Esc] Cancel ", style: %Style{fg: :red})
+              ]
+
+            :container_inspect ->
+              [
+                Span.new("[⇅/j/k] Scroll ", style: %Style{fg: :cyan}),
+                Span.new("[r] Toggle Raw/Summary ", style: %Style{fg: :yellow}),
+                Span.new("[Esc/q] Close ", style: %Style{fg: :red})
+              ]
+
+            :confirm_docker_action ->
+              [
+                Span.new("[y/Enter] Confirm & Execute ", style: %Style{fg: :red, modifiers: [:bold]}),
+                Span.new("[n/Esc] Cancel ", style: %Style{fg: :yellow})
+              ]
+
+            _ ->
+              [
+                Span.new("[Esc] Close ", style: %Style{fg: :red})
+              ]
           end
 
         state.mode == :searching ->
@@ -147,17 +175,30 @@ defmodule Caudata.UI.Components.Footer do
                 Span.new("[j/k] Scroll Logs ")
               ]
             else
+              action_hint =
+                if Map.get(state, :sidebar_focus) == :containers do
+                  if selected_container_is_docker?(state) do
+                    [Span.new("[m/Enter] Actions ", style: %Style{fg: :cyan})]
+                  else
+                    [Span.new("[Enter] Select ", style: %Style{fg: :cyan})]
+                  end
+                else
+                  [Span.new("[Enter] Connect ")]
+                end
+
               [
-                Span.new("[q] Quit "),
-                Span.new("[Enter] Connect "),
-                Span.new("[a] Add Server "),
-                Span.new("[f] Fullscreen ", style: %Style{fg: :yellow}),
-                Span.new("[t] Time ", style: %Style{fg: :magenta}),
-                Span.new("[/] Filter "),
-                Span.new("[y] Copy ", style: %Style{fg: :green}),
-                Span.new("[v] Select ", style: %Style{fg: :cyan}),
-                Span.new("[⇅] Navigate | [j/k] Scroll ")
-              ]
+                Span.new("[q] Quit ")
+              ] ++
+                action_hint ++
+                [
+                  Span.new("[a] Add Server "),
+                  Span.new("[f] Fullscreen ", style: %Style{fg: :yellow}),
+                  Span.new("[t] Time ", style: %Style{fg: :magenta}),
+                  Span.new("[/] Filter "),
+                  Span.new("[y] Copy ", style: %Style{fg: :green}),
+                  Span.new("[v] Select ", style: %Style{fg: :cyan}),
+                  Span.new("[⇅] Navigate | [j/k] Scroll ")
+                ]
             end
 
           base_shortcuts =
@@ -190,5 +231,33 @@ defmodule Caudata.UI.Components.Footer do
     %Paragraph{
       text: [Line.new(footer_spans)]
     }
+  end
+
+  defp selected_container_is_docker?(state) do
+    profile = Enum.find(Map.get(state, :profiles, []), &(&1.id == Map.get(state, :selected_profile_id)))
+
+    if profile && Map.get(state, :selected_container_id) do
+      containers = Map.get(Map.get(state, :containers, %{}), profile.id, [])
+      enabled_containers = Caudata.UI.ViewHelper.get_enabled_containers(profile, containers)
+
+      selected_container =
+        Enum.find(
+          enabled_containers,
+          &(to_string(&1.id) == to_string(Map.get(state, :selected_container_id)))
+        )
+
+      case selected_container do
+        %{image: image, id: id} ->
+          image not in ["file", "systemd", "launchd"] and
+            not String.starts_with?(to_string(id), "file:") and
+            not String.starts_with?(to_string(id), "systemd:") and
+            not String.starts_with?(to_string(id), "launchd:")
+
+        _ ->
+          false
+      end
+    else
+      false
+    end
   end
 end

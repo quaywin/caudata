@@ -91,7 +91,7 @@ defmodule Caudata.MixProject do
   end
 
   defp current_version do
-    base = "0.1.15"
+    base = "0.1.58"
 
     version_from_env() || version_from_git() || base
   end

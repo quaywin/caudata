@@ -197,8 +197,8 @@ defmodule Caudata.ContainerWorker do
           stream = if stream_id == 1, do: :stderr, else: :stdout
           streamed_lines = Enum.map(lines, fn line -> {stream, line} end)
 
-          # Accumulate logs to be flushed in batch
-          new_pending_logs = state.pending_logs ++ streamed_lines
+          # Accumulate logs to be flushed in batch (prepended for O(1) efficiency)
+          new_pending_logs = Enum.reverse(streamed_lines) ++ state.pending_logs
 
           # Lazy-start the timer to flush pending logs after 100ms
           if is_nil(state.flush_timer) do
@@ -427,9 +427,10 @@ defmodule Caudata.ContainerWorker do
 
   # Flush logs helper that writes all pending logs to LogStore
   defp flush_pending_logs(state) do
-    if length(state.pending_logs) > 0 do
+    if state.pending_logs != [] do
       source_id = "#{state.profile_id}/#{state.container_id}"
-      LogStore.append_logs(source_id, state.pending_logs)
+      logs_to_send = Enum.reverse(state.pending_logs)
+      LogStore.append_logs(source_id, logs_to_send)
       %{state | pending_logs: []}
     else
       state

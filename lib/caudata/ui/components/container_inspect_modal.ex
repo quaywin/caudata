@@ -455,7 +455,7 @@ defmodule Caudata.UI.Components.ContainerInspectModal do
     end)
   end
 
-  defp safe_span(text, opts \\ []) do
+  defp safe_span(text, opts) do
     clean_text =
       to_string(text)
       |> String.replace("\r\n", "\\n")

@@ -502,11 +502,6 @@ defmodule Caudata.ServerWorker do
     end
   end
 
-  @impl true
-  def handle_info({:ssh_connect_failed, reason}, state) do
-    Logger.info("Failed to establish SSH connection to #{state.profile.id}: #{inspect(reason)}")
-    handle_disconnect(state, "Connection failed: #{inspect(reason)}")
-  end
 
   # Handle SSH incoming messages
   @impl true

@@ -56,6 +56,10 @@ defmodule Caudata.Application do
       Logger.configure(backends: [])
       _ = :logger.remove_handler(:default)
       :logger.set_primary_config(:level, :info)
+
+      :os.set_signal(:sighup, :handle)
+      :os.set_signal(:sigterm, :handle)
+      :gen_event.add_handler(:erl_signal_server, Caudata.SignalHandler, [])
     end
 
     children = [

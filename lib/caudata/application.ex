@@ -7,10 +7,16 @@ defmodule Caudata.Application do
 
   @impl true
   def start(_type, _args) do
-    # Handle command-line arguments if not running in test mode
+    args =
+      if Code.ensure_loaded?(Burrito.Util.Args) do
+        Burrito.Util.Args.argv()
+      else
+        System.argv()
+      end
+
     mode =
       if @env != :test do
-        Caudata.CLI.handle_args(Burrito.Util.Args.argv())
+        Caudata.CLI.handle_args(args)
       else
         :continue
       end

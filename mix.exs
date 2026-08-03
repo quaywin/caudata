@@ -156,7 +156,7 @@ defmodule Caudata.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:burrito, "~> 1.0", runtime: false},
+      {:burrito, "~> 1.0"},
       {:ex_ratatui,
        git: "https://github.com/quaywin/ex_ratatui.git", branch: "main", override: true},
       {:phoenix_ex_ratatui, "~> 0.1"},

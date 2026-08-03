@@ -46,10 +46,12 @@ defmodule Caudata.UI.KeyHandler do
       end
 
     key = Map.get(key_data, :key)
-    modifiers = Map.get(key_data, :modifiers, [])
-    _ctrl = Map.get(key_data, :ctrl, false) or :ctrl in modifiers
 
     cond do
+      # 0. Global Ctrl+C quit command
+      Caudata.UI.ViewHelper.ctrl_c_key?(key_data) ->
+        {model, [{:command, :quit}]}
+
       # 1. Active modal intercepts all keys
       model.modal_visible ->
         cond do

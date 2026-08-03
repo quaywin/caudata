@@ -250,12 +250,31 @@ defmodule Caudata.UI.ViewHelper do
   """
   def paste_key?(key_data) do
     key = Map.get(key_data, :key)
-    modifiers = Map.get(key_data, :modifiers, [])
 
     key == :paste or
       (key == :char and Map.get(key_data, :char) == "P") or
-      (key == :char and Map.get(key_data, :char) in ["v", "V"] and
-         ("ctrl" in modifiers or "Ctrl" in modifiers or Map.get(key_data, :ctrl, false)))
+      (key == :char and Map.get(key_data, :char) in ["v", "V"] and ctrl_pressed?(key_data))
+  end
+
+  @doc """
+  Helper to detect if a key press is the Ctrl+C quit hotkey.
+  """
+  def ctrl_c_key?(key_data) do
+    key = Map.get(key_data, :key)
+    char = Map.get(key_data, :char)
+
+    ctrl_pressed?(key_data) and
+      ((key == :char and char in ["c", "C"]) or key in ["c", "C", :c])
+  end
+
+  @doc """
+  Helper to check if Ctrl key or modifier is present in key_data.
+  """
+  def ctrl_pressed?(key_data) do
+    modifiers = Map.get(key_data, :modifiers, []) || []
+
+    "ctrl" in modifiers or "Ctrl" in modifiers or :ctrl in modifiers or
+      Map.get(key_data, :ctrl, false) == true
   end
 
   defp run_command(cmd, args) do

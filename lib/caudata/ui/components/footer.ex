@@ -159,7 +159,7 @@ defmodule Caudata.UI.Components.Footer do
           base_shortcuts =
             if Map.get(state, :logs_full_screen, false) do
               [
-                Span.new("[q] Quit "),
+                Span.new("[q/Ctrl+C] Quit "),
                 Span.new("[f/Esc] Normal Screen ", style: %Style{fg: :yellow}),
                 Span.new("[t] Time ", style: %Style{fg: :magenta}),
                 Span.new("[/] Filter "),
@@ -180,7 +180,7 @@ defmodule Caudata.UI.Components.Footer do
                 end
 
               [
-                Span.new("[q] Quit ")
+                Span.new("[q/Ctrl+C] Quit ")
               ] ++
                 action_hint ++
                 [

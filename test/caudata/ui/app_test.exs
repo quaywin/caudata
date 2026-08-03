@@ -66,6 +66,19 @@ defmodule Caudata.UI.AppTest do
     assert updated_state2.filter_error == false
   end
 
+  test "handle_event/2 handles Ctrl+C and 'q' to quit application" do
+    {:ok, state} = App.mount([])
+
+    event_q = %ExRatatui.Event.Key{code: "q", modifiers: []}
+    assert {:stop, _state} = App.handle_event(event_q, state)
+
+    event_ctrl_c = %ExRatatui.Event.Key{code: "c", modifiers: ["ctrl"]}
+    assert {:stop, _state} = App.handle_event(event_ctrl_c, state)
+
+    event_ctrl_c_capital = %ExRatatui.Event.Key{code: "C", modifiers: ["ctrl"]}
+    assert {:stop, _state} = App.handle_event(event_ctrl_c_capital, state)
+  end
+
   test "handle_event/2 handles keyboard events for navigation" do
     {:ok, state} = App.mount([])
 

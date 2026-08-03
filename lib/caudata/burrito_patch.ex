@@ -35,8 +35,10 @@ defmodule Caudata.BurritoPatch do
                   other -> raise "Unsupported Burrito target for NIF patching: #{inspect(other)}"
                 end
 
+              repo = System.get_env("EX_RATATUI_REPO") || "quaywin/ex_ratatui"
+
               url =
-                "https://github.com/mcass19/ex_ratatui/releases/download/v#{version}/libex_ratatui-v#{version}-nif-#{nif_version}-#{rustler_target}.so.tar.gz"
+                "https://github.com/#{repo}/releases/download/v#{version}/libex_ratatui-v#{version}-nif-#{nif_version}-#{rustler_target}.so.tar.gz"
 
               Burrito.Builder.Log.info(
                 :step,

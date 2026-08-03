@@ -140,13 +140,15 @@ defmodule Caudata.SSHClient do
         _, _ -> :ok
       end
 
-      Process.sleep(100)
+      Task.start(fn ->
+        Process.sleep(100)
 
-      try do
-        :ssh_connection.close(conn_ref, channel_id)
-      catch
-        _, _ -> :ok
-      end
+        try do
+          :ssh_connection.close(conn_ref, channel_id)
+        catch
+          _, _ -> :ok
+        end
+      end)
 
       :ok
     end
@@ -211,7 +213,31 @@ defmodule Caudata.SSHClient.KeyCallback do
     end)
   end
 
+  def invalidate_key_cache(identity_file) do
+    :persistent_term.erase({:caudata_key, identity_file})
+  end
+
   defp decode_private_key(identity_file) do
+    case :persistent_term.get({:caudata_key, identity_file}, nil) do
+      {:ok, key} ->
+        {:ok, key}
+
+      _ ->
+        result = do_decode_private_key(identity_file)
+
+        case result do
+          {:ok, key} ->
+            :persistent_term.put({:caudata_key, identity_file}, {:ok, key})
+            {:ok, key}
+
+          other ->
+            :persistent_term.erase({:caudata_key, identity_file})
+            other
+        end
+    end
+  end
+
+  defp do_decode_private_key(identity_file) do
     case File.read(identity_file) do
       {:ok, pem_binary} ->
         try do

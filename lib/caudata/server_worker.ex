@@ -54,7 +54,9 @@ defmodule Caudata.ServerWorker do
     container_stats_buffer: "",
     log_stream_timer: nil,
     log_debounce_delay: 100,
-    stats_debounce_delay: 300
+    stats_debounce_delay: 300,
+    containers_dirty: false,
+    broadcast_timer: nil
   ]
 
   # Client API
@@ -713,40 +715,38 @@ defmodule Caudata.ServerWorker do
         last = state.last_activity_at || now
 
         if now - last > @activity_timeout do
-          # No activity for timeout period, but perform an active check to verify
-          # if the connection is actually dead before we initiate disconnect/reconnect.
-          case state.ssh_client.open_channel(state.conn_ref) do
-            {:ok, temp_channel} ->
-              state.ssh_client.close_channel(state.conn_ref, temp_channel)
-              schedule_health_check_reschedule(%{state | last_activity_at: now})
-
-            {:error, reason} ->
-              Logger.warning(
-                "No SSH activity for #{@activity_timeout}ms on #{state.profile.id} and active check failed: #{inspect(reason)}, treating as disconnected"
-              )
-
-              handle_disconnect(state, "Health check: no activity for #{@activity_timeout}ms")
-          end
-        else
-          schedule_health_check_reschedule(state)
+          # Perform non-blocking active check
+          async_health_check(self(), state.ssh_client, state.conn_ref)
         end
       else
-        # Active check: no streaming channels, verify connection by opening a temp channel
-        case state.ssh_client.open_channel(state.conn_ref) do
-          {:ok, temp_channel} ->
-            state.ssh_client.close_channel(state.conn_ref, temp_channel)
-            schedule_health_check_reschedule(state)
-
-          {:error, reason} ->
-            Logger.warning(
-              "Health check failed for #{state.profile.id}: #{inspect(reason)}, treating as disconnected"
-            )
-
-            handle_disconnect(state, "Health check: channel open failed")
-        end
+        # Active check: no streaming channels, verify connection asynchronously
+        async_health_check(self(), state.ssh_client, state.conn_ref)
       end
+    end
+
+    schedule_health_check_reschedule(state)
+  end
+
+  @impl true
+  def handle_info({:health_check_result, conn_ref, :ok}, state) do
+    if state.conn_ref == conn_ref do
+      now = System.monotonic_time(:millisecond)
+      {:noreply, %{state | last_activity_at: now}}
     else
-      schedule_health_check_reschedule(state)
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:health_check_result, conn_ref, {:error, reason}}, state) do
+    if state.status == :connected && state.conn_ref == conn_ref do
+      Logger.warning(
+        "Health check failed for #{state.profile.id}: #{inspect(reason)}, treating as disconnected"
+      )
+
+      handle_disconnect(state, "Health check: channel open failed")
+    else
+      {:noreply, state}
     end
   end
 
@@ -765,9 +765,46 @@ defmodule Caudata.ServerWorker do
   end
 
   @impl true
+  def handle_info(:flush_containers_broadcast, state) do
+    state = %{state | broadcast_timer: nil}
+
+    if state.containers_dirty do
+      broadcast_containers(state.profile.id, state.containers)
+      {:noreply, %{state | containers_dirty: false}}
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
   def handle_info(_other, state) do
     # Catch-all to ignore other spurious messages (e.g. {:EXIT, pid, :normal} from Tasks)
     {:noreply, state}
+  end
+
+  defp schedule_containers_broadcast(state) do
+    if state.broadcast_timer do
+      state
+    else
+      timer = Process.send_after(self(), :flush_containers_broadcast, 500)
+      %{state | broadcast_timer: timer}
+    end
+  end
+
+  defp async_health_check(server_pid, ssh_client, conn_ref) do
+    Task.start(fn ->
+      res =
+        case ssh_client.open_channel(conn_ref) do
+          {:ok, temp_channel} ->
+            ssh_client.close_channel(conn_ref, temp_channel)
+            :ok
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      send(server_pid, {:health_check_result, conn_ref, res})
+    end)
   end
 
   defp schedule_health_check_reschedule(state) do
@@ -832,7 +869,12 @@ defmodule Caudata.ServerWorker do
       receive do
         {:DOWN, ^ref, :process, _, _} -> :ok
       after
-        1000 -> :ok
+        1000 ->
+          Process.exit(state.conn_task_pid, :kill)
+
+          receive do
+            {:DOWN, ^ref, :process, _, _} -> :ok
+          end
       end
     end
 
@@ -866,8 +908,9 @@ defmodule Caudata.ServerWorker do
 
   defp handle_disconnect(state, reason) do
     # Reply to any pending validation channels
-    Enum.each(state.validation_channels || %{}, fn {_ch, {from, _buf}} ->
-      GenServer.reply(from, {:error, :disconnected})
+    Enum.each(state.validation_channels || %{}, fn
+      {_ch, {from, _buf}} -> GenServer.reply(from, {:error, :disconnected})
+      {_ch, {from, _action, _buf}} -> GenServer.reply(from, {:error, :disconnected})
     end)
 
     # Stop connection task
@@ -880,6 +923,7 @@ defmodule Caudata.ServerWorker do
     state = close_container_stats_channel(state)
     state = cancel_container_stats_timer(state)
     state = cancel_log_stream_timer(state)
+    state = cancel_containers_broadcast_timer(state)
 
     # Cancel health check timer
     state = cancel_health_check(state)
@@ -1203,8 +1247,8 @@ defmodule Caudata.ServerWorker do
               end)
 
             if updated_containers != state.containers do
-              broadcast_containers(state.profile.id, updated_containers)
-              %{state | containers: updated_containers}
+              state = %{state | containers: updated_containers, containers_dirty: true}
+              schedule_containers_broadcast(state)
             else
               state
             end
@@ -1573,6 +1617,8 @@ defmodule Caudata.ServerWorker do
           {Map.put(keep, id, pid), stop}
         else
           _ = Caudata.ServerSupervisor.stop_container_worker(pid)
+          source_id = "#{state.profile.id}/#{id}"
+          _ = Caudata.LogStore.delete_stream(source_id)
           {keep, [pid | stop]}
         end
       end)
@@ -1636,9 +1682,29 @@ defmodule Caudata.ServerWorker do
     end
   end
 
+  defp cancel_containers_broadcast_timer(state) do
+    if state.broadcast_timer do
+      Process.cancel_timer(state.broadcast_timer)
+
+      receive do
+        :flush_containers_broadcast -> :ok
+      after
+        0 -> :ok
+      end
+    end
+
+    %{state | broadcast_timer: nil, containers_dirty: false}
+  end
+
   defp cancel_log_stream_timer(state) do
     if state.log_stream_timer do
       Process.cancel_timer(state.log_stream_timer)
+
+      receive do
+        :start_log_streaming -> :ok
+      after
+        0 -> :ok
+      end
     end
 
     %{state | log_stream_timer: nil}
@@ -1714,6 +1780,12 @@ defmodule Caudata.ServerWorker do
   defp cancel_container_stats_timer(state) do
     if state.container_stats_timer do
       Process.cancel_timer(state.container_stats_timer)
+
+      receive do
+        :start_container_stats -> :ok
+      after
+        0 -> :ok
+      end
     end
 
     %{state | container_stats_timer: nil}

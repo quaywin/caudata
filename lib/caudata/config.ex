@@ -17,13 +17,6 @@ defmodule Caudata.Config do
   end
 
   @doc """
-  Returns the path to the ETS file.
-  """
-  def ets_path do
-    config_path()
-  end
-
-  @doc """
   Loads the configuration. If the file doesn't exist, it creates a default one.
   """
   def load do
@@ -96,43 +89,6 @@ defmodule Caudata.Config do
 
   def custom_profiles(config) do
     Map.get(config, "profiles") || []
-  end
-
-  @doc """
-  Saves the list of profiles back to the configuration file, updating existing ones.
-  """
-  def save_profiles(profiles) do
-    path = config_path()
-    char_path = String.to_charlist(path)
-
-    tab =
-      case :ets.file2tab(char_path) do
-        {:ok, t} -> t
-        {:error, _} -> :ets.new(:caudata_config_file, [:set, :public])
-      end
-
-    # Delete existing profile records
-    existing = :ets.match_object(tab, {{:profile, :_}, :_})
-    Enum.each(existing, fn {key, _} -> :ets.delete(tab, key) end)
-
-    # Insert new ones
-    Enum.each(profiles, fn p ->
-      profile_struct =
-        case p do
-          %Caudata.Profile{} -> Caudata.Profile.ensure_struct_fields(p)
-          _ -> Caudata.Profile.new(p)
-        end
-
-      :ets.insert(tab, {{:profile, profile_struct.id}, profile_struct})
-    end)
-
-    res = :ets.tab2file(tab, char_path)
-    :ets.delete(tab)
-
-    case res do
-      :ok -> :ok
-      {:error, reason} -> {:error, reason}
-    end
   end
 
   # Helper functions to serialize/deserialize between ETS and Map

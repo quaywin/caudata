@@ -11,6 +11,16 @@
 ## (requires changing both vm.args and remote.vm.args)
 ##-start_epmd false -erl_epmd_port 6789
 
+## Prevent idle BEAM schedulers from busy-waiting CPU
++sbwt none
++sbwtdcpu none
+
+## Tune async thread pool for CLI/TUI application
++A 8
+
+## Disable epmd since Caudata is a standalone binary
+-start_epmd false
+
 ## noshell to prevent Erlang from hijacking stdin/stdout
 -noshell
 -noinput

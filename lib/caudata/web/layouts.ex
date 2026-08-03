@@ -218,17 +218,24 @@ defmodule Caudata.Web.Layouts do
             },
 
             reportSize() {
-              if (!this.charWidth || !this.charHeight) return;
-              const rect = this.el.getBoundingClientRect();
-              let cols = Math.floor(rect.width / this.charWidth);
-              let rows = Math.floor(rect.height / this.charHeight);
+              if (this.resizeTimer) clearTimeout(this.resizeTimer);
+              this.resizeTimer = setTimeout(() => {
+                if (!this.charWidth || !this.charHeight) return;
+                const rect = this.el.getBoundingClientRect();
+                let cols = Math.floor(rect.width / this.charWidth);
+                let rows = Math.floor(rect.height / this.charHeight);
 
-              if (cols < 1 || rows < 1) {
-                cols = 80;
-                rows = 24;
-              }
+                if (cols < 1 || rows < 1) {
+                  cols = 80;
+                  rows = 24;
+                }
 
-              this.pushEventTo(this.el, "phx_ex_ratatui:resize", { cols, rows });
+                if (this.lastCols === cols && this.lastRows === rows) return;
+                this.lastCols = cols;
+                this.lastRows = rows;
+
+                this.pushEventTo(this.el, "phx_ex_ratatui:resize", { cols, rows });
+              }, 100);
             },
 
             applyDiff({ width, height, ops }) {

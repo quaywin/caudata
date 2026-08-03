@@ -2,6 +2,9 @@ import Config
 
 config :caudata, :env, Mix.env()
 
+config :caudata, Caudata.Web.Endpoint,
+  adapter: Bandit.PhoenixAdapter
+
 config :logger, level: :info
 
 if Mix.env() == :test do
@@ -15,7 +18,7 @@ if Mix.env() == :dev do
     code_reloader: true,
     live_reload: [
       patterns: [
-        ~r"lib/caudata/.*(ex)$"E
+        ~r"lib/caudata/.*(ex)$"
       ]
     ]
 end

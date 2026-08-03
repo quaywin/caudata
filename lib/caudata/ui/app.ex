@@ -630,13 +630,17 @@ defmodule Caudata.UI.App do
             %{
               state
               | logs: [],
-                buffer_sizes: Map.put(state.buffer_sizes, source_id, 0),
-                drop_counts: Map.put(state.drop_counts, source_id, 0),
+                buffer_sizes: Map.delete(state.buffer_sizes, source_id),
+                drop_counts: Map.delete(state.drop_counts, source_id),
                 logs_scroll_y: :bottom,
                 logs_dirty: false
             }
           else
-            state
+            %{
+              state
+              | buffer_sizes: Map.delete(state.buffer_sizes, source_id),
+                drop_counts: Map.delete(state.drop_counts, source_id)
+            }
           end
 
         {:noreply, new_state}

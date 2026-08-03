@@ -78,6 +78,9 @@ defmodule Caudata.MixProject do
 
     [
       caudata: [
+        include_executables_for: [:unix],
+        strip_beams: true,
+        exclude_apps: [:wx, :observer, :debugger, :et, :reltool, :megaco],
         steps: [:assemble, &Burrito.wrap/1],
         burrito: [
           targets: targets,
@@ -153,17 +156,15 @@ defmodule Caudata.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:burrito, "~> 1.0"},
+      {:burrito, "~> 1.0", runtime: false},
       {:ex_ratatui,
        git: "https://github.com/quaywin/ex_ratatui.git", branch: "main", override: true},
       {:phoenix_ex_ratatui, "~> 0.1"},
-      {:plug_cowboy, "~> 2.7"},
       {:phoenix, "~> 1.7"},
       {:phoenix_live_view, "~> 0.20 or ~> 1.0"},
       {:phoenix_pubsub, "~> 2.1"},
       {:bandit, "~> 1.5"},
       {:jason, "~> 1.4"},
-      {:nimble_options, "~> 1.1"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.1"},
       {:phoenix_live_reload, "~> 1.5", only: :dev},

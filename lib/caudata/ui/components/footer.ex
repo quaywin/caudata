@@ -86,13 +86,6 @@ defmodule Caudata.UI.Components.Footer do
                         Span.new("[⇅] Navigate fields ", style: %Style{fg: :cyan}),
                         Span.new("[Type] Edit text ", style: %Style{fg: :green})
                       ]
-
-                    :tailscale ->
-                      [
-                        Span.new("[⇅] Navigate fields ", style: %Style{fg: :cyan}),
-                        Span.new("[Space/Enter] Toggle ", style: %Style{fg: :yellow}),
-                        Span.new("[Type] Edit fields ", style: %Style{fg: :green})
-                      ]
                   end
 
                 [

@@ -4,6 +4,9 @@ defmodule Caudata.ConfigManager do
   alias Caudata.Profile
 
   @default_config_path "~/.ssh/config"
+  @kv_split ~r{[\s=]+}
+  @whitespace_split ~r{\s+}
+  @quote_strip ~r{^"|"$}
 
   # Client API
 
@@ -121,25 +124,24 @@ defmodule Caudata.ConfigManager do
 
   @impl true
   def handle_call({:add_manual_profile, attrs}, _from, state) do
-    try do
-      profile = Profile.new(attrs)
-      profile = Map.put(profile, :enabled, Map.get(profile, :enabled, true))
+    profile = Profile.new(attrs)
+    profile = Map.put(profile, :enabled, Map.get(profile, :enabled, true))
 
-      :ok = Caudata.ConfigStore.add_profile(state.store, profile)
+    case Caudata.ConfigStore.add_profile(state.store, profile) do
+      :ok ->
+        all_profiles = Caudata.ConfigStore.list_profiles(state.store)
 
-      all_profiles = Caudata.ConfigStore.list_profiles(state.store)
+        # Broadcast profiles update
+        Phoenix.PubSub.broadcast(
+          Caudata.PubSub,
+          "config:profiles",
+          {:profiles_updated, all_profiles}
+        )
 
-      # Broadcast profiles update
-      Phoenix.PubSub.broadcast(
-        Caudata.PubSub,
-        "config:profiles",
-        {:profiles_updated, all_profiles}
-      )
+        {:reply, {:ok, profile}, state}
 
-      {:reply, {:ok, profile}, state}
-    rescue
-      e ->
-        {:reply, {:error, e}, state}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -258,8 +260,8 @@ defmodule Caudata.ConfigManager do
 
   @impl true
   def handle_call({:delete_profile, id}, _from, state) do
-    # Stop worker before deleting profile from store
-    Caudata.ServerSupervisor.stop_worker(id)
+    # Stop worker asynchronously to avoid blocking GenServer calls
+    _ = Task.start(fn -> Caudata.ServerSupervisor.stop_worker(id) end)
 
     :ok = Caudata.ConfigStore.delete_profile(state.store, id)
 
@@ -314,7 +316,7 @@ defmodule Caudata.ConfigManager do
             trimmed = String.trim(line)
             clean_line = strip_inline_comment(trimmed)
 
-            case String.split(clean_line, ~r{[\s=]+}, parts: 2) do
+            case String.split(clean_line, @kv_split, parts: 2) do
               [key, val] ->
                 directive = String.downcase(String.trim(key))
                 value = String.trim(val)
@@ -342,7 +344,7 @@ defmodule Caudata.ConfigManager do
   end
 
   defp expand_include_path(value, config_dir) do
-    clean_val = String.replace(value, ~r{^"|"$}, "")
+    clean_val = String.replace(value, @quote_strip, "")
 
     cond do
       String.starts_with?(clean_val, "~") ->
@@ -364,7 +366,7 @@ defmodule Caudata.ConfigManager do
     else
       clean_line = strip_inline_comment(trimmed)
 
-      case String.split(clean_line, ~r{[\s=]+}, parts: 2) do
+      case String.split(clean_line, @kv_split, parts: 2) do
         [key, val] ->
           directive = String.downcase(String.trim(key))
           value = String.trim(val)
@@ -385,7 +387,7 @@ defmodule Caudata.ConfigManager do
 
   defp handle_directive("host", value, acc, current) do
     acc = if current, do: [build_profile(current) | acc], else: acc
-    host_pattern = List.first(String.split(value, ~r{\s+}))
+    host_pattern = List.first(String.split(value, @whitespace_split))
 
     new_profile = %{
       id: host_pattern,
@@ -418,7 +420,7 @@ defmodule Caudata.ConfigManager do
   end
 
   defp handle_directive("identityfile", value, acc, current) when not is_nil(current) do
-    clean_val = String.replace(value, ~r{^"|"$}, "")
+    clean_val = String.replace(value, @quote_strip, "")
     expanded = Path.expand(clean_val)
     {acc, Map.put(current, :identity_file, expanded)}
   end

@@ -16,7 +16,7 @@ defmodule Caudata.UI.Components.FooterTest do
   end
 
   test "renders successfully when modal settings focus is other tabs" do
-    for focus <- [:servers, :connection, :containers, :services, :custom_logs, :tailscale] do
+    for focus <- [:servers, :connection, :containers, :services, :custom_logs, :general] do
       state = %{
         modal_visible: true,
         modal_type: :settings,

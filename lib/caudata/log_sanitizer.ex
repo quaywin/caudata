@@ -22,8 +22,19 @@ defmodule Caudata.LogSanitizer do
     |> truncate_line()
   end
 
+  @ansi_regex ~r{\x1B[@-_][0-?]*[ -/]*[@-~]}
+  @control_regex ~r{[\x00-\x08\x0A-\x1F\x7F]}
+
   # Ensures the binary is valid UTF-8, replacing invalid segments with empty space
-  def make_valid_utf8(binary) do
+  def make_valid_utf8(binary) when is_binary(binary) do
+    if String.valid?(binary) do
+      binary
+    else
+      do_make_valid_utf8(binary)
+    end
+  end
+
+  defp do_make_valid_utf8(binary) do
     case :unicode.characters_to_binary(binary, :utf8, :utf8) do
       valid when is_binary(valid) ->
         valid
@@ -57,20 +68,17 @@ defmodule Caudata.LogSanitizer do
 
   # Strips standard ANSI color and formatting escape sequences
   def strip_ansi_escapes(binary) do
-    # Regex matching ESC [ ... letter, using curly brackets as delimiters for the regex to avoid slash issues
-    String.replace(binary, ~r{\x1B[@-_][0-?]*[ -/]*[@-~]}, "")
+    String.replace(binary, @ansi_regex, "")
   end
 
   # Strips control characters (0x00 to 0x1F except tab, and 0x7F to 0x9F)
   def strip_control_characters(binary) do
-    # Replace non-printable ASCII controls (0x00-0x1F except tab 0x09) and DEL (0x7F)
-    binary
-    |> String.replace(~r{[\x00-\x08\x0A-\x1F\x7F]}, "")
+    String.replace(binary, @control_regex, "")
   end
 
   # Truncates lines exceeding the maximum length
   def truncate_line(binary) do
-    if String.length(binary) > @max_line_length do
+    if byte_size(binary) > @max_line_length and String.length(binary) > @max_line_length do
       String.slice(binary, 0, @max_line_length) <> "... [truncated]"
     else
       binary

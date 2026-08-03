@@ -7,9 +7,6 @@ defmodule Caudata.Application do
 
   @impl true
   def start(_type, _args) do
-    # Acknowledge that tailscale-rs is experimental software
-    System.put_env("TS_RS_EXPERIMENT", "this_is_unstable_software")
-
     # Handle command-line arguments if not running in test mode
     mode =
       if @env != :test do

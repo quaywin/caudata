@@ -32,32 +32,31 @@ defmodule Caudata.UI.LogFormatter do
 
         msg_style = %Style{fg: :white}
 
-        spans = []
-
-        spans =
+        ts_span =
           if ts != "" do
-            spans ++ [Span.new(ts <> " ", style: %Style{fg: :dark_gray})]
+            [Span.new(ts <> " ", style: %Style{fg: :dark_gray})]
           else
-            spans
+            []
           end
 
-        spans =
+        lvl_span =
           cond do
             bracket_lvl != "" ->
-              spans ++
-                [Span.new("[" <> bracket_lvl <> "] ", style: %{lvl_style | modifiers: [:bold]})]
+              [Span.new("[" <> bracket_lvl <> "] ", style: %{lvl_style | modifiers: [:bold]})]
 
             colon_lvl != "" ->
-              spans ++ [Span.new(colon_lvl <> ": ", style: %{lvl_style | modifiers: [:bold]})]
+              [Span.new(colon_lvl <> ": ", style: %{lvl_style | modifiers: [:bold]})]
 
             bare_lvl != "" ->
-              spans ++ [Span.new(bare_lvl <> " ", style: %{lvl_style | modifiers: [:bold]})]
+              [Span.new(bare_lvl <> " ", style: %{lvl_style | modifiers: [:bold]})]
 
             true ->
-              spans
+              []
           end
 
-        {spans ++ [Span.new(msg, style: msg_style)], is_error}
+        msg_span = [Span.new(msg, style: msg_style)]
+        spans = ts_span ++ lvl_span ++ msg_span
+        {spans, is_error}
 
       nil ->
         {[Span.new(line, style: %Style{fg: :white})], false}

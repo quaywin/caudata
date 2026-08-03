@@ -6,6 +6,7 @@ defmodule Caudata.ContainerWorker do
   defstruct [
     :profile_id,
     :container_id,
+    :source_id,
     :container_name,
     :image,
     :status,
@@ -67,6 +68,7 @@ defmodule Caudata.ContainerWorker do
     state = %__MODULE__{
       profile_id: profile_id,
       container_id: container.id,
+      source_id: "#{profile_id}/#{container.id}",
       container_name: container.name,
       image: Map.get(container, :image, ""),
       status: Map.get(container, :status, ""),
@@ -151,8 +153,7 @@ defmodule Caudata.ContainerWorker do
 
   @impl true
   def handle_cast({:restart_with_tail_limit, new_limit}, state) do
-    source_id = "#{state.profile_id}/#{state.container_id}"
-    Caudata.LogStore.clear_logs(source_id)
+    Caudata.LogStore.clear_logs(state.source_id)
 
     # Cancel timer and discard pending logs to ensure a clean restart
     state = cancel_flush_timer(state)
@@ -273,14 +274,12 @@ defmodule Caudata.ContainerWorker do
     # Force flush any buffered lines and pending logs on termination
     state = flush_pending_logs(state)
 
-    source_id = "#{state.profile_id}/#{state.container_id}"
-
     remaining =
       [{:stdout, state.stdout_buffer}, {:stderr, state.stderr_buffer}]
       |> Enum.filter(fn {_, b} -> b != "" end)
 
     if remaining != [] do
-      LogStore.append_logs(source_id, remaining)
+      LogStore.append_logs(state.source_id, remaining)
     end
 
     _ = close_log_channel(state)
@@ -294,14 +293,12 @@ defmodule Caudata.ContainerWorker do
     # Force flush any pending logs before disconnecting
     state = flush_pending_logs(state)
 
-    source_id = "#{state.profile_id}/#{state.container_id}"
-
     remaining =
       [{:stdout, state.stdout_buffer}, {:stderr, state.stderr_buffer}]
       |> Enum.filter(fn {_, b} -> b != "" end)
 
     if remaining != [] do
-      LogStore.append_logs(source_id, remaining)
+      LogStore.append_logs(state.source_id, remaining)
     end
 
     state = %{state | stdout_buffer: "", stderr_buffer: ""}
@@ -403,9 +400,8 @@ defmodule Caudata.ContainerWorker do
   # Flush logs helper that writes all pending logs to LogStore
   defp flush_pending_logs(state) do
     if state.pending_logs != [] do
-      source_id = "#{state.profile_id}/#{state.container_id}"
       logs_to_send = Enum.reverse(state.pending_logs)
-      LogStore.append_logs(source_id, logs_to_send)
+      LogStore.append_logs(state.source_id, logs_to_send)
       %{state | pending_logs: []}
     else
       state

@@ -165,9 +165,9 @@ defmodule Caudata.UI.Components.LogsPane do
     wrapped_with_indices =
       visible_logs
       |> Enum.with_index(start_idx)
-      |> Enum.flat_map(fn {%{timestamp: ts, stream: stream, message: line}, idx} ->
+      |> Enum.flat_map(fn {%{timestamp: ts, stream: _stream, message: line}, idx} ->
         {spans, is_err_level} = LogFormatter.format_line_with_meta(line)
-        is_error = stream == :stderr or is_err_level
+        is_error = is_err_level
 
         ViewHelper.wrap_spans(spans, wrap_width)
         |> Enum.with_index()

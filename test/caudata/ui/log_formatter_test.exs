@@ -223,5 +223,44 @@ defmodule Caudata.UI.LogFormatterTest do
 
       refute elem(LogFormatter.format_line_with_meta("2026-08-04 10:00:00 [info] GET /checkout 200 15ms"), 1)
     end
+
+    test "avoids false positive is_error for null/false error keys or info level logs with casual mentions" do
+      # JSON logs with null/false/empty error fields
+      refute elem(LogFormatter.format_line_with_meta(~s({"level":"info","error":null,"msg":"Operation successful"})), 1)
+      refute elem(LogFormatter.format_line_with_meta(~s({"level":"info","err":false,"msg":"No error occurred"})), 1)
+      refute elem(LogFormatter.format_line_with_meta(~s({"level":"info","exception":""})), 1)
+
+      # Logfmt with empty error
+      refute elem(LogFormatter.format_line_with_meta(~s(level=info msg="Completed" err="")), 1)
+
+      # Info level log mentioning keywords casually
+      refute elem(LogFormatter.format_line_with_meta("2026-08-04 10:00:00 [info] Handled exception recovery gracefully"), 1)
+
+      nginx_log =
+        """
+        1.52.163.41 - - [04/Aug/2026:10:05:39 +0000] "POST /wp-admin/admin-ajax.php HTTP/1.1" 200 571 "https://dev.tram520.com/wp-admin/post.php?post=85288&action=edit" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+        """
+        |> String.trim()
+
+      refute elem(LogFormatter.format_line_with_meta(nginx_log), 1)
+    end
+
+    test "handles numeric levels, MongoDB severity, stacktraces, and expanded error keys" do
+      # Bunyan / Syslog numeric error levels
+      assert elem(LogFormatter.format_line_with_meta(~s({"level":50,"msg":"Database connection failed"})), 1) == true
+      assert elem(LogFormatter.format_line_with_meta(~s({"level":60,"msg":"Fatal crash"})), 1) == true
+
+      # MongoDB short severity E (Error) and F (Fatal)
+      assert elem(LogFormatter.format_line_with_meta(~s({"s":"E","msg":"Mongo error"})), 1) == true
+
+      # Extra JSON error keys: stack, stacktrace, cause, error_message
+      assert elem(LogFormatter.format_line_with_meta(~s({"level":"info","stack":"Error: connect ECONNREFUSED"})), 1) == true
+      assert elem(LogFormatter.format_line_with_meta(~s({"level":"info","cause":"Disk full"})), 1) == true
+
+      # Stacktrace lines without explicit log level
+      assert elem(LogFormatter.format_line_with_meta("Traceback (most recent call last):"), 1) == true
+      assert elem(LogFormatter.format_line_with_meta("Caused by: java.lang.NullPointerException"), 1) == true
+      assert elem(LogFormatter.format_line_with_meta("stack backtrace:"), 1) == true
+    end
   end
 end

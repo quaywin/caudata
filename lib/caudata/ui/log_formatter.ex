@@ -93,7 +93,7 @@ defmodule Caudata.UI.LogFormatter do
   end
 
   defp format_json_map(map) do
-    lvl_val = fetch_first_key_value(map, ["level", "severity", "lvl", "log.level"])
+    lvl_val = fetch_first_key_value(map, ["level", "severity", "lvl", "log.level", "s"])
     is_err = is_json_error?(map, lvl_val && to_string(lvl_val))
 
     spans =
@@ -105,7 +105,7 @@ defmodule Caudata.UI.LogFormatter do
 
         val_spans =
           cond do
-            k in ["level", "severity", "lvl", "log.level"] ->
+            k in ["level", "severity", "lvl", "log.level", "s"] ->
               str = to_string(v)
               style = level_style(str)
               [Span.new("[" <> String.upcase(str) <> "]", style: %{style | modifiers: [:bold]})]
@@ -521,27 +521,59 @@ defmodule Caudata.UI.LogFormatter do
     end
   end
 
-  @error_keywords_regex ~r/\b(?:panic|exception|fatal|crash|runtimeerror|compileerror|unhandled)\b|\*\*\s*\(/i
+  @error_keywords_regex ~r/\b(?:panic|fatal|exception|crash|runtimeerror|compileerror|unhandled|traceback|backtrace)\b|\*\*\s*\(|\bcaused by:|\b\s*at\s+[a-zA-Z0-9_.$]+\(/i
+  @strict_error_keywords_regex ~r/(?:\b(?:panic|runtimeerror|compileerror)\b:\s*|\b(?:fatal|uncaught|unhandled)\b|\*\*\s*\(|\btraceback \(most recent call last\):|\bcaused by:|\bgoroutine \d+ \[|\bstack backtrace:)/i
 
   def is_error_line?(map_or_kv, level_str, line) do
-    level_err = level_str != nil and error_level?(to_string(level_str))
+    level = level_str && String.downcase(to_string(level_str))
+    is_err_lvl = level != nil and error_level?(level)
+    is_non_err_lvl = level != nil and level in ["info", "warn", "warning", "debug", "trace", "notice", "30", "20", "10", "4", "5", "6", "7", "i", "w", "d"]
 
     key_err =
       if is_map(map_or_kv) do
-        Map.has_key?(map_or_kv, "error") or
-          Map.has_key?(map_or_kv, "err") or
-          Map.has_key?(map_or_kv, "exception") or
-          is_5xx_status?(Map.get(map_or_kv, "status"))
+        truthy_error_val?(
+          fetch_first_key_value(map_or_kv, [
+            "error",
+            "err",
+            "exception",
+            "stack",
+            "stacktrace",
+            "backtrace",
+            "error_message",
+            "error_details",
+            "exc_info",
+            "cause"
+          ])
+        ) or is_5xx_status?(Map.get(map_or_kv, "status"))
       else
         false
       end
 
-    text_err =
-      (line != nil and Regex.match?(~r/(?:GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD|HTTP\/[12]\.[01])\s+.*?\b5\d{2}\b|\b5\d{2}\b\s+\d+(?:ms|s|us)/i, line)) or
-        (line != nil and Regex.match?(@error_keywords_regex, line))
+    has_5xx_http =
+      line != nil and
+        Regex.match?(
+          ~r/\b(?:GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\b(?:\s+\S+|\s+"[^"]+")\s+(?:HTTP\/[12]\.[01]"?\s+)?5\d{2}\b(?!\.)|\b5\d{2}\b(?!\.)\s+\d+(?:ms|s|us)/i,
+          line
+        )
 
-    level_err or key_err or text_err
+    cond do
+      is_err_lvl ->
+        true
+
+      is_non_err_lvl ->
+        key_err or has_5xx_http or (line != nil and Regex.match?(@strict_error_keywords_regex, line))
+
+      true ->
+        key_err or has_5xx_http or (line != nil and Regex.match?(@error_keywords_regex, line))
+    end
   end
+
+  defp truthy_error_val?(nil), do: false
+  defp truthy_error_val?(false), do: false
+  defp truthy_error_val?(""), do: false
+  defp truthy_error_val?([]), do: false
+  defp truthy_error_val?(%{}), do: false
+  defp truthy_error_val?(_), do: true
 
   def is_5xx_status?(status) when is_integer(status), do: status in 500..599
   def is_5xx_status?(status) when is_binary(status), do: String.match?(status, ~r/^5\d{2}$/)
@@ -560,7 +592,17 @@ defmodule Caudata.UI.LogFormatter do
       "emergency",
       "stderr",
       "fail",
-      "failure"
+      "failure",
+      "panic",
+      "severe",
+      "e",
+      "f",
+      "50",
+      "60",
+      "0",
+      "1",
+      "2",
+      "3"
     ]
   end
 end

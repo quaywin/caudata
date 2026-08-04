@@ -107,48 +107,84 @@ defmodule Caudata.UI.Components.ContainerActionModal do
   end
 
   def render_confirm(state) do
-    action = Map.get(state, :pending_docker_action, :kill)
-    container_name = Map.get(state, :selected_container_name, "Container")
+    case Map.get(state, :modal_type) do
+      :confirm_delete_server ->
+        server_id = Map.get(state, :delete_server_id, "Server")
 
-    {action_title, color, prompt} =
-      case action do
-        :kill ->
-          {"FORCE KILL (SIGKILL)", :red, "Are you sure you want to FORCE KILL container?"}
+        content_lines = [
+          Line.new([
+            Span.new("⚠️  Are you sure you want to DELETE server?",
+              style: %Style{fg: :yellow, modifiers: [:bold]}
+            )
+          ]),
+          Line.new([]),
+          Line.new([
+            Span.new("    Server: ", style: %Style{fg: :dark_gray}),
+            Span.new(to_string(server_id), style: %Style{fg: :red, modifiers: [:bold]})
+          ]),
+          Line.new([]),
+          Line.new([
+            Span.new("This action cannot be undone!", style: %Style{fg: :red})
+          ])
+        ]
 
-        :remove ->
-          {"REMOVE CONTAINER", :red, "Are you sure you want to REMOVE container?"}
+        popup_widget = %Popup{
+          content: %Paragraph{text: content_lines},
+          block: %Block{
+            title: " ⚠️ Confirm DELETE SERVER ",
+            borders: [:all],
+            border_type: :rounded
+          },
+          percent_width: 55,
+          percent_height: 35
+        }
 
-        _ ->
-          {"CONFIRM ACTION", :yellow, "Are you sure you want to execute this action?"}
-      end
+        [popup_widget]
 
-    content_lines = [
-      Line.new([
-        Span.new("⚠️  #{prompt}", style: %Style{fg: :yellow, modifiers: [:bold]})
-      ]),
-      Line.new([]),
-      Line.new([
-        Span.new("    Container: ", style: %Style{fg: :dark_gray}),
-        Span.new(to_string(container_name), style: %Style{fg: color, modifiers: [:bold]})
-      ]),
-      Line.new([]),
-      Line.new([
-        Span.new("This action cannot be undone!", style: %Style{fg: :red})
-      ])
-    ]
+      _ ->
+        action = Map.get(state, :pending_docker_action, :kill)
+        container_name = Map.get(state, :selected_container_name, "Container")
 
-    popup_widget = %Popup{
-      content: %Paragraph{text: content_lines},
-      block: %Block{
-        title: " ⚠️ Confirm #{action_title} ",
-        borders: [:all],
-        border_type: :rounded
-      },
-      percent_width: 55,
-      percent_height: 35
-    }
+        {action_title, color, prompt} =
+          case action do
+            :kill ->
+              {"FORCE KILL (SIGKILL)", :red, "Are you sure you want to FORCE KILL container?"}
 
-    [popup_widget]
+            :remove ->
+              {"REMOVE CONTAINER", :red, "Are you sure you want to REMOVE container?"}
+
+            _ ->
+              {"CONFIRM ACTION", :yellow, "Are you sure you want to execute this action?"}
+          end
+
+        content_lines = [
+          Line.new([
+            Span.new("⚠️  #{prompt}", style: %Style{fg: :yellow, modifiers: [:bold]})
+          ]),
+          Line.new([]),
+          Line.new([
+            Span.new("    Container: ", style: %Style{fg: :dark_gray}),
+            Span.new(to_string(container_name), style: %Style{fg: color, modifiers: [:bold]})
+          ]),
+          Line.new([]),
+          Line.new([
+            Span.new("This action cannot be undone!", style: %Style{fg: :red})
+          ])
+        ]
+
+        popup_widget = %Popup{
+          content: %Paragraph{text: content_lines},
+          block: %Block{
+            title: " ⚠️ Confirm #{action_title} ",
+            borders: [:all],
+            border_type: :rounded
+          },
+          percent_width: 55,
+          percent_height: 35
+        }
+
+        [popup_widget]
+    end
   end
 
   def handle_key(key, key_data, model) do
@@ -178,7 +214,7 @@ defmodule Caudata.UI.Components.ContainerActionModal do
       :enter ->
         execute_action(idx, actions, model)
 
-      k when k in [:escape, :esc] ->
+      k when k in [:escape, :esc, "q", "Q"] ->
         {%{model | modal_visible: false}, []}
 
       _ ->
@@ -188,27 +224,82 @@ defmodule Caudata.UI.Components.ContainerActionModal do
 
   def handle_key_confirm(key, key_data, model) do
     norm_key = if key == :char, do: Map.get(key_data, :char), else: key
-    pending_action = Map.get(model, :pending_docker_action)
 
-    case norm_key do
-      k when k in ["y", "Y", :enter] ->
-        new_model =
-          model
-          |> Map.put(:modal_visible, false)
-          |> Map.put(:pending_docker_action, nil)
+    case Map.get(model, :modal_type) do
+      :confirm_delete_server ->
+        server_id = Map.get(model, :delete_server_id)
 
-        {new_model, [{:dispatch_docker_action, pending_action}]}
+        case norm_key do
+          k when k in ["y", "Y", :enter] ->
+            if server_id do
+              Caudata.ConfigManager.delete_profile(server_id)
+            end
 
-      k when k in ["n", "N", :escape, :esc] ->
-        new_model =
-          model
-          |> Map.put(:modal_visible, false)
-          |> Map.put(:pending_docker_action, nil)
+            profiles = Map.get(model, :profiles, [])
+            new_profiles = Enum.reject(profiles, fn p -> p.id == server_id end)
 
-        {new_model, []}
+            new_selected_profile_id =
+              if model.selected_profile_id == server_id do
+                case new_profiles do
+                  [first | _] -> first.id
+                  [] -> nil
+                end
+              else
+                model.selected_profile_id
+              end
+
+            settings_selected_profile_idx =
+              min(
+                Map.get(model, :settings_selected_profile_idx, 0),
+                max(0, length(new_profiles) - 1)
+              )
+
+            new_model =
+              model
+              |> Map.put(:modal_visible, false)
+              |> Map.put(:delete_server_id, nil)
+              |> Map.put(:profiles, new_profiles)
+              |> Map.put(:selected_profile_id, new_selected_profile_id)
+              |> Map.put(:settings_selected_profile_idx, settings_selected_profile_idx)
+              |> Map.put(:notification, {"Server #{server_id} deleted", 30})
+
+            {new_model, []}
+
+          k when k in ["n", "N", :escape, :esc] ->
+            new_model =
+              model
+              |> Map.put(:modal_visible, false)
+              |> Map.put(:delete_server_id, nil)
+
+            {new_model, []}
+
+          _ ->
+            {model, []}
+        end
 
       _ ->
-        {model, []}
+        pending_action = Map.get(model, :pending_docker_action)
+
+        case norm_key do
+          k when k in ["y", "Y", :enter] ->
+            new_model =
+              model
+              |> Map.put(:modal_visible, false)
+              |> Map.put(:pending_docker_action, nil)
+
+            {new_model, [{:dispatch_docker_action, pending_action}]}
+
+          k when k in ["n", "N", :escape, :esc] ->
+            new_model =
+              model
+              |> Map.put(:modal_visible, false)
+              |> Map.put(:pending_docker_action, nil)
+
+            {new_model, []}
+
+          _ ->
+            {model, []}
+        end
     end
   end
 

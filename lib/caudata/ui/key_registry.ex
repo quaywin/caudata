@@ -11,7 +11,8 @@ defmodule Caudata.UI.KeyRegistry do
     AddServerModal,
     SettingsModal,
     ContainerActionModal,
-    ContainerInspectModal
+    ContainerInspectModal,
+    HelpModal
   }
 
   alias Caudata.UI.ViewHelper
@@ -28,6 +29,9 @@ defmodule Caudata.UI.KeyRegistry do
       # 1. Active Modals
       modal_visible ->
         case modal_type do
+          :help ->
+            :help
+
           :settings ->
             cond do
               Map.get(model, :settings_input_active, false) -> :settings_input
@@ -74,6 +78,12 @@ defmodule Caudata.UI.KeyRegistry do
     context = determine_context(state)
 
     case context do
+      :help ->
+        [
+          shortcut("[j/k/⇅]", "Scroll ", :cyan),
+          shortcut("[Esc/q/?]", "Close ", :red)
+        ]
+
       :select_ssh ->
         [
           shortcut("[⇅/j/k]", "Navigate ", :yellow),
@@ -181,12 +191,28 @@ defmodule Caudata.UI.KeyRegistry do
         ]
 
       :selecting ->
-        [
-          shortcut("[j/k]", "Move ", :yellow),
-          shortcut("[↑/↓]", "Select ", :cyan),
-          shortcut("[y]", "Yank ", :green),
-          shortcut("[Esc]", "Cancel ", :red)
-        ]
+        if Map.get(state, :visual_anchor) == nil do
+          [
+            shortcut("[j/k/⇅]", "Move Cursor ", :cyan),
+            shortcut("[v/Space]", "Start Selection ", :yellow),
+            shortcut("[y]", "Copy Line ", :green),
+            shortcut("[Esc]", "Exit ", :red)
+          ]
+        else
+          count =
+            case ViewHelper.get_selection_range(state) do
+              nil -> 1
+              range -> Enum.count(range)
+            end
+
+          [
+            shortcut("[j/k/⇅]", "Extend Selection (#{count}L) ", :cyan),
+            shortcut("[v/Space]", "Stop Selection ", :yellow),
+            shortcut("[o]", "Swap Ends ", :magenta),
+            shortcut("[y]", "Copy Range ", :green),
+            shortcut("[Esc]", "Cancel Anchor ", :red)
+          ]
+        end
 
       :normal ->
         get_normal_shortcuts(state)
@@ -205,33 +231,55 @@ defmodule Caudata.UI.KeyRegistry do
         shortcut("[/]", "Filter ", :white),
         shortcut("[y]", "Copy All ", :green),
         shortcut("[v]", "Select ", :cyan),
-        shortcut("[j/k]", "Scroll Logs ", :white)
+        shortcut("[j/k]", "Scroll ", :white),
+        shortcut("[g/G]", "Top/Bottom ", :white)
       ]
     else
-      action_hint =
-        if Map.get(state, :sidebar_focus) == :containers do
-          if selected_container_is_docker?(state) do
-            [shortcut("[m/Enter]", "Actions ", :cyan)]
-          else
-            [shortcut("[Enter]", "Select ", :cyan)]
-          end
-        else
-          [shortcut("[Enter]", "Connect ", :white)]
-        end
+      active_panel = Map.get(state, :active_panel, :sidebar)
 
-      [
-        shortcut("[q/Ctrl+C]", "Quit ", :white)
-      ] ++
-        action_hint ++
-        [
-          shortcut("[a]", "Add Server ", :white),
-          shortcut("[f]", "Fullscreen ", :yellow),
-          shortcut("[t]", "Time ", :magenta),
-          shortcut("[/]", "Filter ", :white),
-          shortcut("[y]", "Copy ", :green),
-          shortcut("[v]", "Select ", :cyan),
-          shortcut("[⇅]", "Navigate | [j/k] Scroll ", :white)
-        ]
+      case active_panel do
+        :logs ->
+          [
+            shortcut("[q/Ctrl+C]", "Quit ", :white),
+            shortcut("[1/2/Tab]", "Panel ", :yellow),
+            shortcut("[f]", "Fullscreen ", :yellow),
+            shortcut("[t]", "Time ", :magenta),
+            shortcut("[/]", "Filter ", :white),
+            shortcut("[y]", "Copy ", :green),
+            shortcut("[v]", "Select ", :cyan),
+            shortcut("[j/k/⇅]", "Scroll ", :white),
+            shortcut("[g/G]", "Top/Bottom ", :white),
+            shortcut("[?]", "Help ", :cyan)
+          ]
+
+        _sidebar ->
+          action_hint =
+            if Map.get(state, :sidebar_focus) == :containers do
+              if selected_container_is_docker?(state) do
+                [shortcut("[m/Enter]", "Actions ", :cyan)]
+              else
+                [shortcut("[Enter]", "Select ", :cyan)]
+              end
+            else
+              [shortcut("[Enter]", "Connect ", :white)]
+            end
+
+          [
+            shortcut("[q/Ctrl+C]", "Quit ", :white),
+            shortcut("[1/2/Tab]", "Panel ", :yellow)
+          ] ++
+            action_hint ++
+            [
+              shortcut("[a]", "Add Server ", :white),
+              shortcut("[f]", "Fullscreen ", :yellow),
+              shortcut("[t]", "Time ", :magenta),
+              shortcut("[/]", "Filter ", :white),
+              shortcut("[y]", "Copy ", :green),
+              shortcut("[v]", "Select ", :cyan),
+              shortcut("[j/k/⇅]", "Navigate ", :white),
+              shortcut("[?]", "Help ", :cyan)
+            ]
+      end
     end
   end
 
@@ -240,7 +288,7 @@ defmodule Caudata.UI.KeyRegistry do
   Routes events cleanly based on key type and active context.
   """
   def dispatch_key(key_data, model) do
-    Logger.info("Dispatching key event: #{inspect(key_data)}")
+    Logger.debug("Dispatching key event: #{inspect(key_data)}")
 
     modal_visible = Map.get(model, :modal_visible, false)
     mode = Map.get(model, :mode, :browsing)
@@ -311,6 +359,9 @@ defmodule Caudata.UI.KeyRegistry do
 
   defp dispatch_modal_key(key, key_data, model) do
     case Map.get(model, :modal_type) do
+      :help ->
+        HelpModal.handle_key(key, key_data, model)
+
       :settings ->
         SettingsModal.handle_key(key, key_data, model)
 
@@ -318,6 +369,9 @@ defmodule Caudata.UI.KeyRegistry do
         ContainerActionModal.handle_key(key, key_data, model)
 
       :confirm_docker_action ->
+        ContainerActionModal.handle_key_confirm(key, key_data, model)
+
+      :confirm_delete_server ->
         ContainerActionModal.handle_key_confirm(key, key_data, model)
 
       :container_inspect ->
@@ -332,6 +386,41 @@ defmodule Caudata.UI.KeyRegistry do
     norm_key = if key == :char, do: Map.get(key_data, :char), else: key
 
     case norm_key do
+      "?" ->
+        {%{model | modal_visible: true, modal_type: :help, help_modal_scroll_y: 0}, []}
+
+      k when k in ["1", "h", :left] ->
+        {%{model | active_panel: :sidebar}, []}
+
+      k when k in ["2", "l", :right] ->
+        {%{model | active_panel: :logs}, []}
+
+      :tab ->
+        active_panel = Map.get(model, :active_panel, :sidebar)
+
+        if active_panel == :sidebar do
+          Sidebar.handle_key(:tab, key_data, model)
+        else
+          {%{model | active_panel: :sidebar}, []}
+        end
+
+      k when k in ["j", "k", :up, :down] ->
+        active_panel = Map.get(model, :active_panel, :sidebar)
+
+        if active_panel == :sidebar do
+          dir = if k in ["k", :up], do: :up, else: :down
+          Sidebar.handle_key(dir, key_data, model)
+        else
+          logs_key_data =
+            if k in ["k", :up] do
+              %{key: :char, char: "k"}
+            else
+              %{key: :char, char: "j"}
+            end
+
+          LogsPane.handle_key(:char, logs_key_data, model)
+        end
+
       k when k in ["m", "M"] ->
         open_container_action_modal(model)
 
@@ -342,10 +431,10 @@ defmodule Caudata.UI.KeyRegistry do
           Sidebar.handle_key(:enter, key_data, model)
         end
 
-      k when k in [:up, :down, :tab] ->
-        Sidebar.handle_key(norm_key, key_data, model)
+      k when k in ["g", "G", "/", "y", "Y", "v", "V"] ->
+        LogsPane.handle_key(key, key_data, model)
 
-      k when k in ["j", "k", "/", "y", "Y", "v", "V"] ->
+      k when k in [:page_up, :pageup, :page_down, :pagedown] ->
         LogsPane.handle_key(key, key_data, model)
 
       k when k in ["f", "F"] ->

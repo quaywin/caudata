@@ -73,6 +73,10 @@ defmodule Caudata.UI.Renderer do
       if state.modal_visible do
         modal_widget =
           cond do
+            state.modal_type == :help ->
+              [widget] = Caudata.UI.Components.HelpModal.render(state)
+              widget
+
             state.modal_type == :settings ->
               [widget] = SettingsModal.render(state)
               widget
@@ -81,7 +85,7 @@ defmodule Caudata.UI.Renderer do
               [widget] = ContainerActionModal.render(state)
               widget
 
-            state.modal_type == :confirm_docker_action ->
+            state.modal_type in [:confirm_docker_action, :confirm_delete_server] ->
               [widget] = ContainerActionModal.render_confirm(state)
               widget
 

@@ -59,6 +59,7 @@ defmodule Caudata.UI.App do
       selected_profile_id: selected_id,
       selected_container_id: nil,
       selected_container_name: nil,
+      active_panel: :sidebar,
       sidebar_focus: :servers,
       containers: %{},
       metrics: %{},
@@ -76,6 +77,7 @@ defmodule Caudata.UI.App do
       modal_visible: false,
       modal_type: :select_ssh,
       ssh_config_profiles: [],
+      delete_server_id: nil,
       modal_selected_index: 0,
       modal_focus_index: 0,
       modal_error: nil,
@@ -123,7 +125,8 @@ defmodule Caudata.UI.App do
       tick_scheduled: false,
       container_action_modal_selected_index: 0,
       container_inspect_data: "",
-      container_inspect_scroll_y: 0
+      container_inspect_scroll_y: 0,
+      help_modal_scroll_y: 0
     }
 
     state = adjust_log_subscription(nil, state)
@@ -164,9 +167,13 @@ defmodule Caudata.UI.App do
         mapped_key =
           case code do
             "up" -> :up
+            "Up" -> :up
             "down" -> :down
+            "Down" -> :down
             "left" -> :left
+            "Left" -> :left
             "right" -> :right
+            "Right" -> :right
             "tab" -> :tab
             "enter" -> :enter
             "esc" -> :escape
@@ -176,6 +183,12 @@ defmodule Caudata.UI.App do
             "F2" -> :f2
             "insert" -> :insert
             "Insert" -> :insert
+            "pageup" -> :page_up
+            "page_up" -> :page_up
+            "PageUp" -> :page_up
+            "pagedown" -> :page_down
+            "page_down" -> :page_down
+            "PageDown" -> :page_down
             _ -> nil
           end
 

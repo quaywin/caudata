@@ -87,7 +87,14 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
           end)
       end
 
-    border_color = if focus == :containers, do: :green, else: :white
+    active_panel = Map.get(state, :active_panel, :sidebar)
+
+    border_color =
+      cond do
+        active_panel == :sidebar and focus == :containers -> :cyan
+        active_panel == :sidebar -> :white
+        true -> :dark_gray
+      end
 
     selected_idx =
       Enum.find_index(
@@ -109,7 +116,7 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
       text: container_rows,
       scroll: {scroll_y, 0},
       block: %Block{
-        title: " Containers / Services ",
+        title: if(active_panel == :sidebar and focus == :containers, do: " Containers / Services [ACTIVE] ", else: " Containers / Services "),
         borders: [:all],
         border_type: :rounded,
         border_style: %Style{fg: border_color}

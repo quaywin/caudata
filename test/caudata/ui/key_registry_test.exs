@@ -107,7 +107,7 @@ defmodule Caudata.UI.KeyRegistryTest do
     test "returns shortcuts list for visual select mode", %{model: model} do
       selecting_model = %{model | mode: :selecting}
       shortcuts = KeyRegistry.get_shortcuts(selecting_model)
-      assert Enum.any?(shortcuts, fn s -> s.key == "[y]" and s.label == "Yank " end)
+      assert Enum.any?(shortcuts, fn s -> s.key == "[y]" and s.label =~ "Copy" end)
     end
   end
 

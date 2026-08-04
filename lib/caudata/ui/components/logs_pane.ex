@@ -21,13 +21,13 @@ defmodule Caudata.UI.Components.LogsPane do
 
     cond do
       selected_profile && not Map.get(selected_profile, :enabled, true) ->
-        render_disabled_pane(selected_profile, logs_area)
+        render_disabled_pane(state, selected_profile, logs_area)
 
       selected_profile ->
         render_active_pane(state, logs_area, selected_profile)
 
       true ->
-        render_empty_pane(logs_area)
+        render_empty_pane(state, logs_area)
     end
   end
 
@@ -40,11 +40,17 @@ defmodule Caudata.UI.Components.LogsPane do
 
   # ── Private Rendering Helpers ───────────────────────────────────────
 
-  defp render_disabled_pane(selected_profile, logs_area) do
+  defp render_disabled_pane(state, selected_profile, logs_area) do
+    active_panel = Map.get(state, :active_panel, :sidebar)
+    is_active = active_panel == :logs or Map.get(state, :logs_full_screen, false)
+    border_color = if is_active, do: :cyan, else: :dark_gray
+    title_prefix = if is_active, do: " [2]", else: " "
+
     outer = %Block{
-      title: " Logs: #{selected_profile.id} (disabled) ",
+      title: "#{title_prefix}Logs: #{selected_profile.id} (disabled) ",
       borders: [:all],
-      border_type: :rounded
+      border_type: :rounded,
+      border_style: %Style{fg: border_color}
     }
 
     inner_area = ViewHelper.inner_rect(logs_area)
@@ -60,11 +66,17 @@ defmodule Caudata.UI.Components.LogsPane do
     {outer, [{logs_widget, inner_area}]}
   end
 
-  defp render_empty_pane(logs_area) do
+  defp render_empty_pane(state, logs_area) do
+    active_panel = Map.get(state, :active_panel, :sidebar)
+    is_active = active_panel == :logs or Map.get(state, :logs_full_screen, false)
+    border_color = if is_active, do: :cyan, else: :dark_gray
+    title_prefix = if is_active, do: " [2]", else: " "
+
     outer = %Block{
-      title: " Caudata Logs ",
+      title: "#{title_prefix}Caudata Logs ",
       borders: [:all],
-      border_type: :rounded
+      border_type: :rounded,
+      border_style: %Style{fg: border_color}
     }
 
     inner_area = ViewHelper.inner_rect(logs_area)
@@ -81,6 +93,11 @@ defmodule Caudata.UI.Components.LogsPane do
   end
 
   defp render_active_pane(state, logs_area, selected_profile) do
+    active_panel = Map.get(state, :active_panel, :sidebar)
+    is_active = active_panel == :logs or Map.get(state, :logs_full_screen, false)
+    border_color = if is_active, do: :cyan, else: :dark_gray
+    title_prefix = if is_active, do: " [2]", else: " "
+
     inner_area = ViewHelper.inner_rect(logs_area)
     inner_width = inner_area.width
     displayed_logs = ViewHelper.get_displayed_logs(state)
@@ -129,12 +146,13 @@ defmodule Caudata.UI.Components.LogsPane do
     selection_range = ViewHelper.get_selection_range(state)
     log_lines = build_log_lines(wrapped_with_indices, state, selection_range)
 
-    title = build_title(state, selected_profile, selection_range)
+    title = build_title(state, selected_profile, selection_range, title_prefix)
 
     outer = %Block{
       title: title,
       borders: [:all],
-      border_type: :rounded
+      border_type: :rounded,
+      border_style: %Style{fg: border_color}
     }
 
     content =
@@ -203,7 +221,7 @@ defmodule Caudata.UI.Components.LogsPane do
     end)
   end
 
-  defp build_title(state, selected_profile, selection_range) do
+  defp build_title(state, selected_profile, selection_range, title_prefix) do
     base =
       if state.selected_container_id do
         containers = Map.get(state.containers, selected_profile.id, [])
@@ -212,17 +230,22 @@ defmodule Caudata.UI.Components.LogsPane do
           Enum.find(containers, &(to_string(&1.id) == to_string(state.selected_container_id)))
 
         container_name = if container, do: container.name, else: state.selected_container_id
-        " Logs: #{selected_profile.id} (container: #{container_name})"
+        "#{title_prefix}Logs: #{selected_profile.id} (container: #{container_name})"
       else
-        " Logs: #{selected_profile.id}"
+        "#{title_prefix}Logs: #{selected_profile.id}"
       end
 
     visual_suffix =
-      if state.mode == :selecting and selection_range != nil do
-        count = Enum.count(selection_range)
-        " [VISUAL: #{count} lines]"
-      else
-        ""
+      cond do
+        state.mode == :selecting and selection_range != nil ->
+          count = Enum.count(selection_range)
+          " [VISUAL: #{count} lines]"
+
+        state.mode == :selecting and is_integer(state.visual_cursor) ->
+          " [CURSOR: line #{state.visual_cursor + 1}]"
+
+        true ->
+          ""
       end
 
     freeze_suffix =

@@ -1112,93 +1112,12 @@ defmodule Caudata.UI.Components.SettingsModal do
                     end
 
                   model.settings_focus == :servers and profile ->
-                    server_id_to_delete = profile.id
-
-                    case Caudata.ConfigManager.delete_profile(server_id_to_delete) do
-                      :ok ->
-                        new_profiles =
-                          Enum.reject(model.profiles, &(&1.id == server_id_to_delete))
-
-                        if length(new_profiles) == 0 do
-                          {%{
-                             model
-                             | profiles: [],
-                               selected_profile_id: nil,
-                               selected_container_id: nil,
-                               selected_container_name: nil,
-                               modal_visible: false,
-                               settings_selected_profile_idx: 0,
-                               settings_container_idx: 0,
-                               settings_service_idx: 0,
-                               settings_service_search: "",
-                               settings_service_search_active: false,
-                               settings_custom_log_idx: 0
-                           }, []}
-                        else
-                          new_idx =
-                            max(
-                              0,
-                              min(model.settings_selected_profile_idx, length(new_profiles) - 1)
-                            )
-
-                          next_profile = Enum.at(new_profiles, new_idx)
-
-                          new_selected_profile_id =
-                            if model.selected_profile_id == server_id_to_delete do
-                              next_profile.id
-                            else
-                              model.selected_profile_id
-                            end
-
-                          new_selected_container_id =
-                            if model.selected_profile_id == server_id_to_delete do
-                              nil
-                            else
-                              model.selected_container_id
-                            end
-
-                          new_selected_container_name =
-                            if model.selected_profile_id == server_id_to_delete do
-                              nil
-                            else
-                              model.selected_container_name
-                            end
-
-                          connection_fields =
-                            if next_profile do
-                              %{
-                                "host_name" => next_profile.host_name || "",
-                                "port" => to_string(next_profile.port || 22),
-                                "user" => next_profile.user || "",
-                                "identity_file" => next_profile.identity_file || "",
-                                "password" => next_profile.password || ""
-                              }
-                            else
-                              %{}
-                            end
-
-                          {%{
-                             model
-                             | profiles: new_profiles,
-                               selected_profile_id: new_selected_profile_id,
-                               selected_container_id: new_selected_container_id,
-                               selected_container_name: new_selected_container_name,
-                               settings_selected_profile_idx: new_idx,
-                               settings_container_idx: 0,
-                               settings_service_idx: 0,
-                               settings_custom_log_idx: 0,
-                               settings_connection_focus_idx: 0,
-                               settings_connection_fields: connection_fields,
-                               settings_status_msg: "Deleted server \"#{server_id_to_delete}\""
-                           }, []}
-                        end
-
-                      {:error, reason} ->
-                        {%{
-                           model
-                           | settings_status_msg: "Error deleting server: #{inspect(reason)}"
-                         }, []}
-                    end
+                    {%{
+                       model
+                       | modal_visible: true,
+                         modal_type: :confirm_delete_server,
+                         delete_server_id: profile.id
+                     }, []}
 
                   true ->
                     {model, []}

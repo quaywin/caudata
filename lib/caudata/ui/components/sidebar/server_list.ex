@@ -65,7 +65,14 @@ defmodule Caudata.UI.Components.Sidebar.ServerList do
         ])
       end)
 
-    border_color = if focus == :servers, do: :green, else: :white
+    active_panel = Map.get(state, :active_panel, :sidebar)
+
+    border_color =
+      cond do
+        active_panel == :sidebar and focus == :servers -> :cyan
+        active_panel == :sidebar -> :white
+        true -> :dark_gray
+      end
 
     selected_idx = Enum.find_index(state.profiles, &(&1.id == state.selected_profile_id))
     n = length(state.profiles)
@@ -82,7 +89,7 @@ defmodule Caudata.UI.Components.Sidebar.ServerList do
       text: server_rows,
       scroll: {scroll_y, 0},
       block: %Block{
-        title: " Servers ",
+        title: if(active_panel == :sidebar and focus == :servers, do: " [1] Servers [ACTIVE] ", else: " [1] Servers "),
         borders: [:all],
         border_type: :rounded,
         border_style: %Style{fg: border_color}

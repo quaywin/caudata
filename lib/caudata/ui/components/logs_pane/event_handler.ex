@@ -28,28 +28,51 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
     last_idx = max(0, length(displayed_logs) - 1)
 
     case norm_key do
-      # j/k: move cursor only, clear selection
+      # j/k or ↑/↓: move cursor line-by-line (extends selection if anchor != nil)
       "j" ->
+        anchor = model.visual_anchor
         new_cursor = min(model.visual_cursor + 1, last_idx)
-        new_model = %{model | visual_cursor: new_cursor, visual_anchor: nil}
+        new_model = %{model | visual_cursor: new_cursor, visual_anchor: anchor}
         {auto_scroll_to_cursor(new_model, displayed_logs), []}
 
       "k" ->
-        move_cursor_up(model, displayed_logs, nil)
+        anchor = model.visual_anchor
+        move_cursor_up(model, displayed_logs, anchor)
 
-      # ↑/↓: start/extend selection from cursor
       :down ->
-        anchor = model.visual_anchor || model.visual_cursor
+        anchor = model.visual_anchor
         new_cursor = min(model.visual_cursor + 1, last_idx)
         new_model = %{model | visual_cursor: new_cursor, visual_anchor: anchor}
         {auto_scroll_to_cursor(new_model, displayed_logs), []}
 
       :up ->
-        anchor = model.visual_anchor || model.visual_cursor
+        anchor = model.visual_anchor
         move_cursor_up(model, displayed_logs, anchor)
+
+      # v or Space: toggle selection anchor (Start / Stop selection at current cursor)
+      k when k in ["v", " ", :space] ->
+        if model.visual_anchor == nil do
+          {%{model | visual_anchor: model.visual_cursor}, []}
+        else
+          {%{model | visual_anchor: nil}, []}
+        end
 
       "y" ->
         copy_selected_logs(model, displayed_logs)
+
+      "o" ->
+        # Swap anchor and cursor (Vim standard visual mode toggle end)
+        if model.visual_anchor != nil do
+          new_model = %{
+            model
+            | visual_cursor: model.visual_anchor,
+              visual_anchor: model.visual_cursor
+          }
+
+          {auto_scroll_to_cursor(new_model, displayed_logs), []}
+        else
+          {model, []}
+        end
 
       _ ->
         {model, []}
@@ -96,58 +119,49 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
   defp copy_selected_logs(model, displayed_logs) do
     case ViewHelper.get_selection_range(model) do
       nil ->
-        # No selection: copy single line at cursor
         case Enum.at(displayed_logs, model.visual_cursor) do
-          %{message: line} ->
-            notification_msg =
-              case ViewHelper.copy_to_clipboard(line) do
-                :ok -> "Copied 1 log line to clipboard!"
-                {:error, _reason} -> "Failed to copy to clipboard"
-              end
-
-            {%{
-               model
-               | notification: {notification_msg, 25},
-                 mode: :browsing,
-                 visual_anchor: nil,
-                 visual_cursor: nil
-             }, []}
-
-          _ ->
+          nil ->
             {model, []}
+
+          entry ->
+            text = extract_log_text(entry)
+            copy_text_to_clipboard(text, 1, model)
         end
 
       range ->
-        count = Enum.count(range)
         selected_logs = Enum.slice(displayed_logs, range)
-
-        text =
-          selected_logs
-          |> Enum.map(fn %{message: line} -> line end)
-          |> Enum.join("\n")
-
-        notification_msg =
-          case ViewHelper.copy_to_clipboard(text) do
-            :ok -> "Copied #{count} log lines to clipboard!"
-            {:error, _reason} -> "Failed to copy to clipboard"
-          end
-
-        {%{
-           model
-           | notification: {notification_msg, 25},
-             mode: :browsing,
-             visual_anchor: nil,
-             visual_cursor: nil
-         }, []}
+        text = selected_logs |> Enum.map(&extract_log_text/1) |> Enum.join("\n")
+        copy_text_to_clipboard(text, Enum.count(range), model)
     end
   end
+
+  defp copy_text_to_clipboard(text, count, model) do
+    notification_msg =
+      case ViewHelper.copy_to_clipboard(text) do
+        :ok -> "Copied #{count} log line#{if count > 1, do: "s", else: ""} to clipboard!"
+        {:error, _reason} -> "Failed to copy to clipboard"
+      end
+
+    {%{
+       model
+       | notification: {notification_msg, 25},
+         mode: :browsing,
+         visual_anchor: nil,
+         visual_cursor: nil
+     }, []}
+  end
+
+  defp extract_log_text(%{message: line}), do: line
+  defp extract_log_text(line) when is_binary(line), do: line
+  defp extract_log_text(other), do: to_string(other)
 
   defp auto_scroll_to_cursor(model, displayed_logs) do
     inner_width = ViewHelper.get_logs_inner_width(model)
     logs_height = ViewHelper.get_logs_pane_height(model)
-    cursor_idx = model.visual_cursor
 
-    # Calculate the wrapped line index where the cursor starts
+    raw_cursor = model.visual_cursor || 0
+    cursor_idx = max(0, min(raw_cursor, max(0, length(displayed_logs) - 1)))
+
     cursor_wrapped_start =
       displayed_logs
       |> Enum.take(cursor_idx)
@@ -182,12 +196,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
       end
 
     new_scroll = min(new_scroll, max_scroll)
-
-    if model.mode != :selecting and new_scroll >= max_scroll do
-      %{model | logs_scroll_y: :bottom}
-    else
-      %{model | logs_scroll_y: new_scroll}
-    end
+    %{model | logs_scroll_y: new_scroll}
   end
 
   # ── Normal / Browsing Mode ──────────────────────────────────────────
@@ -208,9 +217,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
       "j" ->
         displayed_logs = ViewHelper.get_displayed_logs(model)
         logs_height = ViewHelper.get_logs_pane_height(model)
-
         inner_width = ViewHelper.get_logs_inner_width(model)
-
         wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
         max_scroll = max(0, wrapped_lines_count - logs_height)
 
@@ -228,9 +235,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
         if model.selected_profile_id do
           displayed_logs = ViewHelper.get_displayed_logs(model)
           logs_height = ViewHelper.get_logs_pane_height(model)
-
           inner_width = ViewHelper.get_logs_inner_width(model)
-
           current_visual_len = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
           max_scroll = max(0, current_visual_len - logs_height)
 
@@ -255,15 +260,57 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
           else
             new_scroll = max(0, effective_scroll - scroll_step)
 
-            new_scroll =
+            final_scroll =
               if model.logs_scroll_y == :bottom and new_scroll == max_scroll,
                 do: :bottom,
                 else: new_scroll
 
-            {%{model | logs_scroll_y: new_scroll}, []}
+            {%{model | logs_scroll_y: final_scroll}, []}
           end
         else
           {model, []}
+        end
+
+      "g" ->
+        # Go to top of logs
+        {%{model | logs_scroll_y: 0}, []}
+
+      "G" ->
+        # Go to bottom of logs
+        {%{model | logs_scroll_y: :bottom}, []}
+
+      k when k in [:page_up, :pageup] ->
+        displayed_logs = ViewHelper.get_displayed_logs(model)
+        logs_height = ViewHelper.get_logs_pane_height(model)
+        inner_width = ViewHelper.get_logs_inner_width(model)
+        wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
+        max_scroll = max(0, wrapped_lines_count - logs_height)
+
+        case model.logs_scroll_y do
+          :bottom ->
+            new_scroll = max(0, max_scroll - logs_height)
+            {%{model | logs_scroll_y: new_scroll}, []}
+
+          val when is_integer(val) ->
+            new_scroll = max(0, val - logs_height)
+            {%{model | logs_scroll_y: new_scroll}, []}
+        end
+
+      k when k in [:page_down, :pagedown] ->
+        displayed_logs = ViewHelper.get_displayed_logs(model)
+        logs_height = ViewHelper.get_logs_pane_height(model)
+        inner_width = ViewHelper.get_logs_inner_width(model)
+        wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
+        max_scroll = max(0, wrapped_lines_count - logs_height)
+
+        case model.logs_scroll_y do
+          :bottom ->
+            {model, []}
+
+          val when is_integer(val) ->
+            new_scroll = val + logs_height
+            new_scroll = if new_scroll >= max_scroll, do: :bottom, else: new_scroll
+            {%{model | logs_scroll_y: new_scroll}, []}
         end
 
       "/" ->
@@ -298,7 +345,12 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
             end
 
           new_model =
-            %{model | mode: :selecting, visual_anchor: nil, visual_cursor: cursor_idx}
+            %{
+              model
+              | mode: :selecting,
+                visual_anchor: nil,
+                visual_cursor: cursor_idx
+            }
             |> auto_scroll_to_cursor(displayed_logs)
 
           {new_model, []}
@@ -326,11 +378,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
         ]
 
     if has_real_logs? do
-      text =
-        displayed_logs
-        |> Enum.map(fn %{message: line} -> line end)
-        |> Enum.join("\n")
-
+      text = displayed_logs |> Enum.map(&extract_log_text/1) |> Enum.join("\n")
       count = length(displayed_logs)
 
       notification_msg =
@@ -351,26 +399,11 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
     case key do
       :paste ->
         text = Map.get(key_data, :content, "")
-        new_val = model.filter_regex <> text
-
-        {error, _compiled} =
-          case Regex.compile(new_val) do
-            {:ok, re} -> {false, re}
-            _ -> {true, nil}
-          end
-
-        {%{model | filter_regex: new_val, filter_error: error}, []}
+        update_filter_regex(model, model.filter_regex <> text)
 
       :backspace ->
         new_val = String.slice(model.filter_regex, 0..-2//1)
-
-        {error, _compiled} =
-          case Regex.compile(new_val) do
-            {:ok, re} -> {false, re}
-            _ -> {true, nil}
-          end
-
-        {%{model | filter_regex: new_val, filter_error: error}, []}
+        update_filter_regex(model, new_val)
 
       :enter ->
         {%{model | mode: :browsing, active_field: nil}, []}
@@ -379,38 +412,32 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
         char = Map.get(key_data, :char, "")
 
         if is_binary(char) and char != "" do
-          new_val = model.filter_regex <> char
-
-          {error, _compiled} =
-            case Regex.compile(new_val) do
-              {:ok, re} -> {false, re}
-              _ -> {true, nil}
-            end
-
-          {%{model | filter_regex: new_val, filter_error: error}, []}
+          update_filter_regex(model, model.filter_regex <> char)
         else
           {model, []}
         end
 
       ch when is_binary(ch) and byte_size(ch) == 1 ->
-        new_val = model.filter_regex <> ch
-
-        {error, _compiled} =
-          case Regex.compile(new_val) do
-            {:ok, re} -> {false, re}
-            _ -> {true, nil}
-          end
-
-        {%{model | filter_regex: new_val, filter_error: error}, []}
+        update_filter_regex(model, model.filter_regex <> ch)
 
       _ ->
         {model, []}
     end
   end
 
+  defp update_filter_regex(model, new_val) do
+    error =
+      case Regex.compile(new_val) do
+        {:ok, _} -> false
+        _ -> true
+      end
+
+    {%{model | filter_regex: new_val, filter_error: error}, []}
+  end
+
   # ── Helpers ─────────────────────────────────────────────────────────
 
-  defp get_raw_index_at_scroll(displayed_logs, scroll_y, inner_width) do
+  def get_raw_index_at_scroll(displayed_logs, scroll_y, inner_width) do
     displayed_logs
     |> Enum.reduce_while({0, 0}, fn line, {acc, idx} ->
       line_len = ViewHelper.visual_line_count(line, inner_width)

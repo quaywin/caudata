@@ -108,4 +108,26 @@ defmodule Caudata.UI.Components.SidebarTest do
     assert [_, {container_widget, _}] = widgets
     assert container_widget.scroll == {4, 0}
   end
+
+  test "ServerList border color and title update based on active_panel and focus", %{state: state} do
+    box_area = %Rect{x: 0, y: 0, width: 38, height: 10}
+
+    # active_panel: :sidebar, focus: :servers -> cyan border, [ACTIVE] title
+    state1 = Map.merge(state, %{active_panel: :sidebar, sidebar_focus: :servers})
+    {widget1, _} = Caudata.UI.Components.Sidebar.ServerList.render(state1, box_area)
+    assert widget1.block.border_style.fg == :cyan
+    assert widget1.block.title == " [1] Servers [ACTIVE] "
+
+    # active_panel: :sidebar, focus: :containers -> white border, non-[ACTIVE] title
+    state2 = Map.merge(state, %{active_panel: :sidebar, sidebar_focus: :containers})
+    {widget2, _} = Caudata.UI.Components.Sidebar.ServerList.render(state2, box_area)
+    assert widget2.block.border_style.fg == :white
+    assert widget2.block.title == " [1] Servers "
+
+    # active_panel: :main -> dark_gray border, non-[ACTIVE] title
+    state3 = Map.merge(state, %{active_panel: :main, sidebar_focus: :servers})
+    {widget3, _} = Caudata.UI.Components.Sidebar.ServerList.render(state3, box_area)
+    assert widget3.block.border_style.fg == :dark_gray
+    assert widget3.block.title == " [1] Servers "
+  end
 end

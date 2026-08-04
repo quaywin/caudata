@@ -376,7 +376,8 @@ defmodule Caudata.UI.AppTest do
       | logs: logs,
         height: 24,
         selected_profile_id: "test-server",
-        selected_container_id: "container-1"
+        selected_container_id: "container-1",
+        active_panel: :logs
     }
 
     assert state.logs_scroll_y == :bottom
@@ -421,7 +422,8 @@ defmodule Caudata.UI.AppTest do
       | logs: logs,
         height: 24,
         selected_profile_id: "test-server",
-        selected_container_id: "container-1"
+        selected_container_id: "container-1",
+        active_panel: :logs
     }
 
     # Start scroll position at 70 (scrolled up somewhat, so we have room to go up or down)
@@ -570,7 +572,8 @@ defmodule Caudata.UI.AppTest do
       | selected_profile_id: profile_id,
         selected_container_id: container_id,
         logs_fetch_limit: 15,
-        logs_scroll_y: :bottom
+        logs_scroll_y: :bottom,
+        active_panel: :logs
     }
 
     # 1. First tick to populate logs
@@ -648,7 +651,8 @@ defmodule Caudata.UI.AppTest do
         # scroll position is at the top of loaded logs
         logs_scroll_y: 0,
         # pane height is 24 - 4 = 20
-        height: 24
+        height: 24,
+        active_panel: :logs
     }
 
     # Verify that scroll position is 0
@@ -700,7 +704,8 @@ defmodule Caudata.UI.AppTest do
         height: 24,
         mode: :selecting,
         visual_cursor: 0,
-        visual_anchor: nil
+        visual_anchor: nil,
+        active_panel: :logs
     }
 
     # Verify that scroll position is 0
@@ -797,8 +802,16 @@ defmodule Caudata.UI.AppTest do
     # 'd' key to delete server when focused on :servers
     event_d = %ExRatatui.Event.Key{code: "d", modifiers: []}
     assert {:noreply, state_delete} = App.handle_event(event_d, state)
-    refute Enum.any?(state_delete.profiles, &(&1.id == "server1"))
-    assert state_delete.settings_selected_profile_idx == 0
+    assert state_delete.modal_visible == true
+    assert state_delete.modal_type == :confirm_delete_server
+    assert state_delete.delete_server_id == "server1"
+
+    # 'y' key to confirm deletion
+    event_y = %ExRatatui.Event.Key{code: "y", modifiers: []}
+    assert {:noreply, state_confirmed} = App.handle_event(event_y, state_delete)
+    refute Enum.any?(state_confirmed.profiles, &(&1.id == "server1"))
+    assert state_confirmed.modal_visible == false
+    assert state_confirmed.notification != nil
   end
 
   test "handle_event/2 handles custom logs toggling in settings modal" do

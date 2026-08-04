@@ -326,7 +326,7 @@ defmodule Caudata.UI.Components.Sidebar do
     end
 
     source_id = "#{server_id}/#{container_id}"
-    logs = Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, 1000)
+    logs = Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, 10000)
 
     stats =
       if Process.whereis(Caudata.LogStore) do

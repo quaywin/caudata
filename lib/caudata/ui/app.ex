@@ -104,7 +104,7 @@ defmodule Caudata.UI.App do
       settings_connection_focus_idx: 0,
       settings_connection_fields: %{},
       settings_global_focus_idx: 0,
-      settings_global_capacity: "1000",
+      settings_global_capacity: "10000",
       settings_ts_enabled: false,
       settings_ts_auth_key: "",
       settings_ts_hostname: "caudata",

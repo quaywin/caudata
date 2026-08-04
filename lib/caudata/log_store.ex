@@ -3,7 +3,7 @@ defmodule Caudata.LogStore do
   require Logger
   alias Caudata.LogSanitizer
 
-  @default_capacity 1000
+  @default_capacity 10000
 
   # Client API
 

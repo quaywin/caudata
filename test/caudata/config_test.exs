@@ -27,7 +27,7 @@ defmodule Caudata.ConfigTest do
     assert {:ok, config} = Caudata.Config.load()
     assert File.exists?(@temp_config_path)
 
-    assert Caudata.Config.global_capacity(config) == 1000
+    assert Caudata.Config.global_capacity(config) == 10000
     assert Caudata.Config.discover_ssh_config?(config) == true
 
     assert Caudata.Config.ssh_server_settings(config) == %{

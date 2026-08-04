@@ -68,7 +68,7 @@ defmodule Caudata.Config do
   # Helper functions to extract configuration values
 
   def global_capacity(config) do
-    get_in(config, ["global", "capacity"]) || 1000
+    get_in(config, ["global", "capacity"]) || 10000
   end
 
   def discover_ssh_config?(config) do
@@ -97,7 +97,7 @@ defmodule Caudata.Config do
     global_capacity =
       case :ets.lookup(tab, {:global, :capacity}) do
         [{_, val}] -> val
-        _ -> 1000
+        _ -> 10000
       end
 
     discover_ssh_config =
@@ -154,7 +154,7 @@ defmodule Caudata.Config do
   defp default_config_map do
     %{
       "global" => %{
-        "capacity" => 1000,
+        "capacity" => 10000,
         "discover_ssh_config" => true
       },
       "ssh_server" => %{

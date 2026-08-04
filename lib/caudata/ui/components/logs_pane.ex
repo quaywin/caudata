@@ -145,9 +145,13 @@ defmodule Caudata.UI.Components.LogsPane do
           {st, cnt, :bottom}
 
         val when is_integer(val) ->
+          total_wrapped_lines = ViewHelper.count_wrapped_lines(displayed_logs, wrap_width)
+          max_scroll = max(0, total_wrapped_lines - viewport_height)
+          target_line = min(max(0, val), max_scroll)
+
           find_slice_for_wrapped_line(
             displayed_logs,
-            val,
+            target_line,
             wrap_width,
             viewport_height,
             visible_buffer

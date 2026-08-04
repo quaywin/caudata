@@ -119,8 +119,10 @@ defmodule Caudata.UI.ViewHelper do
   def visual_line_count(line, width) when is_binary(line) do
     w = max(1, width)
     len = String.length(line)
-    div(max(0, len - 1), w) + 1
+    max(1, ceil(len / w))
   end
+
+  def visual_line_count(_other, _width), do: 1
 
 
 

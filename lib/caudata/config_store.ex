@@ -206,7 +206,7 @@ defmodule Caudata.ConfigStore do
   # Helpers
 
   defp initialize_defaults(t) do
-    :ets.insert(t, {{:global, :capacity}, 1000})
+    :ets.insert(t, {{:global, :capacity}, 10000})
     :ets.insert(t, {{:global, :discover_ssh_config}, true})
 
     :ets.insert(t, {{:ssh_server, :enabled}, false})

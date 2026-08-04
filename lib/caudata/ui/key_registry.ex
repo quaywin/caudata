@@ -528,9 +528,9 @@ defmodule Caudata.UI.KeyRegistry do
 
       capacity =
         if Process.whereis(Caudata.ConfigStore) do
-          Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :global, :capacity, 1000)
+          Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :global, :capacity, 10000)
         else
-          1000
+          10000
         end
 
       {%{

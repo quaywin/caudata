@@ -663,8 +663,8 @@ defmodule Caudata.UI.AppTest do
     event_k = %ExRatatui.Event.Key{code: "k", modifiers: []}
     assert {:noreply, updated_state} = App.handle_event(event_k, state)
 
-    # Assert that fetch limit increased by 100 (capped at 1000)
-    assert updated_state.logs_fetch_limit == 125
+    # Assert that fetch limit increased by 1000 (capped at 10000)
+    assert updated_state.logs_fetch_limit == 1025
     # Assert logs now contain all 35 lines from LogStore
     assert length(updated_state.logs) == 35
     # Assert loading_history is reset to false

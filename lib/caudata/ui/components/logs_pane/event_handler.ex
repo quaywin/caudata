@@ -29,23 +29,13 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
 
     case norm_key do
       # j/k or ↑/↓: move cursor line-by-line (extends selection if anchor != nil)
-      "j" ->
+      k when k in ["j", :down] ->
         anchor = model.visual_anchor
         new_cursor = min(model.visual_cursor + 1, last_idx)
         new_model = %{model | visual_cursor: new_cursor, visual_anchor: anchor}
         {auto_scroll_to_cursor(new_model, displayed_logs), []}
 
-      "k" ->
-        anchor = model.visual_anchor
-        move_cursor_up(model, displayed_logs, anchor)
-
-      :down ->
-        anchor = model.visual_anchor
-        new_cursor = min(model.visual_cursor + 1, last_idx)
-        new_model = %{model | visual_cursor: new_cursor, visual_anchor: anchor}
-        {auto_scroll_to_cursor(new_model, displayed_logs), []}
-
-      :up ->
+      k when k in ["k", :up] ->
         anchor = model.visual_anchor
         move_cursor_up(model, displayed_logs, anchor)
 
@@ -84,11 +74,8 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
     new_model = %{model | visual_cursor: new_cursor, visual_anchor: anchor}
     scrolled = auto_scroll_to_cursor(new_model, displayed_logs)
 
-    # Load more history when cursor is at top and scroll is at 0
     if new_cursor == 0 do
-      inner_width = ViewHelper.get_logs_inner_width(model)
-      wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
-      max_scroll = max(0, wrapped_lines_count - ViewHelper.get_logs_pane_height(model))
+      max_scroll = get_max_scroll(model, displayed_logs)
 
       current_scroll =
         case model.logs_scroll_y do
@@ -96,21 +83,9 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
           val -> val
         end
 
-      if current_scroll == 0 and max_scroll > 0 and model.logs_fetch_limit < 1000 and
-           not model.loading_history do
-        new_limit = min(model.logs_fetch_limit + 100, 1000)
-
-        load_model = %{
-          scrolled
-          | logs_fetch_limit: new_limit,
-            loading_history: true,
-            logs_len_before_history_load: length(model.logs)
-        }
-
-        {load_model, [{:command, {:load_history, new_limit}}]}
-      else
+      maybe_trigger_history_fetch(model, scrolled, current_scroll, max_scroll, fn ->
         {scrolled, []}
-      end
+      end)
     else
       {scrolled, []}
     end
@@ -173,9 +148,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
       ViewHelper.visual_line_count(Enum.at(displayed_logs, cursor_idx, ""), inner_width)
 
     cursor_wrapped_end = cursor_wrapped_start + cursor_line_count - 1
-
-    wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
-    max_scroll = max(0, wrapped_lines_count - logs_height)
+    max_scroll = get_max_scroll(model, displayed_logs)
 
     current_scroll =
       case model.logs_scroll_y do
@@ -214,12 +187,9 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
       end
 
     case norm_key do
-      "j" ->
+      k when k in ["j", :down] ->
         displayed_logs = ViewHelper.get_displayed_logs(model)
-        logs_height = ViewHelper.get_logs_pane_height(model)
-        inner_width = ViewHelper.get_logs_inner_width(model)
-        wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
-        max_scroll = max(0, wrapped_lines_count - logs_height)
+        max_scroll = get_max_scroll(model, displayed_logs)
 
         case model.logs_scroll_y do
           :bottom ->
@@ -231,42 +201,33 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
             {%{model | logs_scroll_y: new_scroll}, []}
         end
 
-      "k" ->
+      k when k in ["k", :up] ->
         if model.selected_profile_id do
           displayed_logs = ViewHelper.get_displayed_logs(model)
-          logs_height = ViewHelper.get_logs_pane_height(model)
-          inner_width = ViewHelper.get_logs_inner_width(model)
-          current_visual_len = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
-          max_scroll = max(0, current_visual_len - logs_height)
+          max_scroll = get_max_scroll(model, displayed_logs)
 
           effective_scroll =
             case model.logs_scroll_y do
               :bottom -> max_scroll
-              val when is_integer(val) -> val
+              val when is_integer(val) -> min(val, max_scroll)
             end
 
-          if effective_scroll == 0 and max_scroll > 0 and model.logs_fetch_limit < 1000 and
-               not model.loading_history do
-            new_limit = min(model.logs_fetch_limit + 100, 1000)
+          maybe_trigger_history_fetch(
+            model,
+            %{model | logs_scroll_y: effective_scroll},
+            effective_scroll,
+            max_scroll,
+            fn ->
+              new_scroll = max(0, effective_scroll - scroll_step)
 
-            new_model = %{
-              model
-              | logs_fetch_limit: new_limit,
-                loading_history: true,
-                logs_len_before_history_load: length(model.logs)
-            }
+              final_scroll =
+                if model.logs_scroll_y == :bottom and new_scroll == max_scroll,
+                  do: :bottom,
+                  else: new_scroll
 
-            {new_model, [{:command, {:load_history, new_limit}}]}
-          else
-            new_scroll = max(0, effective_scroll - scroll_step)
-
-            final_scroll =
-              if model.logs_scroll_y == :bottom and new_scroll == max_scroll,
-                do: :bottom,
-                else: new_scroll
-
-            {%{model | logs_scroll_y: final_scroll}, []}
-          end
+              {%{model | logs_scroll_y: final_scroll}, []}
+            end
+          )
         else
           {model, []}
         end
@@ -282,9 +243,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
       k when k in [:page_up, :pageup] ->
         displayed_logs = ViewHelper.get_displayed_logs(model)
         logs_height = ViewHelper.get_logs_pane_height(model)
-        inner_width = ViewHelper.get_logs_inner_width(model)
-        wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
-        max_scroll = max(0, wrapped_lines_count - logs_height)
+        max_scroll = get_max_scroll(model, displayed_logs)
 
         case model.logs_scroll_y do
           :bottom ->
@@ -299,9 +258,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
       k when k in [:page_down, :pagedown] ->
         displayed_logs = ViewHelper.get_displayed_logs(model)
         logs_height = ViewHelper.get_logs_pane_height(model)
-        inner_width = ViewHelper.get_logs_inner_width(model)
-        wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
-        max_scroll = max(0, wrapped_lines_count - logs_height)
+        max_scroll = get_max_scroll(model, displayed_logs)
 
         case model.logs_scroll_y do
           :bottom ->
@@ -330,9 +287,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
         if has_real_logs? do
           last_idx = max(0, length(displayed_logs) - 1)
           inner_width = ViewHelper.get_logs_inner_width(model)
-          logs_height = ViewHelper.get_logs_pane_height(model)
-          wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
-          max_scroll = max(0, wrapped_lines_count - logs_height)
+          max_scroll = get_max_scroll(model, displayed_logs)
 
           cursor_idx =
             case model.logs_scroll_y do
@@ -436,6 +391,31 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────
+
+  defp get_max_scroll(model, displayed_logs) do
+    inner_width = ViewHelper.get_logs_inner_width(model)
+    logs_height = ViewHelper.get_logs_pane_height(model)
+    wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
+    max(0, wrapped_lines_count - logs_height)
+  end
+
+  defp maybe_trigger_history_fetch(model, return_model, current_scroll, max_scroll, fallback_fn) do
+    if current_scroll == 0 and max_scroll > 0 and model.logs_fetch_limit < 10000 and
+         not model.loading_history do
+      new_limit = min(model.logs_fetch_limit + 1000, 10000)
+
+      load_model = %{
+        return_model
+        | logs_fetch_limit: new_limit,
+          loading_history: true,
+          logs_len_before_history_load: length(model.logs)
+      }
+
+      {load_model, [{:command, {:load_history, new_limit}}]}
+    else
+      fallback_fn.()
+    end
+  end
 
   def get_raw_index_at_scroll(displayed_logs, scroll_y, inner_width) do
     displayed_logs

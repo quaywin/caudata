@@ -16,7 +16,7 @@ defmodule Caudata.UI.Components.SettingsModal.GeneralTab do
     label_color = if active_idx == 0, do: :cyan, else: :white
     value_color = if active_idx == 0, do: :green, else: :white
 
-    value = state.settings_global_capacity || "1000"
+    value = state.settings_global_capacity || "10000"
     display_value = if active_idx == 0, do: value <> "█", else: value
 
     form_lines = [

@@ -24,7 +24,9 @@ defmodule Caudata.UI.Components.LogsPaneTest do
       containers: %{},
       show_timestamps: false,
       filter_regex: "",
-      filter_error: false
+      filter_error: false,
+      width: 80,
+      height: 24
     }
 
     {:ok, state: state, profile: profile}
@@ -84,6 +86,53 @@ defmodule Caudata.UI.Components.LogsPaneTest do
       {active_block, _} = LogsPane.render(active_state, area)
       assert active_block.title == " [2]Logs: test-server "
       assert active_block.border_style == %Style{fg: :cyan}
+    end
+
+    test "clamps scroll_y to max_scroll when scrolling up so frame does not jump up leaving blank lines", %{state: state} do
+      area = %Rect{x: 0, y: 0, width: 80, height: 24}
+      logs = Enum.map(1..50, fn i -> %{timestamp: nil, stream: :stdout, message: "Log line #{i}"} end)
+
+      # 1. State at :bottom
+      bottom_state = %{state | width: 80, height: 24, active_panel: :logs, logs: logs, logs_scroll_y: :bottom, selected_container_id: "c1"}
+      {_, [{logs_widget, _}]} = LogsPane.render(bottom_state, area)
+      assert logs_widget.scroll == {10, 0}
+
+      # 2. State when scrolling up with an integer scroll_y value
+      # Press 'k' from :bottom
+      {scrolled_state, _} = LogsPane.handle_key(:char, %{key: :char, char: "k"}, bottom_state)
+      assert is_integer(scrolled_state.logs_scroll_y)
+
+      {_, [{scrolled_widget, _}]} = LogsPane.render(scrolled_state, area)
+      # Should render smoothly with paragraph scroll matching valid index
+      assert scrolled_widget.scroll == {0, 0}
+
+      # 3. State with an out-of-bounds large scroll_y integer
+      oob_state = %{state | width: 80, height: 24, active_panel: :logs, logs: logs, logs_scroll_y: 999, selected_container_id: "c1"}
+      {_, [{oob_widget, _}]} = LogsPane.render(oob_state, area)
+      # Target line gets clamped so it doesn't overshoot
+      assert oob_widget.scroll == {0, 0}
+    end
+
+    test "handles scaling / resizing of log pane area without empty space or error", %{state: state} do
+      logs = Enum.map(1..50, fn i -> %{timestamp: nil, stream: :stdout, message: "Log line #{i}"} end)
+      initial_state = %{state | width: 80, height: 24, active_panel: :logs, logs: logs, logs_scroll_y: 28, selected_container_id: "c1"}
+
+      # Small window (height: 15)
+      small_area = %Rect{x: 0, y: 0, width: 80, height: 15}
+      {_, [{small_widget, _}]} = LogsPane.render(initial_state, small_area)
+
+      # Large window (height: 50) - max_scroll is now 50 - 46 = 4
+      large_area = %Rect{x: 0, y: 0, width: 80, height: 50}
+      {_, [{large_widget, _}]} = LogsPane.render(initial_state, large_area)
+
+      # Fullscreen mode
+      fullscreen_state = %{initial_state | logs_full_screen: true}
+      fs_area = %Rect{x: 0, y: 0, width: 120, height: 40}
+      {_, [{fs_widget, _}]} = LogsPane.render(fullscreen_state, fs_area)
+
+      assert is_tuple(small_widget.scroll)
+      assert is_tuple(large_widget.scroll)
+      assert is_tuple(fs_widget.scroll)
     end
   end
 end

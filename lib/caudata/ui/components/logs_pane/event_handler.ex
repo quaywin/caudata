@@ -47,7 +47,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
           {%{model | visual_anchor: nil}, []}
         end
 
-      "y" ->
+      k when k in ["y", "Y"] ->
         copy_selected_logs(model, displayed_logs)
 
       "o" ->
@@ -66,6 +66,25 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
 
       _ ->
         {model, []}
+    end
+  end
+
+  def copy_selected_logs(model, displayed_logs) do
+    case ViewHelper.get_selection_range(model) do
+      nil ->
+        case Enum.at(displayed_logs, model.visual_cursor) do
+          nil ->
+            {model, []}
+
+          entry ->
+            text = extract_log_text(entry)
+            copy_text_to_clipboard(text, 1, model)
+        end
+
+      range ->
+        selected_logs = Enum.slice(displayed_logs, range)
+        text = selected_logs |> Enum.map(&extract_log_text/1) |> Enum.join("\n")
+        copy_text_to_clipboard(text, Enum.count(range), model)
     end
   end
 
@@ -91,25 +110,6 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
     end
   end
 
-  defp copy_selected_logs(model, displayed_logs) do
-    case ViewHelper.get_selection_range(model) do
-      nil ->
-        case Enum.at(displayed_logs, model.visual_cursor) do
-          nil ->
-            {model, []}
-
-          entry ->
-            text = extract_log_text(entry)
-            copy_text_to_clipboard(text, 1, model)
-        end
-
-      range ->
-        selected_logs = Enum.slice(displayed_logs, range)
-        text = selected_logs |> Enum.map(&extract_log_text/1) |> Enum.join("\n")
-        copy_text_to_clipboard(text, Enum.count(range), model)
-    end
-  end
-
   defp copy_text_to_clipboard(text, count, model) do
     notification_msg =
       case ViewHelper.copy_to_clipboard(text) do
@@ -119,10 +119,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
 
     {%{
        model
-       | notification: {notification_msg, 25},
-         mode: :browsing,
-         visual_anchor: nil,
-         visual_cursor: nil
+       | notification: {notification_msg, 25}
      }, []}
   end
 

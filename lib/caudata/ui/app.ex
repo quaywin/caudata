@@ -223,6 +223,11 @@ defmodule Caudata.UI.App do
     |> process_key_event_result(state)
   end
 
+  def handle_event(%ExRatatui.Event.Mouse{} = mouse, state) do
+    Caudata.UI.Components.LogsPane.MouseHandler.handle_mouse(mouse, state)
+    |> process_key_event_result(state)
+  end
+
   def handle_event(_event, state) do
     {:noreply, state}
   end

@@ -92,13 +92,13 @@ defmodule Caudata.Application do
           children ++ [Caudata.Web.Endpoint]
 
         @env != :prod and start_tui?(mode) ->
-          children ++ [Caudata.Web.Endpoint, {Caudata.UI.App, [terminal: true]}]
+          children ++ [Caudata.Web.Endpoint, {Caudata.UI.App, [terminal: true, mouse_capture: true]}]
 
         @env != :prod ->
           children ++ [Caudata.Web.Endpoint]
 
         start_tui?(mode) ->
-          children ++ [{Caudata.UI.App, [terminal: true]}]
+          children ++ [{Caudata.UI.App, [terminal: true, mouse_capture: true]}]
 
         true ->
           children

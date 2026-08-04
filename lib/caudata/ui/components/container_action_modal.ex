@@ -303,7 +303,7 @@ defmodule Caudata.UI.Components.ContainerActionModal do
     end
   end
 
-  defp execute_action(idx, actions, model) do
+  def execute_action(idx, actions, model) do
     case Enum.at(actions, idx) do
       {_label, action} when action in [:kill, :remove] ->
         new_model =

@@ -10,6 +10,8 @@ defmodule Caudata.UI.Components.ContainerActionModal do
   alias ExRatatui.Widgets.Paragraph
   alias ExRatatui.Widgets.Popup
 
+  alias Caudata.UI.ViewHelper
+
   @all_actions [
     {"🟢  Start Container", :start},
     {"🔴  Stop Container", :stop},
@@ -56,19 +58,7 @@ defmodule Caudata.UI.Components.ContainerActionModal do
   end
 
   def get_selected_container(state) do
-    profiles = Map.get(state, :profiles, [])
-    selected_profile_id = Map.get(state, :selected_profile_id)
-    selected_profile = Enum.find(profiles, &(&1.id == selected_profile_id))
-
-    if selected_profile do
-      containers = Map.get(Map.get(state, :containers, %{}), selected_profile.id, [])
-      selected_container_id = Map.get(state, :selected_container_id)
-
-      Enum.find(
-        containers,
-        &(to_string(&1.id) == to_string(selected_container_id))
-      )
-    end
+    ViewHelper.get_selected_container(state)
   end
 
   def render(state) do

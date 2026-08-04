@@ -122,21 +122,7 @@ defmodule Caudata.UI.ViewHelper do
     div(max(0, len - 1), w) + 1
   end
 
-  @doc """
-  Pre-wraps a single string line into multiple lines of a given maximum width.
-  """
-  def wrap_text(line, width) do
-    w = max(1, width)
-    do_wrap_text(line, w, [])
-  end
 
-  defp do_wrap_text("", _width, []), do: [""]
-  defp do_wrap_text("", _width, acc), do: Enum.reverse(acc)
-
-  defp do_wrap_text(line, width, acc) do
-    {chunk, rest} = String.split_at(line, width)
-    do_wrap_text(rest, width, [chunk | acc])
-  end
 
   @doc """
   Pre-wraps a list of structured spans into multiple lines of spans of a given maximum width.
@@ -363,20 +349,30 @@ defmodule Caudata.UI.ViewHelper do
   end
 
   @doc """
-  Calculates the scroll adjustment when the logs snapshot shifts.
-  Computes how many wrapped lines of `old_logs` were dropped from the beginning
-  in `new_logs`.
+  Gets the currently selected container struct based on profile and container IDs in model state.
   """
-  def calculate_scroll_shift(old_logs, new_logs, inner_width) do
-    case find_overlap_index(old_logs, new_logs) do
-      nil ->
-        0
+  def get_selected_container(state) do
+    profiles = Map.get(state, :profiles, [])
+    selected_profile_id = Map.get(state, :selected_profile_id)
+    selected_profile = Enum.find(profiles, &(&1.id == selected_profile_id))
 
-      idx ->
-        old_logs
-        |> Enum.take(idx)
-        |> count_wrapped_lines(inner_width)
+    if selected_profile do
+      containers = Map.get(Map.get(state, :containers, %{}), selected_profile.id, [])
+      selected_container_id = Map.get(state, :selected_container_id)
+
+      Enum.find(
+        containers,
+        &(to_string(&1.id) == to_string(selected_container_id))
+      )
     end
+  end
+
+  @doc """
+  Checks if the currently selected container is a Docker container.
+  """
+  def selected_container_is_docker?(state) do
+    container = get_selected_container(state)
+    container != nil and docker_container?(container)
   end
 
   @doc """

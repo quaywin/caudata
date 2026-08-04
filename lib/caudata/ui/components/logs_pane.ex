@@ -102,13 +102,64 @@ defmodule Caudata.UI.Components.LogsPane do
     inner_width = inner_area.width
     displayed_logs = ViewHelper.get_displayed_logs(state)
 
+    # Determine layout rects and available viewport height
+    {logs_content_rect, extra_widgets} =
+      if state.mode == :searching or state.filter_regex != "" do
+        [content_rect, logs_filter_divider_rect, logs_filter_rect] =
+          Layout.split(inner_area, :vertical, [
+            {:min, 0},
+            {:length, 1},
+            {:length, 1}
+          ])
+
+        filter_widget = render_filter_widget(state)
+
+        divider_widget = %Paragraph{
+          text: String.duplicate("─", logs_filter_divider_rect.width),
+          style: %Style{fg: :dark_gray}
+        }
+
+        {content_rect,
+         [
+           {divider_widget, logs_filter_divider_rect},
+           {filter_widget, logs_filter_rect}
+         ]}
+      else
+        {inner_area, []}
+      end
+
+    viewport_height = max(1, logs_content_rect.height)
+    total_count = length(displayed_logs)
+
     prefix_width = if Map.get(state, :show_timestamps, false), do: 22, else: 2
     wrap_width = max(1, inner_width - prefix_width)
 
-    # Build wrapped lines with raw-log-index tracking
+    # Calculate Virtual Windowing slice parameters using exact wrapped line mapping
+    visible_buffer = 10
+
+    {start_idx, take_count, paragraph_scroll_y} =
+      case state.logs_scroll_y do
+        :bottom ->
+          cnt = viewport_height + visible_buffer
+          st = max(0, total_count - cnt)
+          {st, cnt, :bottom}
+
+        val when is_integer(val) ->
+          find_slice_for_wrapped_line(
+            displayed_logs,
+            val,
+            wrap_width,
+            viewport_height,
+            visible_buffer
+          )
+      end
+
+    visible_logs = Enum.slice(displayed_logs, start_idx, take_count)
+
+    # Build wrapped lines for ONLY the visible window slice with raw-log-index tracking
     wrapped_with_indices =
-      displayed_logs
-      |> Enum.with_index()
+      visible_logs
+      |> Enum.with_index(start_idx)
       |> Enum.flat_map(fn {%{timestamp: ts, stream: stream, message: line}, idx} ->
         {spans, is_err_level} = LogFormatter.format_line_with_meta(line)
         is_error = stream == :stderr or is_err_level
@@ -155,50 +206,20 @@ defmodule Caudata.UI.Components.LogsPane do
       border_style: %Style{fg: border_color}
     }
 
-    content =
-      if state.mode == :searching or state.filter_regex != "" do
-        [logs_content_rect, logs_filter_divider_rect, logs_filter_rect] =
-          Layout.split(inner_area, :vertical, [
-            {:min, 0},
-            {:length, 1},
-            {:length, 1}
-          ])
+    wrapped_lines_count = length(wrapped_with_indices)
 
-        filter_widget = render_filter_widget(state)
-
-        divider_widget = %Paragraph{
-          text: String.duplicate("─", logs_filter_divider_rect.width),
-          style: %Style{fg: :dark_gray}
-        }
-
-        wrapped_lines_count = length(wrapped_with_indices)
-        max_scroll = max(0, wrapped_lines_count - logs_content_rect.height)
-
-        scroll_y = get_scroll_y(state.logs_scroll_y, max_scroll)
-
-        logs_widget = %Paragraph{
-          text: log_lines,
-          scroll: {scroll_y, 0}
-        }
-
-        [
-          {logs_widget, logs_content_rect},
-          {divider_widget, logs_filter_divider_rect},
-          {filter_widget, logs_filter_rect}
-        ]
-      else
-        wrapped_lines_count = length(wrapped_with_indices)
-        max_scroll = max(0, wrapped_lines_count - inner_area.height)
-
-        scroll_y = get_scroll_y(state.logs_scroll_y, max_scroll)
-
-        logs_widget = %Paragraph{
-          text: log_lines,
-          scroll: {scroll_y, 0}
-        }
-
-        [{logs_widget, inner_area}]
+    scroll_y =
+      case paragraph_scroll_y do
+        :bottom -> max(0, wrapped_lines_count - viewport_height)
+        val when is_integer(val) -> min(val, max(0, wrapped_lines_count - 1))
       end
+
+    logs_widget = %Paragraph{
+      text: log_lines,
+      scroll: {scroll_y, 0}
+    }
+
+    content = [{logs_widget, logs_content_rect} | extra_widgets]
 
     {outer, content}
   end
@@ -300,8 +321,6 @@ defmodule Caudata.UI.Components.LogsPane do
     end
   end
 
-  defp get_scroll_y(:bottom, max_scroll), do: max_scroll
-  defp get_scroll_y(val, max_scroll) when is_integer(val), do: min(val, max_scroll)
 
   defp format_docker_timestamp(ts) when is_binary(ts) do
     ts
@@ -310,4 +329,35 @@ defmodule Caudata.UI.Components.LogsPane do
   end
 
   defp format_docker_timestamp(_), do: String.duplicate(" ", 19)
+
+  defp find_slice_for_wrapped_line(
+         displayed_logs,
+         target_line,
+         wrap_width,
+         viewport_height,
+         visible_buffer
+       ) do
+    total_count = length(displayed_logs)
+
+    {start_idx, line_offset} =
+      displayed_logs
+      |> Enum.reduce_while({0, 0}, fn item, {idx, accum_lines} ->
+        item_lines = ViewHelper.visual_line_count(item, wrap_width)
+
+        if accum_lines + item_lines > target_line do
+          offset = max(0, target_line - accum_lines)
+          {:halt, {idx, offset}}
+        else
+          {:cont, {idx + 1, accum_lines + item_lines}}
+        end
+      end)
+      |> case do
+        {:cont, {final_idx, _}} -> {max(0, final_idx - 1), 0}
+        res -> res
+      end
+
+    start_idx = min(start_idx, max(0, total_count - 1))
+    take_count = viewport_height + visible_buffer
+    {start_idx, take_count, line_offset}
+  end
 end

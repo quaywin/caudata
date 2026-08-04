@@ -18,6 +18,9 @@
 ## Tune async thread pool for CLI/TUI application
 +A 8
 
+## Limit BEAM Schedulers to 2 for minimal RAM footprint (~18MB-25MB) without performance loss
++S 2:2
+
 ## Disable epmd since Caudata is a standalone binary
 -start_epmd false
 

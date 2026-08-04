@@ -80,7 +80,7 @@ defmodule Caudata.MixProject do
       caudata: [
         include_executables_for: [:unix],
         strip_beams: true,
-        exclude_apps: [:wx, :observer, :debugger, :et, :reltool, :megaco],
+        exclude_apps: [:wx, :observer, :debugger, :et, :reltool, :megaco, :eunit, :sasl, :mnesia],
         steps: [:assemble, &Burrito.wrap/1],
         burrito: [
           targets: targets,

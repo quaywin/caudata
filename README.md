@@ -7,7 +7,7 @@ Caudata is a collaborative, zero-config multi-server log streamer, real-time met
 
 ⭐ If you like this project, star it on GitHub — it helps a lot!
 
-[Features](#features) • [Performance & Benchmarks](#performance--benchmarks) • [Installation](#installation) • [Quick Start](#quick-start) • [CLI Options](#cli-options) • [Keybindings](#keybindings) • [Configuration](#configuration) • [Alternatives](#alternatives)
+[Features](#features) • [Performance & Benchmarks](#performance--benchmarks) • [Installation](#installation) • [Quick Start](#quick-start) • [CLI Options](#cli-options) • [Keybindings & Mouse Controls](#keybindings--mouse-controls) • [Configuration](#configuration) • [Alternatives](#alternatives)
 
 ---
 
@@ -15,22 +15,19 @@ Caudata is a collaborative, zero-config multi-server log streamer, real-time met
 
 Tired of SSH-ing into 5 different servers just to tail Docker logs? Caudata brings them all (and your local setup) into a single, responsive terminal dashboard.
 
-## Features
-
-- **Zero-Agent SSH**: Connects seamlessly using your existing `~/.ssh/config` or custom server configurations. Supports both private keys and password authentication securely. No remote agents or daemons are required on target servers.
-- **Local Machine Monitoring**: Monitor containers and services on your local machine using direct port communication (bypassing SSH).
-- **Container Auto-Discovery**: Auto-discovers running Docker containers. Automatically reconnects active log streams when a container is rebuilt or restarted.
-- **Docker Container Management**: Control Docker containers directly from the TUI — Start, Stop, Restart, Force Kill, Inspect, and Remove — with confirmation prompts for destructive actions.
-- **System Services Support**: Stream logs from system daemon services running under **Systemd** (Linux) or **Launchd** (macOS).
-- **Custom Log Paths**: Add and stream specific custom log paths from remote machines.
-- **Real-time Server & Container Metrics**: Live panels showing CPU, RAM, and disk usage of remote servers, alongside granular status, image, and resource usage for selected containers.
-- **⚡ Rust NIF Accelerated Log Engine**: Powered by [ex_log_formatter](https://github.com/quaywin/ex_log_formatter) via Rustler. Delivers **117,000 – 514,000 lines/sec** log parsing, zero-allocation ANSI code stripping (`strip-ansi-escapes`), and high-speed JSON/Logfmt/Text sub-element highlighting.
-- **⏱️ Zero-Latency ETS Direct Read**: Log snapshots are stored in public ETS tables (`:caudata_log_buffers`) for zero-latency, non-blocking caller-process reads, bypassing GenServer mailbox queuing.
-- **Visual Select & Clipboard Copy**: Press `v` to select lines of logs, and copy them via `y` to the system clipboard.
-- **Development Web View**: Render the exact same Terminal UI inside your web browser using Phoenix LiveView for remote access, easy styling, or debugging.
-- **Tailscale VPN Integration**: Connect securely to Tailscale hosts without requiring an active system-wide Tailscale daemon.
-- **Single-Binary Packaging**: Self-contained executable (**14.1 MB**, **~62.88 MB Production RAM**) built with Burrito with no Elixir, Erlang, or external runtimes required on your target machine.
-- **Self-Upgrades**: Stay up to date with a single command (`caudata upgrade`).
+- **Zero-Agent SSH**: Connects seamlessly via `~/.ssh/config` or manual settings. No remote agents or daemons required.
+- **Local Machine Monitoring**: Monitor local containers and system services via direct connection.
+- **Container Auto-Discovery**: Auto-discovers Docker containers and reconnects log streams on container rebuilds/restarts.
+- **Docker Management**: Control containers directly — Start, Stop, Restart, Kill, Inspect, and Remove.
+- **System Services & Custom Logs**: Stream Systemd (Linux), Launchd (macOS), or custom file paths.
+- **Real-time Metrics**: Live CPU, RAM, and disk monitoring for hosts and granular stats for containers.
+- **⚡ Rust NIF Accelerated Engine**: High-performance log parsing (117k–514k lines/s) and sub-element highlighting powered by Rustler.
+- **⏱️ Zero-Latency ETS Direct Read**: ETS-backed log buffers for non-blocking snapshot reads.
+- **🖱️ Mouse & Visual Controls**: SGR mouse support for scroll wheeling, drag-to-copy, sidebar clicking, footer action bar, and modal backdrop closing.
+- **Development Web View**: Render the exact TUI inside a web browser via Phoenix LiveView.
+- **Tailscale VPN Integration**: Connect to Tailscale hosts without a system daemon.
+- **Single-Binary Packaging**: Self-contained Burrito executable (~14 MB binary, ~25 MB RAM).
+- **Self-Upgrades**: Stay up to date with `caudata upgrade`.
 
 ---
 
@@ -48,7 +45,7 @@ Caudata is engineered for ultra-low memory footprint and high 60 FPS TUI scrolli
 | **LogFormatter (Text SubHighlight)**| 18,590 lines/s | **49,050 lines/s** | 🚀 **2.6x Faster** | ⬇️ **4.12 KB (-68.3% RAM)** |
 | **LogStore.get_snapshot** | 1,050 ops/s (952 μs latency) | **5,150 ops/s (121 μs latency)** | 🚀 **4.9x Faster** | 0.71 KB |
 | **ViewHelper.get_displayed_logs**| 7,434.52 KB / filter | **4.59 KB / filter** | 💣 **1,620x RAM Reduction (-99.94%)** | **4.59 KB** |
-| **Production Binary Idle RAM** | ~90 MB - 120 MB | **`62.88 MB`** | 🧠 **30% - 50% Idle RAM reduction** | **62.88 MB** |
+| **Production Binary RAM Footprint** | ~90 MB - 120 MB | **`56.18 MB` (Active)** / **`25.00 MB` (Tuned `+S 2:2`)** | 🧠 **50% - 75% RAM reduction** | **~25 MB - 56 MB** |
 
 ---
 
@@ -134,9 +131,19 @@ caudata upgrade
 
 ---
 
-## Keybindings
+## Keybindings & Mouse Controls
 
 > Press `?` inside the TUI to open the full interactive keybinding reference.
+
+### 🖱️ Mouse Controls
+
+| Gesture | Location | Action |
+| :--- | :--- | :--- |
+| **Scroll Wheel** | Logs Pane | Scroll log stream (auto-fetches history at top) |
+| **Drag & Select** | Logs Pane | Highlight log range & auto-copy to OS clipboard on release |
+| **Left Click** | Sidebar | Select server/container & start stream |
+| **Left Click** | Footer Bar | Trigger action shortcut (`[a] Add`, `[s] Settings`, `[?] Help`, etc.) |
+| **Left Click** | Modals | Switch tabs, pick actions, or click backdrop to close (`Esc`) |
 
 ### Global
 

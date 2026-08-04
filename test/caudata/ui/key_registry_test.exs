@@ -11,7 +11,8 @@ defmodule Caudata.UI.KeyRegistryTest do
           host_name: "1.2.3.4",
           user: "root",
           port: 22,
-          enabled: true
+          enabled: true,
+          disabled_containers: []
         }
       ],
       selected_profile_id: "server-1",
@@ -94,7 +95,7 @@ defmodule Caudata.UI.KeyRegistryTest do
     test "returns shortcuts list for normal mode", %{model: model} do
       shortcuts = KeyRegistry.get_shortcuts(model)
       assert is_list(shortcuts)
-      assert Enum.any?(shortcuts, fn s -> s.key == "[q/Ctrl+C]" end)
+      assert Enum.any?(shortcuts, fn s -> s.key == "[q]" end)
       assert Enum.any?(shortcuts, fn s -> s.key == "[a]" end)
     end
 
@@ -141,6 +142,65 @@ defmodule Caudata.UI.KeyRegistryTest do
       {new_model, _cmds} = KeyRegistry.dispatch_key(key_data, searching_model)
       assert new_model.mode == :browsing
       assert new_model.filter_regex == ""
+    end
+
+    test "cycles panels 1 -> 2 -> 3 -> 1 on Tab", %{model: model} do
+      tab_key = %{key: :tab, modifiers: []}
+
+      # Start at Panel 1 (servers)
+      assert KeyRegistry.current_panel_number(model) == 1
+
+      # Tab -> Panel 2 (containers)
+      {m2, _} = KeyRegistry.dispatch_key(tab_key, model)
+      assert KeyRegistry.current_panel_number(m2) == 2
+
+      # Tab -> Panel 3 (logs)
+      {m3, _} = KeyRegistry.dispatch_key(tab_key, m2)
+      assert KeyRegistry.current_panel_number(m3) == 3
+
+      # Tab -> Panel 1 (servers)
+      {m1_again, _} = KeyRegistry.dispatch_key(tab_key, m3)
+      assert KeyRegistry.current_panel_number(m1_again) == 1
+    end
+
+    test "jumps directly to panel using 1, 2, 3 keys", %{model: model} do
+      key1 = %{key: :char, char: "1", modifiers: []}
+      key2 = %{key: :char, char: "2", modifiers: []}
+      key3 = %{key: :char, char: "3", modifiers: []}
+
+      {m3, _} = KeyRegistry.dispatch_key(key3, model)
+      assert KeyRegistry.current_panel_number(m3) == 3
+
+      {m1, _} = KeyRegistry.dispatch_key(key1, m3)
+      assert KeyRegistry.current_panel_number(m1) == 1
+
+      {m2, _} = KeyRegistry.dispatch_key(key2, m1)
+      assert KeyRegistry.current_panel_number(m2) == 2
+    end
+
+    test "navigates right (1 -> 2 -> 3 -> 1) and left (3 -> 2 -> 1 -> 3) using arrows / vim keys", %{model: model} do
+      right_key = %{key: :right, modifiers: []}
+      left_key = %{key: :left, modifiers: []}
+
+      # Right: 1 -> 2 -> 3 -> 1
+      {m2, _} = KeyRegistry.dispatch_key(right_key, model)
+      assert KeyRegistry.current_panel_number(m2) == 2
+
+      {m3, _} = KeyRegistry.dispatch_key(right_key, m2)
+      assert KeyRegistry.current_panel_number(m3) == 3
+
+      {m1, _} = KeyRegistry.dispatch_key(right_key, m3)
+      assert KeyRegistry.current_panel_number(m1) == 1
+
+      # Left: 1 -> 3 -> 2 -> 1
+      {m3_left, _} = KeyRegistry.dispatch_key(left_key, m1)
+      assert KeyRegistry.current_panel_number(m3_left) == 3
+
+      {m2_left, _} = KeyRegistry.dispatch_key(left_key, m3_left)
+      assert KeyRegistry.current_panel_number(m2_left) == 2
+
+      {m1_left, _} = KeyRegistry.dispatch_key(left_key, m2_left)
+      assert KeyRegistry.current_panel_number(m1_left) == 1
     end
   end
 end

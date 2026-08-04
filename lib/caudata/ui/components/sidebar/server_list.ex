@@ -68,10 +68,10 @@ defmodule Caudata.UI.Components.Sidebar.ServerList do
     active_panel = Map.get(state, :active_panel, :sidebar)
 
     border_color =
-      cond do
-        active_panel == :sidebar and focus == :servers -> :cyan
-        active_panel == :sidebar -> :white
-        true -> :dark_gray
+      if active_panel == :sidebar and focus == :servers do
+        :cyan
+      else
+        :dark_gray
       end
 
     selected_idx = Enum.find_index(state.profiles, &(&1.id == state.selected_profile_id))
@@ -96,6 +96,20 @@ defmodule Caudata.UI.Components.Sidebar.ServerList do
       }
     }
 
-    {widget, box_area}
+    if n > inner_height do
+      max_scroll = max(1, n - inner_height)
+
+      scrollbar_widget = %ExRatatui.Widgets.Scrollbar{
+        orientation: :vertical_right,
+        content_length: max_scroll,
+        position: min(scroll_y, max_scroll),
+        thumb_style: %Style{fg: :cyan},
+        track_style: %Style{fg: :dark_gray}
+      }
+
+      [{widget, box_area}, {scrollbar_widget, box_area}]
+    else
+      {widget, box_area}
+    end
   end
 end

@@ -62,15 +62,15 @@ defmodule Caudata.UI.Components.SidebarTest do
     # Select the 6th profile (index 5)
     state = %{state | profiles: profiles, selected_profile_id: "server-6"}
 
-    # Box area height is 5, inner height is 5 - 2 = 3.
+    # Box area height is 6, inner height is 6 - 2 = 4.
     # Selected index is 5.
-    # div(3, 2) = 1.
-    # Expected scroll = max(0, min(5 - 1, 10 - 3)) = 4.
+    # div(4, 2) = 2.
+    # Expected scroll = max(0, min(5 - 2, 10 - 4)) = 3.
     sidebar_area = %Rect{x: 0, y: 0, width: 38, height: 10}
 
     widgets = Sidebar.render(state, sidebar_area)
-    assert [{server_widget, _}, _] = widgets
-    assert server_widget.scroll == {4, 0}
+    assert [{server_widget, _} | _] = widgets
+    assert server_widget.scroll == {3, 0}
   end
 
   test "container list scrolls when active container index exceeds inner height", %{state: state} do
@@ -105,7 +105,7 @@ defmodule Caudata.UI.Components.SidebarTest do
     sidebar_area = %Rect{x: 0, y: 0, width: 38, height: 10}
 
     widgets = Sidebar.render(state, sidebar_area)
-    assert [_, {container_widget, _}] = widgets
+    {container_widget, _} = Enum.find(widgets, fn {%ExRatatui.Widgets.Paragraph{block: block}, _} -> String.contains?(to_string(block.title), "Containers") end)
     assert container_widget.scroll == {4, 0}
   end
 
@@ -118,10 +118,10 @@ defmodule Caudata.UI.Components.SidebarTest do
     assert widget1.block.border_style.fg == :cyan
     assert widget1.block.title == " [1] Servers [ACTIVE] "
 
-    # active_panel: :sidebar, focus: :containers -> white border, non-[ACTIVE] title
+    # active_panel: :sidebar, focus: :containers -> dark_gray border, non-[ACTIVE] title
     state2 = Map.merge(state, %{active_panel: :sidebar, sidebar_focus: :containers})
     {widget2, _} = Caudata.UI.Components.Sidebar.ServerList.render(state2, box_area)
-    assert widget2.block.border_style.fg == :white
+    assert widget2.block.border_style.fg == :dark_gray
     assert widget2.block.title == " [1] Servers "
 
     # active_panel: :main -> dark_gray border, non-[ACTIVE] title

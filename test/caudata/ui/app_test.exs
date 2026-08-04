@@ -1075,7 +1075,7 @@ defmodule Caudata.UI.AppTest do
     {_outer_block, content} = LogsPane.render(state, area)
 
     # Content should be a list of tuples like {paragraph, inner_rect}
-    assert [{paragraph, _}] = content
+    assert [{paragraph, _} | _] = content
     assert is_list(paragraph.text)
 
     # We should have 7 formatted Lines in the paragraph text
@@ -1187,7 +1187,7 @@ defmodule Caudata.UI.AppTest do
     area = %Rect{x: 0, y: 0, width: 80, height: 20}
     {_outer_block, content} = LogsPane.render(state, area)
 
-    assert [{paragraph, _}] = content
+    assert [{paragraph, _} | _] = content
     assert is_list(paragraph.text)
     assert length(paragraph.text) == 4
 

@@ -80,13 +80,13 @@ defmodule Caudata.UI.KeyRegistry do
     case context do
       :help ->
         [
-          shortcut("[j/k/⇅]", "Scroll ", :cyan),
+          shortcut("[⇅]", "Scroll ", :cyan),
           shortcut("[Esc/q/?]", "Close ", :red)
         ]
 
       :select_ssh ->
         [
-          shortcut("[⇅/j/k]", "Navigate ", :yellow),
+          shortcut("[⇅]", "Navigate ", :yellow),
           shortcut("[Enter]", "Select ", :green),
           shortcut("[Esc]", "Cancel ", :red)
         ]
@@ -120,7 +120,7 @@ defmodule Caudata.UI.KeyRegistry do
           case settings_focus do
             :servers ->
               [
-                shortcut("[⇅/j/k]", "Select Server ", :cyan),
+                shortcut("[⇅]", "Select Server ", :cyan),
                 shortcut("[Space]", "Toggle Server ", :green),
                 shortcut("[d/Backspace]", "Delete Server ", :red)
               ]
@@ -133,20 +133,20 @@ defmodule Caudata.UI.KeyRegistry do
 
             :containers ->
               [
-                shortcut("[⇅/j/k]", "Select Container ", :cyan),
+                shortcut("[⇅]", "Select Container ", :cyan),
                 shortcut("[Space]", "Toggle Container ", :green)
               ]
 
             :services ->
               [
-                shortcut("[⇅/j/k]", "Select Service ", :cyan),
+                shortcut("[⇅]", "Select Service ", :cyan),
                 shortcut("[Space]", "Toggle Service ", :green),
                 shortcut("[/]", "Search/Filter ", :yellow)
               ]
 
             :custom_logs ->
               [
-                shortcut("[⇅/j/k]", "Select Path ", :cyan),
+                shortcut("[⇅]", "Select Path ", :cyan),
                 shortcut("[a]", "Add Path ", :green),
                 shortcut("[d/Backspace]", "Delete Path ", :red)
               ]
@@ -166,14 +166,14 @@ defmodule Caudata.UI.KeyRegistry do
         total = length(actions)
 
         [
-          shortcut("[⇅/j/k]", "Navigate ", :cyan),
+          shortcut("[⇅]", "Navigate ", :cyan),
           shortcut("[Enter/1-#{total}]", "Confirm ", :green),
           shortcut("[Esc]", "Cancel ", :red)
         ]
 
       :container_inspect ->
         [
-          shortcut("[⇅/j/k]", "Scroll ", :cyan),
+          shortcut("[⇅]", "Scroll ", :cyan),
           shortcut("[r]", "Toggle Raw/Summary ", :yellow),
           shortcut("[Esc/q]", "Close ", :red)
         ]
@@ -193,7 +193,7 @@ defmodule Caudata.UI.KeyRegistry do
       :selecting ->
         if Map.get(state, :visual_anchor) == nil do
           [
-            shortcut("[j/k/⇅]", "Move Cursor ", :cyan),
+            shortcut("[⇅]", "Move Cursor ", :cyan),
             shortcut("[v/Space]", "Start Selection ", :yellow),
             shortcut("[y]", "Copy Line ", :green),
             shortcut("[Esc]", "Exit ", :red)
@@ -206,7 +206,7 @@ defmodule Caudata.UI.KeyRegistry do
             end
 
           [
-            shortcut("[j/k/⇅]", "Extend Selection (#{count}L) ", :cyan),
+            shortcut("[⇅]", "Extend Selection (#{count}L) ", :cyan),
             shortcut("[v/Space]", "Stop Selection ", :yellow),
             shortcut("[o]", "Swap Ends ", :magenta),
             shortcut("[y]", "Copy Range ", :green),
@@ -225,14 +225,15 @@ defmodule Caudata.UI.KeyRegistry do
   defp get_normal_shortcuts(state) do
     if Map.get(state, :logs_full_screen, false) do
       [
-        shortcut("[q/Ctrl+C]", "Quit ", :white),
-        shortcut("[f/Esc]", "Normal Screen ", :yellow),
+        shortcut("[q]", "Quit ", :white),
+        shortcut("[f/Esc]", "Normal ", :yellow),
+        shortcut("[s]", "Settings ", :yellow),
         shortcut("[t]", "Time ", :magenta),
         shortcut("[/]", "Filter ", :white),
         shortcut("[y]", "Copy All ", :green),
         shortcut("[v]", "Select ", :cyan),
-        shortcut("[j/k]", "Scroll ", :white),
-        shortcut("[g/G]", "Top/Bottom ", :white)
+        shortcut("[⇅]", "Scroll ", :white),
+        shortcut("[g/G]", "Top/Bot ", :white)
       ]
     else
       active_panel = Map.get(state, :active_panel, :sidebar)
@@ -240,15 +241,16 @@ defmodule Caudata.UI.KeyRegistry do
       case active_panel do
         :logs ->
           [
-            shortcut("[q/Ctrl+C]", "Quit ", :white),
-            shortcut("[1/2/Tab]", "Panel ", :yellow),
-            shortcut("[f]", "Fullscreen ", :yellow),
+            shortcut("[q]", "Quit ", :white),
+            shortcut("[1-3/Tab]", "Panel ", :yellow),
+            shortcut("[s]", "Settings ", :yellow),
+            shortcut("[f]", "Full ", :yellow),
             shortcut("[t]", "Time ", :magenta),
             shortcut("[/]", "Filter ", :white),
             shortcut("[y]", "Copy ", :green),
             shortcut("[v]", "Select ", :cyan),
-            shortcut("[j/k/⇅]", "Scroll ", :white),
-            shortcut("[g/G]", "Top/Bottom ", :white),
+            shortcut("[⇅]", "Scroll ", :white),
+            shortcut("[g/G]", "Top/Bot ", :white),
             shortcut("[?]", "Help ", :cyan)
           ]
 
@@ -265,18 +267,19 @@ defmodule Caudata.UI.KeyRegistry do
             end
 
           [
-            shortcut("[q/Ctrl+C]", "Quit ", :white),
-            shortcut("[1/2/Tab]", "Panel ", :yellow)
+            shortcut("[q]", "Quit ", :white),
+            shortcut("[1-3/Tab]", "Panel ", :yellow)
           ] ++
             action_hint ++
             [
-              shortcut("[a]", "Add Server ", :white),
-              shortcut("[f]", "Fullscreen ", :yellow),
+              shortcut("[a]", "Add ", :white),
+              shortcut("[s]", "Settings ", :yellow),
+              shortcut("[f]", "Full ", :yellow),
               shortcut("[t]", "Time ", :magenta),
               shortcut("[/]", "Filter ", :white),
               shortcut("[y]", "Copy ", :green),
               shortcut("[v]", "Select ", :cyan),
-              shortcut("[j/k/⇅]", "Navigate ", :white),
+              shortcut("[⇅]", "Nav ", :white),
               shortcut("[?]", "Help ", :cyan)
             ]
       end
@@ -382,6 +385,29 @@ defmodule Caudata.UI.KeyRegistry do
     end
   end
 
+  # Helper to resolve current panel number (1: Server, 2: Container, 3: Logs)
+  def current_panel_number(model) do
+    active_panel = Map.get(model, :active_panel, :sidebar)
+    sidebar_focus = Map.get(model, :sidebar_focus, :servers)
+
+    case {active_panel, sidebar_focus} do
+      {:sidebar, :servers} -> 1
+      {:sidebar, :containers} -> 2
+      {:logs, _} -> 3
+      _ -> 1
+    end
+  end
+
+  # Helper to switch to panel 1, 2, or 3
+  def switch_to_panel(panel_num, model) do
+    case panel_num do
+      1 -> Sidebar.focus_servers(model)
+      2 -> Sidebar.focus_containers(model)
+      3 -> {Map.put(model, :active_panel, :logs), []}
+      _ -> {model, []}
+    end
+  end
+
   defp handle_normal_key(key, key_data, model) do
     norm_key = if key == :char, do: Map.get(key_data, :char), else: key
 
@@ -389,20 +415,44 @@ defmodule Caudata.UI.KeyRegistry do
       "?" ->
         {%{model | modal_visible: true, modal_type: :help, help_modal_scroll_y: 0}, []}
 
-      k when k in ["1", "h", :left] ->
-        {%{model | active_panel: :sidebar}, []}
+      "1" ->
+        switch_to_panel(1, model)
 
-      k when k in ["2", "l", :right] ->
-        {%{model | active_panel: :logs}, []}
+      "2" ->
+        switch_to_panel(2, model)
+
+      "3" ->
+        switch_to_panel(3, model)
 
       :tab ->
-        active_panel = Map.get(model, :active_panel, :sidebar)
+        next_panel =
+          case current_panel_number(model) do
+            1 -> 2
+            2 -> 3
+            3 -> 1
+          end
 
-        if active_panel == :sidebar do
-          Sidebar.handle_key(:tab, key_data, model)
-        else
-          {%{model | active_panel: :sidebar}, []}
-        end
+        switch_to_panel(next_panel, model)
+
+      k when k in ["l", :right] ->
+        next_panel =
+          case current_panel_number(model) do
+            1 -> 2
+            2 -> 3
+            3 -> 1
+          end
+
+        switch_to_panel(next_panel, model)
+
+      k when k in ["h", :left] ->
+        prev_panel =
+          case current_panel_number(model) do
+            1 -> 3
+            2 -> 1
+            3 -> 2
+          end
+
+        switch_to_panel(prev_panel, model)
 
       k when k in ["j", "k", :up, :down] ->
         active_panel = Map.get(model, :active_panel, :sidebar)

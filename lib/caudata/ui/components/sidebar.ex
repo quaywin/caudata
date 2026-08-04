@@ -19,9 +19,9 @@ defmodule Caudata.UI.Components.Sidebar do
     if h >= 18 do
       {h1, h3, h4} =
         cond do
-          h >= 30 -> {8, 7, 5}
-          h >= 24 -> {6, 6, 5}
-          true -> {5, 5, 5}
+          h >= 30 -> {10, 7, 5}
+          h >= 24 -> {8, 6, 5}
+          true -> {6, 5, 5}
         end
 
       [box1_area, box2_area, box3_area, box4_area] =
@@ -32,14 +32,14 @@ defmodule Caudata.UI.Components.Sidebar do
           {:length, h4}
         ])
 
-      [
+      List.flatten([
         ServerList.render(state, box1_area),
         ContainerList.render(state, box2_area),
         ContainerInfo.render(state, box3_area),
         ServerMetrics.render(state, box4_area)
-      ]
+      ])
     else
-      servers_h = if h >= 10, do: 5, else: max(2, div(h, 2))
+      servers_h = if h >= 10, do: 6, else: max(3, div(h, 2))
 
       [box1_area, box2_area] =
         Layout.split(sidebar_area, :vertical, [
@@ -47,10 +47,10 @@ defmodule Caudata.UI.Components.Sidebar do
           {:min, 0}
         ])
 
-      [
+      List.flatten([
         ServerList.render(state, box1_area),
         ContainerList.render(state, box2_area)
-      ]
+      ])
     end
   end
 
@@ -76,24 +76,10 @@ defmodule Caudata.UI.Components.Sidebar do
         end
 
       :tab ->
-        new_focus = if focus == :containers, do: :servers, else: :containers
-        new_model = %{model | sidebar_focus: new_focus}
-
-        if new_focus == :containers and is_nil(new_model.selected_container_id) do
-          case get_enabled_containers_for_profile(new_model, new_model.selected_profile_id) do
-            [first_container | _] ->
-              select_container(
-                new_model.selected_profile_id,
-                first_container.id,
-                first_container.name,
-                new_model
-              )
-
-            _ ->
-              {new_model, []}
-          end
+        if focus == :containers do
+          focus_servers(model)
         else
-          {new_model, []}
+          focus_containers(model)
         end
 
       :enter ->
@@ -119,6 +105,38 @@ defmodule Caudata.UI.Components.Sidebar do
 
       _ ->
         {model, []}
+    end
+  end
+
+  @doc """
+  Sets focus to servers panel.
+  """
+  def focus_servers(model) do
+    new_model = model |> Map.put(:active_panel, :sidebar) |> Map.put(:sidebar_focus, :servers)
+    {new_model, []}
+  end
+
+  @doc """
+  Sets focus to containers panel, auto-selecting first container if none selected.
+  """
+  def focus_containers(model) do
+    new_model = model |> Map.put(:active_panel, :sidebar) |> Map.put(:sidebar_focus, :containers)
+
+    if is_nil(Map.get(new_model, :selected_container_id)) do
+      case get_enabled_containers_for_profile(new_model, Map.get(new_model, :selected_profile_id)) do
+        [first_container | _] ->
+          select_container(
+            Map.get(new_model, :selected_profile_id),
+            first_container.id,
+            first_container.name,
+            new_model
+          )
+
+        _ ->
+          {new_model, []}
+      end
+    else
+      {new_model, []}
     end
   end
 

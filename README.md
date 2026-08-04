@@ -20,9 +20,11 @@ Tired of SSH-ing into 5 different servers just to tail Docker logs? Caudata brin
 - **Zero-Agent SSH**: Connects seamlessly using your existing `~/.ssh/config` or custom server configurations. Supports both private keys and password authentication securely. No remote agents or daemons are required on target servers.
 - **Local Machine Monitoring**: Monitor containers and services on your local machine using direct port communication (bypassing SSH).
 - **Container Auto-Discovery**: Auto-discovers running Docker containers. Automatically reconnects active log streams when a container is rebuilt or restarted.
+- **Docker Container Management**: Control Docker containers directly from the TUI — Start, Stop, Restart, Force Kill, Inspect, and Remove — with confirmation prompts for destructive actions.
 - **System Services Support**: Stream logs from system daemon services running under **Systemd** (Linux) or **Launchd** (macOS).
 - **Custom Log Paths**: Add and stream specific custom log paths from remote machines.
 - **Real-time Server & Container Metrics**: Live panels showing CPU, RAM, and disk usage of remote servers, alongside granular status, image, and resource usage for selected containers.
+- **High-Performance Multi-Stage Log Parser & Virtualized TUI**: Auto-formats structured JSON, Logfmt (`key=value`), and standard log streams in-place with sub-element highlighting (IPv4/IPv6, URLs, HTTP methods/status codes, durations, UUIDs/hashes). Employs 100% virtualized rendering with $O(1)$ string-length line estimation for zero-lag 60 FPS scrolling over 10,000+ log lines.
 - **Visual Select & Clipboard Copy**: Press `v` to select lines of logs, and copy them via `y` to the system clipboard.
 - **Development Web View**: Render the exact same Terminal UI inside your web browser using Phoenix LiveView for remote access, easy styling, or debugging.
 - **Tailscale VPN Integration**: Connect securely to Tailscale hosts without requiring an active system-wide Tailscale daemon.
@@ -78,24 +80,25 @@ BURRITO_TARGET=macos_aarch64 mix release --overwrite
    caudata
    ```
 2. **Add Connections**:
-   - **Remote Server (SSH)**: Caudata automatically scans your `~/.ssh/config`. To add custom servers manually, press `a` or `+` in the TUI, select `+ Manual SSH Connection`, and fill in the details.
-   - **Local Machine**: Press `a` or `+` in the TUI, select `+ Local Machine Connection`, and enter your local sudo password (optional, required if your local Docker or system logs require root permissions).
+   - **Remote Server (SSH)**: Caudata automatically scans your `~/.ssh/config`. To add custom servers manually, press `a` in the TUI, select `+ Manual SSH Connection`, and fill in the details.
+   - **Local Machine**: Press `a` in the TUI, select `+ Local Machine Connection`, and enter your local sudo password (optional, required if your local Docker or system logs require root permissions).
 3. **Connect & Stream**: Use the TUI sidebar to select a host or local connection, press `Enter` to connect, and Caudata will auto-discover running Docker containers and services. Toggle active log streams using `Space`.
 
 ## CLI Options
 
 ```bash
 # Show help menu
-caudata --help
+caudata --help        # or: caudata -h
 
 # Show current version
-caudata --version
+caudata --version     # or: caudata -v
 
 # Run the web UI server on port 4000
 caudata web
 
 # Run the web UI server on a custom port and address
-PORT=8080 CAUDATA_IP=0.0.0.0 caudata web
+caudata web --port 8080   # or: caudata web -p 8080
+CAUDATA_IP=0.0.0.0 caudata web
 
 # Run the web UI server with user-space Tailscale VPN tunneling
 caudata web --port 8080 --tailscale --authkey <your-tailscale-key> --tailscale_port 80
@@ -106,26 +109,58 @@ caudata upgrade
 
 ## Keybindings
 
+> Press `?` inside the TUI to open the full interactive keybinding reference.
+
+### Global
+
 | Key | Action |
 | :--- | :--- |
-| `↑` / `↓` (or `k` / `j`) | Navigate sidebar/lists, or scroll logs up/down |
-| `Enter` | Connect and start log streaming, or confirm modal action |
-| `a` / `A` / `+` | Open the **Add Connection** modal |
+| `1` / `h` / `←` | Jump focus to **Sidebar** panel |
+| `2` / `l` / `→` | Jump focus to **Logs** panel |
+| `Tab` | Toggle active panel focus / switch sidebar tabs |
+| `a` / `A` | Open the **Add Connection** modal |
 | `s` / `S` | Open the **Global Settings** modal |
-| `/` | Enter search mode to filter logs (supports regex) |
-| `Space` | Toggle options (e.g. enable/disable servers, containers, or services) |
-| `v` / `V` | Enter **Visual Select Mode** in the active log pane |
-| `y` / `Y` | Copy selected lines (in Visual Mode) or all logs to the system clipboard |
 | `f` / `F` | Toggle log panel full-screen view |
 | `t` / `T` | Toggle displaying logs with timestamps |
-| `Tab` | Switch focus between sidebar panels (Hosts / Containers) |
-| `d` / `D` / `Backspace` | Delete selected server connection or custom log path |
-| `Esc` | Clear active search, reset visual select mode, or close modals |
-| `q` / `Q` | Exit Caudata |
+| `?` | Toggle the **Help** modal |
+| `q` / `Q` / `Ctrl+C` | Exit Caudata |
+
+### Sidebar (Panel 1: Servers & Containers)
+
+| Key | Action |
+| :--- | :--- |
+| `↑` / `↓` (or `k` / `j`) | Navigate server & container tree |
+| `Enter` | Connect to server / select container to stream |
+| `Space` | Toggle log stream on/off |
+| `m` / `M` | Open **Docker Container Actions** (Start/Stop/Restart/Kill/Inspect/Remove) |
+
+### Logs Pane (Panel 2: Log Stream)
+
+| Key | Action |
+| :--- | :--- |
+| `↑` / `↓` (or `k` / `j`) | Scroll logs up/down (auto-accelerates on hold) |
+| `g` / `G` | Jump to **top** (`g`) or **bottom** (`G`) of logs |
+| `PageUp` / `PageDown` | Scroll logs page-by-page |
+| `/` | Enter **live regex filter** search mode |
+| `v` / `V` | Enter **Visual Select Mode** (extend selection with `j`/`k`) |
+| `y` / `Y` | Copy all displayed logs (or selected lines in Visual Mode) to clipboard |
+| `o` | Swap anchor/cursor ends (in Visual Select Mode) |
+| `Esc` | Clear active filter regex / exit visual mode |
+
+### Forms & Modals
+
+| Key | Action |
+| :--- | :--- |
+| `Tab` / `Shift+Tab` | Navigate next / previous form field |
+| `Enter` | Submit form / confirm modal action |
+| `1` - `6` | Quick-select action number in container action modal |
+| `d` / `Backspace` | Delete selected server or custom log path (in Settings modal) |
+| `y` / `n` | Confirm (`y`) or cancel (`n`) destructive confirmation dialogs |
+| `Esc` / `q` | Close active modal |
 
 ## Configuration
 
-Settings and connection profiles are stored in an ETS-backed database at `~/.caudata/config.db`. Caudata automatically limits the log buffer to `1,000` lines per stream to prevent high memory usage.
+Settings and connection profiles are stored in an ETS-backed database at `~/.caudata/config.db`. Caudata automatically defaults the log buffer capacity to `10,000` lines per stream with zero-lag virtualized rendering to maintain low memory footprint and high 60 FPS performance.
 
 ### Environment Variables
 

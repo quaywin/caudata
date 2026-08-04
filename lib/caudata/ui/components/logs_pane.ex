@@ -8,6 +8,7 @@ defmodule Caudata.UI.Components.LogsPane do
   alias ExRatatui.Text.Span
   alias ExRatatui.Widgets.Block
   alias ExRatatui.Widgets.Paragraph
+  alias ExRatatui.Widgets.Scrollbar
 
   alias Caudata.UI.ViewHelper
   alias Caudata.UI.LogFormatter
@@ -44,7 +45,7 @@ defmodule Caudata.UI.Components.LogsPane do
     active_panel = Map.get(state, :active_panel, :sidebar)
     is_active = active_panel == :logs or Map.get(state, :logs_full_screen, false)
     border_color = if is_active, do: :cyan, else: :dark_gray
-    title_prefix = if is_active, do: " [2]", else: " "
+    title_prefix = if is_active, do: " [3]", else: " "
 
     outer = %Block{
       title: "#{title_prefix}Logs: #{selected_profile.id} (disabled) ",
@@ -70,7 +71,7 @@ defmodule Caudata.UI.Components.LogsPane do
     active_panel = Map.get(state, :active_panel, :sidebar)
     is_active = active_panel == :logs or Map.get(state, :logs_full_screen, false)
     border_color = if is_active, do: :cyan, else: :dark_gray
-    title_prefix = if is_active, do: " [2]", else: " "
+    title_prefix = if is_active, do: " [3]", else: " "
 
     outer = %Block{
       title: "#{title_prefix}Caudata Logs ",
@@ -96,7 +97,7 @@ defmodule Caudata.UI.Components.LogsPane do
     active_panel = Map.get(state, :active_panel, :sidebar)
     is_active = active_panel == :logs or Map.get(state, :logs_full_screen, false)
     border_color = if is_active, do: :cyan, else: :dark_gray
-    title_prefix = if is_active, do: " [2]", else: " "
+    title_prefix = if is_active, do: " [3]", else: " "
 
     inner_area = ViewHelper.inner_rect(logs_area)
     inner_width = inner_area.width
@@ -223,7 +224,30 @@ defmodule Caudata.UI.Components.LogsPane do
       scroll: {scroll_y, 0}
     }
 
-    content = [{logs_widget, logs_content_rect} | extra_widgets]
+    total_wrapped_lines = ViewHelper.count_wrapped_lines(displayed_logs, wrap_width)
+
+    content =
+      if total_wrapped_lines > viewport_height do
+        max_scroll = max(1, total_wrapped_lines - viewport_height)
+
+        current_scroll_pos =
+          case state.logs_scroll_y do
+            :bottom -> max_scroll
+            val when is_integer(val) -> min(max(0, val), max_scroll)
+          end
+
+        scrollbar_widget = %Scrollbar{
+          orientation: :vertical_right,
+          content_length: max_scroll,
+          position: current_scroll_pos,
+          thumb_style: %Style{fg: :cyan},
+          track_style: %Style{fg: :dark_gray}
+        }
+
+        [{logs_widget, logs_content_rect}, {scrollbar_widget, inner_area} | extra_widgets]
+      else
+        [{logs_widget, logs_content_rect} | extra_widgets]
+      end
 
     {outer, content}
   end

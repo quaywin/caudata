@@ -11,9 +11,9 @@ defmodule Caudata.UI.Components.HelpModal do
 
   @sections [
     {"🌐 Global Shortcuts", [
-      {"1 / 2", "Jump focus to Sidebar (1) or Logs Pane (2)"},
-      {"h / l  or  ← / →", "Switch active focus between Sidebar ↔ Logs Pane"},
-      {"Tab", "Toggle active panel focus / switch tabs"},
+      {"1 / 2 / 3", "Jump focus to Servers (1), Containers (2), or Logs (3)"},
+      {"h / l  or  ← / →", "Cycle active focus (1 ↔ 2 ↔ 3)"},
+      {"Tab", "Cycle active panel focus (1 → 2 → 3 → 1)"},
       {"a / A", "Open Add Server connection modal"},
       {"s / S", "Open Global Settings modal"},
       {"f / F", "Toggle Fullscreen Logs view"},
@@ -21,14 +21,16 @@ defmodule Caudata.UI.Components.HelpModal do
       {"? ", "Toggle this Help modal"},
       {"q / Ctrl+C", "Quit Caudata"}
     ]},
-    {"📁 Sidebar (Panel 1: Servers & Containers)", [
-      {"j / k  or  ↑ / ↓", "Navigate server & container tree"},
-      {"Enter", "Connect to server / Select container to stream"},
-      {"Space", "Toggle log stream on/off"},
-      {"m / M", "Open Docker container actions (Start/Stop/Restart/Kill/Inspect)"},
-      {"d / Backspace", "Delete selected custom log path or server (with confirmation)"}
+    {"📁 Servers (Panel 1)", [
+      {"j / k  or  ↑ / ↓", "Navigate server list"},
+      {"Enter", "Connect / Refresh server"}
     ]},
-    {"📜 Logs Pane (Panel 2: Log Stream)", [
+    {"📦 Containers & Services (Panel 2)", [
+      {"j / k  or  ↑ / ↓", "Navigate container / service list"},
+      {"Enter / m", "Open Docker container actions (Start/Stop/Restart/Kill/Inspect)"},
+      {"Space", "Toggle log stream on/off"}
+    ]},
+    {"📜 Logs Pane (Panel 3)", [
       {"j / k  or  ↑ / ↓", "Scroll logs down / up (with auto-acceleration)"},
       {"g / G", "Jump to Top (g) or Bottom (G) of logs"},
       {"PageUp / PageDown", "Scroll logs page-by-page"},

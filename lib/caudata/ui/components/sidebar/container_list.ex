@@ -90,10 +90,10 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
     active_panel = Map.get(state, :active_panel, :sidebar)
 
     border_color =
-      cond do
-        active_panel == :sidebar and focus == :containers -> :cyan
-        active_panel == :sidebar -> :white
-        true -> :dark_gray
+      if active_panel == :sidebar and focus == :containers do
+        :cyan
+      else
+        :dark_gray
       end
 
     selected_idx =
@@ -116,13 +116,27 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
       text: container_rows,
       scroll: {scroll_y, 0},
       block: %Block{
-        title: if(active_panel == :sidebar and focus == :containers, do: " Containers / Services [ACTIVE] ", else: " Containers / Services "),
+        title: if(active_panel == :sidebar and focus == :containers, do: " [2] Containers / Services [ACTIVE] ", else: " [2] Containers / Services "),
         borders: [:all],
         border_type: :rounded,
         border_style: %Style{fg: border_color}
       }
     }
 
-    {widget, box_area}
+    if n > inner_height do
+      max_scroll = max(1, n - inner_height)
+
+      scrollbar_widget = %ExRatatui.Widgets.Scrollbar{
+        orientation: :vertical_right,
+        content_length: max_scroll,
+        position: min(scroll_y, max_scroll),
+        thumb_style: %Style{fg: :cyan},
+        track_style: %Style{fg: :dark_gray}
+      }
+
+      [{widget, box_area}, {scrollbar_widget, box_area}]
+    else
+      {widget, box_area}
+    end
   end
 end

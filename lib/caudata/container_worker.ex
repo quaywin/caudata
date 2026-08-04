@@ -148,6 +148,15 @@ defmodule Caudata.ContainerWorker do
         state: Map.get(container, :state, state.state)
     }
 
+    new_state =
+      if new_state.channel_id &&
+           (new_state.state in ["exited", "stopped"] or
+              String.starts_with?(new_state.status, "Exited")) do
+        close_log_channel(new_state)
+      else
+        new_state
+      end
+
     {:noreply, new_state}
   end
 
@@ -315,6 +324,14 @@ defmodule Caudata.ContainerWorker do
   defp start_log_streaming(state, conn_ref) do
     Logger.info("Streaming logs for #{state.container_id} on #{state.profile_id}...")
 
+    effective_tail_limit =
+      if Process.whereis(Caudata.LogStore) do
+        stats = Caudata.LogStore.get_stats(Caudata.LogStore, state.source_id)
+        if stats.size > 0, do: 0, else: state.tail_limit || 1000
+      else
+        state.tail_limit || 1000
+      end
+
     case state.ssh_client.open_channel(conn_ref) do
       {:ok, channel_id} ->
         log_cmd =
@@ -324,7 +341,7 @@ defmodule Caudata.ContainerWorker do
               escaped_path = String.replace(path, "'", "'\\\'\''")
 
               build_log_cmd(
-                "tail -n #{state.tail_limit || 100} -F \"#{escaped_path}\"",
+                "tail -n #{effective_tail_limit} -F \"#{escaped_path}\"",
                 state.password
               )
 
@@ -333,7 +350,7 @@ defmodule Caudata.ContainerWorker do
               escaped_service = String.replace(service_name, "'", "'\\\'\''")
 
               build_log_cmd(
-                "journalctl -u \"#{escaped_service}\" -f -n #{state.tail_limit || 100}",
+                "journalctl -u \"#{escaped_service}\" -f -n #{effective_tail_limit}",
                 state.password
               )
 
@@ -350,7 +367,7 @@ defmodule Caudata.ContainerWorker do
               escaped_container_id = String.replace(state.container_id, "'", "'\\\'\''")
 
               build_log_cmd(
-                "docker logs -t --follow --tail #{state.tail_limit || 1000} #{escaped_container_id}",
+                "docker logs -t --follow --tail #{effective_tail_limit} #{escaped_container_id}",
                 state.password
               )
           end
@@ -435,7 +452,7 @@ defmodule Caudata.ContainerWorker do
         inner_script =
           "if true <&0 2>/dev/null; then exec 3<&0; fi; " <>
             "echo '#{escaped_password}' | sudo -S -p '' sh -c 'if true <&3 2>/dev/null; then exec 0<&3 3<&-; fi; exec #{escaped_cmd}' & pid=$!; " <>
-            "trap 'kill $pid 2>/dev/null' EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null"
+            "trap 'kill $pid 2>/dev/null' EXIT HUP INT TERM; wait $pid 2>/dev/null; kill $pid 2>/dev/null"
 
         escaped_for_dq =
           inner_script
@@ -450,7 +467,7 @@ defmodule Caudata.ContainerWorker do
         escaped_cmd = String.replace(base_cmd, "'", "'\\''")
 
         inner_script =
-          "if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then exec sudo -n #{escaped_cmd}; else exec #{escaped_cmd}; fi & pid=$!; trap 'kill $pid 2>/dev/null' EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null"
+          "if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then exec sudo -n #{escaped_cmd}; else exec #{escaped_cmd}; fi & pid=$!; trap 'kill $pid 2>/dev/null' EXIT HUP INT TERM; wait $pid 2>/dev/null; kill $pid 2>/dev/null"
 
         escaped_for_dq =
           inner_script

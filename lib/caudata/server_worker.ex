@@ -647,16 +647,26 @@ defmodule Caudata.ServerWorker do
 
         state =
           if state.active_container_id do
-            if Enum.any?(all_containers, &(&1.id == state.active_container_id)) do
-              case Map.fetch(state.container_pids, state.active_container_id) do
-                {:ok, pid} ->
-                  case Caudata.ContainerWorker.start_streaming(pid, state.conn_ref) do
-                    :ok -> state
-                    {:error, _reason} -> state
-                  end
+            active_c = Enum.find(all_containers, &(&1.id == state.active_container_id))
 
-                :error ->
-                  %{state | active_container_id: nil}
+            if active_c do
+              is_stopped =
+                active_c.state in ["exited", "stopped", "dead", "paused"] or
+                  String.starts_with?(active_c.status, "Exited")
+
+              if not is_stopped do
+                case Map.fetch(state.container_pids, state.active_container_id) do
+                  {:ok, pid} ->
+                    case Caudata.ContainerWorker.start_streaming(pid, state.conn_ref) do
+                      :ok -> state
+                      {:error, _reason} -> state
+                    end
+
+                  :error ->
+                    %{state | active_container_id: nil}
+                end
+              else
+                state
               end
             else
               %{state | active_container_id: nil}

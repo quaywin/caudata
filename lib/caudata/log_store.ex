@@ -22,10 +22,48 @@ defmodule Caudata.LogStore do
 
   @doc """
   Gets a list of all lines for a source in chronological order.
+  Reads directly from ETS table for zero-latency non-blocking access.
   """
   def get_snapshot(server \\ __MODULE__, source_id, limit \\ @default_capacity) do
-    GenServer.call(server, {:get_snapshot, source_id, limit})
+    tab = get_table_name(server)
+
+    case try_ets_lookup(tab, {:snapshot, source_id}) do
+      {:ok, lines} ->
+        Enum.take(lines, -limit)
+
+      :error ->
+        GenServer.call(server, {:get_snapshot, source_id, limit})
+    end
   end
+
+  defp try_ets_lookup(tab, key) when is_atom(tab) do
+    case :ets.info(tab) do
+      :undefined -> :error
+      _ ->
+        case :ets.lookup(tab, key) do
+          [{^key, val}] -> {:ok, val}
+          [] -> {:ok, []}
+        end
+    end
+  end
+
+  defp try_ets_lookup(tab, key) when is_pid(tab) do
+    case GenServer.call(tab, :get_table_name) do
+      table_name when is_atom(table_name) or is_reference(table_name) ->
+        case :ets.lookup(table_name, key) do
+          [{^key, val}] -> {:ok, val}
+          [] -> {:ok, []}
+        end
+
+      _ ->
+        :error
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp get_table_name(server) when is_atom(server), do: server
+  defp get_table_name(server) when is_pid(server), do: server
 
   @doc """
   Gets buffer statistics (size and drop count) for a source.
@@ -59,10 +97,19 @@ defmodule Caudata.LogStore do
 
   @impl true
   def init(opts) do
+    name = Keyword.get(opts, :name, __MODULE__)
     capacity = Keyword.get(opts, :capacity) || @default_capacity
 
-    # State: %{sources: %{source_id => %{queue: :queue.t(), size: integer(), drop_count: integer()}}, capacity: integer()}
-    {:ok, %{sources: %{}, capacity: capacity}}
+    tab =
+      case :ets.info(name) do
+        :undefined ->
+          :ets.new(name, [:named_table, :public, :set, {:read_concurrency, true}])
+
+        _ ->
+          name
+      end
+
+    {:ok, %{table: tab, sources: %{}, capacity: capacity}}
   end
 
   @impl true
@@ -144,6 +191,21 @@ defmodule Caudata.LogStore do
 
     new_sources = Map.put(state.sources, source_id, new_source_state)
 
+    # Update ETS snapshot table for zero-latency direct reads
+    sorted_lines =
+      new_queue
+      |> :queue.to_list()
+      |> Enum.sort_by(fn line ->
+        ts = Map.get(line, :sort_ts) || Map.get(line, :timestamp) || ""
+        seq = Map.get(line, :seq, 0)
+        {ts, seq}
+      end)
+      |> Enum.map(fn item -> Map.drop(item, [:seq, :sort_ts]) end)
+
+    if Map.has_key?(state, :table) do
+      :ets.insert(state.table, {{:snapshot, source_id}, sorted_lines})
+    end
+
     # Broadcast notification to PubSub
     Phoenix.PubSub.broadcast(
       Caudata.PubSub,
@@ -158,6 +220,10 @@ defmodule Caudata.LogStore do
   def handle_cast({:delete_stream, source_id}, state) do
     new_sources = Map.delete(state.sources, source_id)
 
+    if Map.has_key?(state, :table) do
+      :ets.delete(state.table, {:snapshot, source_id})
+    end
+
     Phoenix.PubSub.broadcast(
       Caudata.PubSub,
       "logs:#{source_id}",
@@ -165,6 +231,13 @@ defmodule Caudata.LogStore do
     )
 
     {:noreply, %{state | sources: new_sources}}
+  end
+
+
+
+  @impl true
+  def handle_call(:get_table_name, _from, state) do
+    {:reply, Map.get(state, :table, state), state}
   end
 
   @impl true

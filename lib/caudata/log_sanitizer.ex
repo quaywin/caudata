@@ -93,6 +93,15 @@ defmodule Caudata.LogSanitizer do
   Returns `{complete_lines, remaining_buffer}`.
   """
   def process_chunk(chunk, buffer, max_size \\ @max_buffer_size) do
+    try do
+      Caudata.Native.process_chunk_native(chunk, buffer, max_size)
+    rescue
+      _ ->
+        do_process_chunk_fallback(chunk, buffer, max_size)
+    end
+  end
+
+  defp do_process_chunk_fallback(chunk, buffer, max_size) do
     combined = buffer <> chunk
 
     case String.split(combined, ~r{\r?\n}) do

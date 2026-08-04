@@ -37,30 +37,63 @@ defmodule Caudata.UI.ViewHelper do
   Returns the logs list, optionally filtered by regex, or a fallback message if empty.
   """
   def get_displayed_logs(model) do
+    logs_len = if is_list(model.logs), do: length(model.logs), else: 0
+    cache_key = {model.filter_regex, model.selected_container_id, logs_len}
+
+    case Map.get(model, :cached_displayed_logs) do
+      {^cache_key, cached_result} ->
+        cached_result
+
+      _ ->
+        do_get_displayed_logs(model)
+    end
+  end
+
+  defp do_get_displayed_logs(model) do
     filtered_logs =
       if model.filter_regex != "" and not model.filter_error do
-        case Regex.compile(model.filter_regex) do
-          {:ok, re} ->
+        query = model.filter_regex
+
+        if String.contains?(query, ["\\", "^", "$", "*", "+", "?", "(", ")", "[", "]", "{", "}", "|"]) do
+          re =
+            Map.get(model, :compiled_filter_regex) ||
+              case Regex.compile(query) do
+                {:ok, compiled} -> compiled
+                _ -> nil
+              end
+
+          if re do
             Enum.filter(model.logs, fn
               %{message: msg} -> Regex.match?(re, msg)
               line when is_binary(line) -> Regex.match?(re, line)
             end)
-
-          _ ->
+          else
             model.logs
+          end
+        else
+          Enum.filter(model.logs, fn
+            %{message: msg} -> String.contains?(msg, query)
+            line when is_binary(line) -> String.contains?(line, query)
+          end)
         end
       else
         model.logs
       end
 
     normalized =
-      Enum.map(filtered_logs, fn
-        %{timestamp: ts, stream: stream, message: msg} ->
-          %{timestamp: ts, stream: stream, message: msg}
+      case filtered_logs do
+        [%{timestamp: _, stream: _, message: _} | _] = already_normalized ->
+          already_normalized
 
-        line when is_binary(line) ->
-          %{timestamp: nil, stream: :stdout, message: line}
-      end)
+        other ->
+          Enum.map(other, fn
+            %{timestamp: ts, stream: stream, message: msg} ->
+              %{timestamp: ts, stream: stream, message: msg}
+
+            line when is_binary(line) ->
+              %{timestamp: nil, stream: :stdout, message: line}
+          end)
+      end
 
     cond do
       is_nil(model.selected_container_id) ->

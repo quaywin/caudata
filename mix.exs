@@ -171,7 +171,10 @@ defmodule Caudata.MixProject do
       {:mox, "~> 1.1", only: :test},
       {:stream_data, "~> 1.1", only: :test},
       {:floki, ">= 0.30.0", only: :test},
-      {:lazy_html, ">= 0.1.0", only: :test}
+      {:lazy_html, ">= 0.1.0", only: :test},
+      {:benchee, "~> 1.3", only: [:dev, :test]},
+      {:ex_log_formatter,
+       git: "https://github.com/quaywin/ex_log_formatter.git", branch: "main"}
     ]
   end
 end

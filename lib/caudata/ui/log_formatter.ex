@@ -178,10 +178,29 @@ defmodule Caudata.UI.LogFormatter do
   defp try_parse_logfmt(line) do
     # Logfmt requires '=' and must NOT be an Elixir map (%{, =>) or Elixir struct print line
     if String.contains?(line, "=") and not String.contains?(line, "=>") and not String.contains?(line, "%{") do
-      matches = Regex.scan(@logfmt_regex, line, capture: :all_names)
+      matches_index = Regex.scan(@logfmt_regex, line, return: :index)
 
-      if valid_logfmt_line?(line, matches) do
-        format_logfmt_matches(line, matches)
+      if matches_index != [] do
+        kv_parsed =
+          Enum.map(matches_index, fn [{start, len} | _] ->
+            kv_str = binary_part(line, start, len)
+
+            case String.split(kv_str, "=", parts: 2) do
+              [key, raw_val] ->
+                clean_val = String.trim(raw_val, "\"")
+                {key, clean_val, raw_val, start, len}
+
+              _ ->
+                nil
+            end
+          end)
+          |> Enum.reject(&is_nil/1)
+
+        if valid_logfmt_line?(line, kv_parsed) do
+          format_logfmt_parsed(line, kv_parsed)
+        else
+          nil
+        end
       else
         nil
       end
@@ -190,13 +209,13 @@ defmodule Caudata.UI.LogFormatter do
     end
   end
 
-  defp valid_logfmt_line?(line, matches) do
-    contains_known_logfmt_key?(matches) or
-      (length(matches) >= 2 and Regex.match?(~r/^[a-zA-Z0-9_.-]+=/, String.trim_leading(line)))
+  defp valid_logfmt_line?(line, kv_parsed) do
+    contains_known_logfmt_key?(kv_parsed) or
+      (length(kv_parsed) >= 2 and Regex.match?(~r/^[a-zA-Z0-9_.-]+=/, String.trim_leading(line)))
   end
 
-  defp contains_known_logfmt_key?(matches) do
-    Enum.any?(matches, fn [key, _qval, _uval] ->
+  defp contains_known_logfmt_key?(kv_parsed) do
+    Enum.any?(kv_parsed, fn {key, _val, _raw_val, _start, _len} ->
       String.downcase(key) in [
         "level",
         "lvl",
@@ -212,21 +231,15 @@ defmodule Caudata.UI.LogFormatter do
     end)
   end
 
-  defp format_logfmt_matches(line, matches) do
-    matches_index = Regex.scan(@logfmt_regex, line, return: :index)
-
+  defp format_logfmt_parsed(line, kv_parsed) do
     kv_map =
-      Enum.map(matches, fn [key, qval, uval] ->
-        val = if qval != "", do: qval, else: uval
-        {key, val}
-      end)
-      |> Enum.into(%{})
+      Enum.into(kv_parsed, %{}, fn {key, val, _raw, _s, _l} -> {key, val} end)
 
     lvl_val = fetch_first_key_value(kv_map, ["level", "lvl", "severity"])
     is_err = is_logfmt_error?(kv_map, lvl_val, line)
 
     {spans, last_pos} =
-      Enum.reduce(matches_index, {[], 0}, fn [{start, len} | _captures], {acc, pos} ->
+      Enum.reduce(kv_parsed, {[], 0}, fn {key, clean_val, raw_val, start, len}, {acc, pos} ->
         acc =
           if start > pos do
             unmatched = binary_part(line, pos, start - pos)
@@ -235,8 +248,7 @@ defmodule Caudata.UI.LogFormatter do
             acc
           end
 
-        kv_str = binary_part(line, start, len)
-        kv_spans = format_logfmt_pair(kv_str)
+        kv_spans = format_logfmt_parsed_pair(key, clean_val, raw_val)
 
         {Enum.reverse(kv_spans) ++ acc, start + len}
       end)
@@ -254,33 +266,26 @@ defmodule Caudata.UI.LogFormatter do
     {Enum.reverse(spans), is_err}
   end
 
-  defp format_logfmt_pair(kv_str) do
-    case String.split(kv_str, "=", parts: 2) do
-      [key, val] ->
-        key_span = Span.new(key <> "=", style: %Style{fg: :cyan})
-        clean_val = String.trim(val, "\"")
+  defp format_logfmt_parsed_pair(key, clean_val, raw_val) do
+    key_span = Span.new(key <> "=", style: %Style{fg: :cyan})
 
-        val_spans =
-          cond do
-            String.downcase(key) in ["level", "lvl", "severity"] ->
-              style = level_style(clean_val)
-              [Span.new("[" <> String.upcase(clean_val) <> "]", style: %{style | modifiers: [:bold]})]
+    val_spans =
+      cond do
+        String.downcase(key) in ["level", "lvl", "severity"] ->
+          style = level_style(clean_val)
+          [Span.new("[" <> String.upcase(clean_val) <> "]", style: %{style | modifiers: [:bold]})]
 
-            String.downcase(key) in ["ts", "time", "timestamp"] ->
-              [Span.new(clean_val, style: %Style{fg: :dark_gray})]
+        String.downcase(key) in ["ts", "time", "timestamp"] ->
+          [Span.new(clean_val, style: %Style{fg: :dark_gray})]
 
-            String.downcase(key) in ["msg", "message"] ->
-              sub_highlight(clean_val, %Style{fg: :white})
+        String.downcase(key) in ["msg", "message"] ->
+          sub_highlight(clean_val, %Style{fg: :white})
 
-            true ->
-              sub_highlight(val, %Style{fg: :yellow})
-          end
+        true ->
+          sub_highlight(raw_val, %Style{fg: :yellow})
+      end
 
-        [key_span | val_spans]
-
-      _ ->
-        [Span.new(kv_str, style: %Style{fg: :white})]
-    end
+    [key_span | val_spans]
   end
 
   defp is_logfmt_error?(kv_map, level_str, line) do
@@ -354,6 +359,15 @@ defmodule Caudata.UI.LogFormatter do
   def sub_highlight(nil, _base_style), do: []
 
   def sub_highlight(text, base_style) when is_binary(text) do
+    try do
+      Caudata.Native.sub_highlight_native(text)
+    rescue
+      _ ->
+        do_sub_highlight_fallback(text, base_style)
+    end
+  end
+
+  defp do_sub_highlight_fallback(text, base_style) do
     matches = Regex.scan(@sub_highlight_regex, text, return: :index)
 
     if matches == [] do

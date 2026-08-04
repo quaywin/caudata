@@ -145,7 +145,7 @@ defmodule Caudata.ConfigStore do
       initialize_defaults(my_tab)
     end
 
-    {:ok, %{table: my_tab, config_path: path}}
+    {:ok, %{table: my_tab, config_path: path, save_timer: nil}}
   end
 
   @impl true
@@ -157,8 +157,8 @@ defmodule Caudata.ConfigStore do
   def handle_call({:add_profile, profile}, _from, state) do
     profile = Caudata.Profile.ensure_struct_fields(profile)
     :ets.insert(state.table, {{:profile, profile.id}, profile})
-    save_async(state)
-    {:reply, :ok, state}
+    new_state = save_async(state)
+    {:reply, :ok, new_state}
   end
 
   @impl true
@@ -171,8 +171,8 @@ defmodule Caudata.ConfigStore do
         updated_profile = Caudata.Profile.ensure_struct_fields(updated_profile)
 
         :ets.insert(state.table, {{:profile, id}, updated_profile})
-        save_async(state)
-        {:reply, {:ok, updated_profile}, state}
+        new_state = save_async(state)
+        {:reply, {:ok, updated_profile}, new_state}
 
       [] ->
         {:reply, {:error, :not_found}, state}
@@ -182,15 +182,15 @@ defmodule Caudata.ConfigStore do
   @impl true
   def handle_call({:delete_profile, id}, _from, state) do
     :ets.delete(state.table, {:profile, id})
-    save_async(state)
-    {:reply, :ok, state}
+    new_state = save_async(state)
+    {:reply, :ok, new_state}
   end
 
   @impl true
   def handle_call({:put_setting, section, key, value}, _from, state) do
     :ets.insert(state.table, {{section, key}, value})
-    save_async(state)
-    {:reply, :ok, state}
+    new_state = save_async(state)
+    {:reply, :ok, new_state}
   end
 
   @impl true
@@ -199,8 +199,14 @@ defmodule Caudata.ConfigStore do
       :ets.insert(state.table, {{section, key}, value})
     end)
 
-    save_async(state)
-    {:reply, :ok, state}
+    new_state = save_async(state)
+    {:reply, :ok, new_state}
+  end
+
+  @impl true
+  def handle_info(:perform_save, state) do
+    do_perform_save(state)
+    {:noreply, Map.put(state, :save_timer, nil)}
   end
 
   # Helpers
@@ -236,6 +242,17 @@ defmodule Caudata.ConfigStore do
   end
 
   defp save_async(state) do
+    if Application.get_env(:caudata, :env) == :test do
+      do_perform_save(state)
+      state
+    else
+      if state.save_timer, do: Process.cancel_timer(state.save_timer)
+      timer = Process.send_after(self(), :perform_save, 200)
+      Map.put(state, :save_timer, timer)
+    end
+  end
+
+  defp do_perform_save(state) do
     # Capture snapshot of the table in memory
     file_tab = :ets.new(:caudata_config_file, [:set, :public])
 
@@ -248,36 +265,27 @@ defmodule Caudata.ConfigStore do
     )
 
     path = state.config_path
-    is_test = Application.get_env(:caudata, :env) == :test
 
-    do_save = fn ->
-      dir = Path.dirname(path)
-      File.mkdir_p!(dir)
-      tmp_path = path <> ".tmp.#{System.unique_integer([:positive])}"
-      tmp_char_path = String.to_charlist(tmp_path)
+    dir = Path.dirname(path)
+    File.mkdir_p!(dir)
+    tmp_path = path <> ".tmp.#{System.unique_integer([:positive])}"
+    tmp_char_path = String.to_charlist(tmp_path)
 
-      try do
-        case :ets.tab2file(file_tab, tmp_char_path) do
-          :ok ->
-            File.rename!(tmp_path, path)
+    try do
+      case :ets.tab2file(file_tab, tmp_char_path) do
+        :ok ->
+          File.rename!(tmp_path, path)
 
-          {:error, reason} ->
-            Logger.error("Failed to persist config to disk at #{path}: #{inspect(reason)}")
-            File.rm(tmp_path)
-        end
-      rescue
-        e ->
-          Logger.error("Error persisting config: #{inspect(e)}")
+        {:error, reason} ->
+          Logger.error("Failed to persist config to disk at #{path}: #{inspect(reason)}")
           File.rm(tmp_path)
-      after
-        :ets.delete(file_tab)
       end
-    end
-
-    if is_test do
-      do_save.()
-    else
-      Task.start(do_save)
+    rescue
+      e ->
+        Logger.error("Error persisting config: #{inspect(e)}")
+        File.rm(tmp_path)
+    after
+      :ets.delete(file_tab)
     end
   end
 end

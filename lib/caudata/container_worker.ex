@@ -78,7 +78,7 @@ defmodule Caudata.ContainerWorker do
       stdout_buffer: "",
       stderr_buffer: "",
       ssh_client: ssh_client,
-      tail_limit: 10000,
+      tail_limit: 1000,
       channel_opened_at: nil,
       pending_logs: [],
       flush_timer: nil,
@@ -350,7 +350,7 @@ defmodule Caudata.ContainerWorker do
               escaped_container_id = String.replace(state.container_id, "'", "'\\\'\''")
 
               build_log_cmd(
-                "docker logs -t --follow --tail #{state.tail_limit || 10000} #{escaped_container_id}",
+                "docker logs -t --follow --tail #{state.tail_limit || 1000} #{escaped_container_id}",
                 state.password
               )
           end

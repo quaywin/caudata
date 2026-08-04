@@ -86,13 +86,34 @@ defmodule Caudata.LogStore do
       Map.get(state.sources, source_id, %{
         queue: :queue.new(),
         size: 0,
-        drop_count: 0
+        drop_count: 0,
+        next_seq: 0,
+        last_ts: nil
       })
+
+    next_seq = Map.get(source_state, :next_seq, 0)
+    last_ts = Map.get(source_state, :last_ts, nil)
+
+    {meta_lines, final_seq, final_last_ts} =
+      Enum.reduce(
+        sanitized_lines,
+        {[], next_seq, last_ts},
+        fn line, {acc, seq, cur_last_ts} ->
+          line_ts = Map.get(line, :timestamp)
+          effective_ts = if is_binary(line_ts) and line_ts != "", do: line_ts, else: cur_last_ts
+          sort_ts = effective_ts || ""
+
+          item = Map.merge(line, %{seq: seq, sort_ts: sort_ts})
+          {[item | acc], seq + 1, effective_ts}
+        end
+      )
+
+    sanitized_with_meta = Enum.reverse(meta_lines)
 
     # Add each line to the queue
     {new_queue, new_size, new_drops} =
       Enum.reduce(
-        sanitized_lines,
+        sanitized_with_meta,
         {source_state.queue, source_state.size, source_state.drop_count},
         fn line, {q, sz, dr} ->
           q = :queue.in(line, q)
@@ -116,7 +137,9 @@ defmodule Caudata.LogStore do
     new_source_state = %{
       queue: new_queue,
       size: new_size,
-      drop_count: new_drops
+      drop_count: new_drops,
+      next_seq: final_seq,
+      last_ts: final_last_ts
     }
 
     new_sources = Map.put(state.sources, source_id, new_source_state)
@@ -154,12 +177,17 @@ defmodule Caudata.LogStore do
         lines = :queue.to_list(source_state.queue)
 
         sorted_lines =
-          Enum.sort_by(lines, fn
-            %{timestamp: ts} when is_binary(ts) -> ts
-            _ -> ""
+          Enum.sort_by(lines, fn line ->
+            ts = Map.get(line, :sort_ts) || Map.get(line, :timestamp) || ""
+            seq = Map.get(line, :seq, 0)
+            {ts, seq}
           end)
 
-        tail_lines = Enum.take(sorted_lines, -limit)
+        tail_lines =
+          sorted_lines
+          |> Enum.take(-limit)
+          |> Enum.map(fn item -> Map.drop(item, [:seq, :sort_ts]) end)
+
         {:reply, tail_lines, state}
     end
   end

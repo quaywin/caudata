@@ -72,4 +72,21 @@ defmodule Caudata.LogStoreTest do
     snapshot = LogStore.get_snapshot(TestLogStore, "source_del")
     assert snapshot == []
   end
+
+  test "keeps new log lines without timestamps at the end of the stream" do
+    LogStore.append_logs(TestLogStore, "source_ts", [
+      "2026-08-04T10:00:00Z line with timestamp",
+      "line without timestamp 1",
+      "line without timestamp 2"
+    ])
+
+    Process.sleep(50)
+    snapshot = LogStore.get_snapshot(TestLogStore, "source_ts")
+
+    assert snapshot == [
+             %{timestamp: "2026-08-04T10:00:00Z", stream: :stdout, message: "line with timestamp"},
+             %{timestamp: nil, stream: :stdout, message: "line without timestamp 1"},
+             %{timestamp: nil, stream: :stdout, message: "line without timestamp 2"}
+           ]
+  end
 end

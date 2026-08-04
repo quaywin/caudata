@@ -344,7 +344,7 @@ defmodule Caudata.UI.Components.Sidebar do
     end
 
     source_id = "#{server_id}/#{container_id}"
-    logs = Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, 10000)
+    logs = Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, 1000)
 
     stats =
       if Process.whereis(Caudata.LogStore) do
@@ -360,7 +360,7 @@ defmodule Caudata.UI.Components.Sidebar do
          selected_container_name: container_name,
          logs: logs,
          logs_scroll_y: :bottom,
-         logs_fetch_limit: 100,
+         logs_fetch_limit: 1000,
          loading_history: false,
          loading_history_ticks: 0,
          logs_len_before_history_load: 0,

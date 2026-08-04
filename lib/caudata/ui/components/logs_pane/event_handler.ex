@@ -381,10 +381,21 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
   end
 
   defp update_filter_regex(model, new_val) do
+    pattern_to_check =
+      if String.starts_with?(new_val, "!") do
+        String.slice(new_val, 1..-1//1)
+      else
+        new_val
+      end
+
     error =
-      case Regex.compile(new_val) do
-        {:ok, _} -> false
-        _ -> true
+      if pattern_to_check == "" do
+        false
+      else
+        case Regex.compile(pattern_to_check) do
+          {:ok, _} -> false
+          _ -> true
+        end
       end
 
     {%{model | filter_regex: new_val, filter_error: error}, []}

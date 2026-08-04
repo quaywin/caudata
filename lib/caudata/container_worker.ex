@@ -20,7 +20,8 @@ defmodule Caudata.ContainerWorker do
     :channel_opened_at,
     :pending_logs,
     :flush_timer,
-    :password
+    :password,
+    :reconnecting_stream
   ]
 
   # Client API
@@ -82,7 +83,8 @@ defmodule Caudata.ContainerWorker do
       channel_opened_at: nil,
       pending_logs: [],
       flush_timer: nil,
-      password: Keyword.get(opts, :password)
+      password: Keyword.get(opts, :password),
+      reconnecting_stream: false
     }
 
     {:ok, state}
@@ -366,11 +368,18 @@ defmodule Caudata.ContainerWorker do
               escaped_service = String.replace(service_name, "'", "'\\\'\''")
 
               cmd =
-                if stats.size > 0 && stats.last_ts && stats.last_ts != "" do
-                  "journalctl -u \"#{escaped_service}\" -f --since \"#{stats.last_ts}\""
-                else
-                  limit = if stats.size > 0, do: 0, else: state.tail_limit || 1000
-                  "journalctl -u \"#{escaped_service}\" -f -n #{limit}"
+                cond do
+                  stats.size > 0 && stats.last_ts && stats.last_ts != "" ->
+                    limit = state.tail_limit || 1000
+                    since_ts = clamp_timestamp_max_age(stats.last_ts, 3600)
+                    "journalctl -u \"#{escaped_service}\" -f -n #{limit} --since \"#{since_ts}\""
+
+                  stats.size > 0 ->
+                    "journalctl -u \"#{escaped_service}\" -f -n 0"
+
+                  true ->
+                    limit = state.tail_limit || 1000
+                    "journalctl -u \"#{escaped_service}\" -f -n #{limit}"
                 end
 
               build_log_cmd(cmd, state.password)
@@ -388,15 +397,24 @@ defmodule Caudata.ContainerWorker do
               escaped_container_id = String.replace(state.container_id, "'", "'\\\'\''")
 
               cmd =
-                if stats.size > 0 && stats.last_ts && stats.last_ts != "" do
-                  "docker logs -t --follow --since \"#{stats.last_ts}\" #{escaped_container_id}"
-                else
-                  limit = if stats.size > 0, do: 0, else: state.tail_limit || 1000
-                  "docker logs -t --follow --tail #{limit} #{escaped_container_id}"
+                cond do
+                  stats.size > 0 && stats.last_ts && stats.last_ts != "" ->
+                    limit = state.tail_limit || 1000
+                    since_ts = clamp_timestamp_max_age(stats.last_ts, 3600)
+                    "docker logs -t --follow --tail #{limit} --since \"#{since_ts}\" #{escaped_container_id}"
+
+                  stats.size > 0 ->
+                    "docker logs -t --follow --tail 0 #{escaped_container_id}"
+
+                  true ->
+                    limit = state.tail_limit || 1000
+                    "docker logs -t --follow --tail #{limit} #{escaped_container_id}"
                 end
 
               build_log_cmd(cmd, state.password)
           end
+
+        is_reconnect = stats.size > 0 && stats.last_ts && stats.last_ts != ""
 
         case state.ssh_client.exec(conn_ref, channel_id, log_cmd) do
           :ok ->
@@ -407,7 +425,8 @@ defmodule Caudata.ContainerWorker do
                  channel_id: channel_id,
                  stdout_buffer: "",
                  stderr_buffer: "",
-                 channel_opened_at: System.monotonic_time()
+                 channel_opened_at: System.monotonic_time(),
+                 reconnecting_stream: is_reconnect
              }}
 
           {:error, reason} ->
@@ -437,13 +456,37 @@ defmodule Caudata.ContainerWorker do
       state.ssh_client.close_channel(state.conn_ref, state.channel_id)
     end
 
-    %{state | channel_id: nil, conn_ref: nil, channel_opened_at: nil}
+    %{
+      state
+      | channel_id: nil,
+        conn_ref: nil,
+        channel_opened_at: nil,
+        reconnecting_stream: false
+    }
   end
 
   # Flush logs helper that writes all pending logs to LogStore
   defp flush_pending_logs(state) do
     if state.pending_logs != [] do
       logs_to_send = Enum.reverse(state.pending_logs)
+
+      state =
+        if state.reconnecting_stream do
+          limit = state.tail_limit || 1000
+
+          if length(logs_to_send) >= limit do
+            Logger.info(
+              "Log limit reached on reconnect (#{length(logs_to_send)} lines >= #{limit}). Clearing old log buffer for continuous history."
+            )
+
+            LogStore.clear_logs(state.source_id)
+          end
+
+          %{state | reconnecting_stream: false}
+        else
+          state
+        end
+
       LogStore.append_logs(state.source_id, logs_to_send)
       %{state | pending_logs: []}
     else
@@ -503,6 +546,39 @@ defmodule Caudata.ContainerWorker do
           |> String.replace("`", "\\`")
 
         "sh -c \"#{escaped_for_dq}\""
+    end
+  end
+
+  def clamp_timestamp_max_age(nil, _max_seconds), do: nil
+  def clamp_timestamp_max_age("", _max_seconds), do: nil
+
+  def clamp_timestamp_max_age(last_ts, max_seconds) when is_binary(last_ts) and is_integer(max_seconds) do
+    case parse_iso8601_dt(last_ts) do
+      {:ok, dt} ->
+        now = DateTime.utc_now()
+        min_allowed = DateTime.add(now, -max_seconds, :second)
+
+        if DateTime.compare(dt, min_allowed) == :lt do
+          DateTime.to_iso8601(min_allowed)
+        else
+          last_ts
+        end
+
+      _ ->
+        last_ts
+    end
+  end
+
+  defp parse_iso8601_dt(last_ts) do
+    case DateTime.from_iso8601(last_ts) do
+      {:ok, dt, _offset} ->
+        {:ok, dt}
+
+      _ ->
+        case NaiveDateTime.from_iso8601(last_ts) do
+          {:ok, ndt} -> {:ok, DateTime.from_naive!(ndt, "Etc/UTC")}
+          _ -> :error
+        end
     end
   end
 end

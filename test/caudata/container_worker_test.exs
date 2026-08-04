@@ -294,7 +294,7 @@ defmodule Caudata.ContainerWorkerTest do
     end)
     |> expect(:exec, fn :dummy_conn, :dummy_channel, cmd ->
       assert String.contains?(cmd, "--since")
-      assert String.contains?(cmd, "2026-08-04T14:40:00.000000000Z")
+      assert String.contains?(cmd, "--tail 1000")
       :ok
     end)
     |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->
@@ -330,6 +330,92 @@ defmodule Caudata.ContainerWorkerTest do
     status = ContainerWorker.get_streaming_status(pid)
     assert status.streaming? == false
 
+    stop_supervised(ContainerWorker)
+  end
+
+  test "clamp_timestamp_max_age clamps timestamps older than max seconds" do
+    old_ts = "2020-01-01T00:00:00.000Z"
+    clamped = ContainerWorker.clamp_timestamp_max_age(old_ts, 3600)
+    assert clamped != old_ts
+
+    recent_ts = DateTime.utc_now() |> DateTime.add(-300, :second) |> DateTime.to_iso8601()
+    clamped_recent = ContainerWorker.clamp_timestamp_max_age(recent_ts, 3600)
+    assert clamped_recent == recent_ts
+  end
+
+  test "reconnect clears old logs if initial batch reaches tail limit" do
+    container = %{
+      id: "container123",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 3 hours",
+      state: "running"
+    }
+
+    source_id = "my-server/container123"
+    LogStore.append_logs(source_id, ["2026-08-04T14:40:00.000000000Z old log 1"])
+
+    Mock
+    |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_channel} end)
+    |> expect(:exec, fn :dummy_conn, :dummy_channel, _cmd -> :ok end)
+    |> expect(:close_channel, fn :dummy_conn, :dummy_channel -> :ok end)
+
+    opts = [ssh_client: Mock]
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+
+    # Send 1000 lines (reaches tail limit)
+    Enum.each(1..1000, fn i ->
+      send(pid, {:ssh_cm, :dummy_conn, {:data, :dummy_channel, 0, "2026-08-04T15:00:00.000000000Z new log #{i}\n"}})
+    end)
+
+    send(pid, :flush_logs)
+    Process.sleep(50)
+
+    snapshot = LogStore.get_snapshot(source_id)
+    # Verify old log was cleared because 1000 lines reached limit
+    refute Enum.any?(snapshot, fn msg -> String.contains?(to_string(msg.message), "old log 1") end)
+    assert length(snapshot) == 1000
+
+    assert :ok = ContainerWorker.stop_streaming(pid)
+    stop_supervised(ContainerWorker)
+  end
+
+  test "reconnect merges logs if initial batch is below tail limit" do
+    container = %{
+      id: "container123",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 3 hours",
+      state: "running"
+    }
+
+    source_id = "my-server/container123"
+    LogStore.append_logs(source_id, ["2026-08-04T14:40:00.000000000Z old log 1"])
+
+    Mock
+    |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_channel} end)
+    |> expect(:exec, fn :dummy_conn, :dummy_channel, _cmd -> :ok end)
+    |> expect(:close_channel, fn :dummy_conn, :dummy_channel -> :ok end)
+
+    opts = [ssh_client: Mock]
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+
+    # Send 5 lines (under limit)
+    Enum.each(1..5, fn i ->
+      send(pid, {:ssh_cm, :dummy_conn, {:data, :dummy_channel, 0, "2026-08-04T15:00:00.000000000Z new log #{i}\n"}})
+    end)
+
+    send(pid, :flush_logs)
+    Process.sleep(50)
+
+    snapshot = LogStore.get_snapshot(source_id)
+    # Verify old log was preserved and merged with 5 new lines
+    assert Enum.any?(snapshot, fn msg -> String.contains?(to_string(msg.message), "old log 1") end)
+    assert length(snapshot) == 6
+
+    assert :ok = ContainerWorker.stop_streaming(pid)
     stop_supervised(ContainerWorker)
   end
 end

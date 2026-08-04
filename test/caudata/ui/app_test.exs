@@ -52,7 +52,7 @@ defmodule Caudata.UI.AppTest do
     assert resized_state.height == 35
   end
 
-  test "handle_info/2 handles regex filter compile safely" do
+  test "handle_info/2 handles regex filter compile safely and negative filter !" do
     {:ok, state} = App.mount([])
 
     # Invalid regex
@@ -64,6 +64,16 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, updated_state2} = App.handle_info({:update_filter, "valid.*regex"}, state)
     assert updated_state2.filter_regex == "valid.*regex"
     assert updated_state2.filter_error == false
+
+    # Single ! (no error)
+    assert {:noreply, updated_state3} = App.handle_info({:update_filter, "!"}, state)
+    assert updated_state3.filter_regex == "!"
+    assert updated_state3.filter_error == false
+
+    # Negative filter !healthz (valid)
+    assert {:noreply, updated_state4} = App.handle_info({:update_filter, "!healthz"}, state)
+    assert updated_state4.filter_regex == "!healthz"
+    assert updated_state4.filter_error == false
   end
 
   test "handle_event/2 handles Ctrl+C and 'q' to quit application" do
@@ -762,13 +772,9 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, state_tab2} = App.handle_event(event_tab, state_tab1b)
     assert state_tab2.settings_focus == :custom_logs
 
-    # Tab 4: :custom_logs -> :general
+    # Tab 4: :custom_logs -> :servers
     assert {:noreply, state_tab3} = App.handle_event(event_tab, state_tab2)
-    assert state_tab3.settings_focus == :general
-
-    # Tab 5: :general -> :servers
-    assert {:noreply, state_tab4} = App.handle_event(event_tab, state_tab3)
-    assert state_tab4.settings_focus == :servers
+    assert state_tab3.settings_focus == :servers
 
     # Verify down/up key modifies profile selection when focus is :servers
     event_down = %ExRatatui.Event.Key{code: "down", modifiers: []}
@@ -1336,45 +1342,6 @@ defmodule Caudata.UI.AppTest do
     assert updated_state_nil.logs == new_logs
   end
 
-  test "General settings tab handles keyboard events and saves global log capacity" do
-    {:ok, state} = App.mount([])
-
-    state = %{
-      state
-      | modal_visible: true,
-        modal_type: :settings,
-        settings_focus: :general,
-        settings_global_focus_idx: 0,
-        settings_global_capacity: "1000",
-        settings_status_msg: nil
-    }
-
-    # Type an extra digit "5" (representing character typing)
-    event_5 = %ExRatatui.Event.Key{code: "5", modifiers: []}
-    assert {:noreply, state_typed} = App.handle_event(event_5, state)
-    assert state_typed.settings_global_capacity == "10005"
-
-    # Press backspace to delete the "5"
-    event_bs = %ExRatatui.Event.Key{code: "backspace", modifiers: []}
-    assert {:noreply, state_bs} = App.handle_event(event_bs, state_typed)
-    assert state_bs.settings_global_capacity == "1000"
-
-    # Type a non-digit character like "a", it should be ignored since we pattern match for digits
-    event_a = %ExRatatui.Event.Key{code: "a", modifiers: []}
-    assert {:noreply, state_ignored} = App.handle_event(event_a, state_bs)
-    assert state_ignored.settings_global_capacity == "1000"
-
-    # Navigate down to "Save" button
-    event_down = %ExRatatui.Event.Key{code: "down", modifiers: []}
-    assert {:noreply, state_focused_save} = App.handle_event(event_down, state_bs)
-    assert state_focused_save.settings_global_focus_idx == 1
-
-    # Press enter to save
-    event_enter = %ExRatatui.Event.Key{code: "enter", modifiers: []}
-    assert {:noreply, state_saved} = App.handle_event(event_enter, state_focused_save)
-    assert state_saved.settings_status_msg =~ "Successfully saved log capacity: 1000"
-  end
-
   describe "visual select & copy all" do
     test "pressing 'v' enters visual select mode" do
       {:ok, state} = App.mount([])
@@ -1608,22 +1575,7 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, pasted_settings} = App.handle_event(event_paste_p, settings_state)
     assert pasted_settings.settings_connection_fields["host_name"] == "host-mocked_paste_data"
 
-    # 3. SettingsModal (General - capacity, digits only)
-    general_state = %{
-      state
-      | modal_visible: true,
-        modal_type: :settings,
-        settings_focus: :general,
-        # capacity
-        settings_global_focus_idx: 0,
-        settings_global_capacity: "10"
-    }
-
-    assert {:noreply, pasted_general} = App.handle_event(event_paste_p, general_state)
-    # "mocked_paste_data" has no digits, so capacity remains "10"
-    assert pasted_general.settings_global_capacity == "10"
-
-    # 4. Search log regex input
+    # 3. Search log regex input
     searching_state = %{
       state
       | mode: :searching,
@@ -1633,5 +1585,42 @@ defmodule Caudata.UI.AppTest do
 
     assert {:noreply, pasted_search} = App.handle_event(event_paste_p, searching_state)
     assert pasted_search.filter_regex == "pattern_mocked_paste_data"
+  end
+
+  test "ViewHelper.get_displayed_logs filters logs positively and negatively with !" do
+    logs = [
+      %{timestamp: "12:00:01", stream: "stdout", message: "GET /healthz 200 OK"},
+      %{timestamp: "12:00:02", stream: "stderr", message: "ERROR Database connection failed"},
+      %{timestamp: "12:00:03", stream: "stdout", message: "GET /ping 200 OK"}
+    ]
+
+    base_model = %{
+      filter_regex: "",
+      filter_error: false,
+      selected_container_id: "c1",
+      logs: logs,
+      mode: :browsing
+    }
+
+    # No filter returns all
+    assert length(Caudata.UI.ViewHelper.get_displayed_logs(base_model)) == 3
+
+    # Positive filter "ERROR"
+    pos_model = %{base_model | filter_regex: "ERROR"}
+    pos_logs = Caudata.UI.ViewHelper.get_displayed_logs(pos_model)
+    assert length(pos_logs) == 1
+    assert hd(pos_logs).message =~ "ERROR"
+
+    # Negative filter "!healthz"
+    neg_model = %{base_model | filter_regex: "!healthz"}
+    neg_logs = Caudata.UI.ViewHelper.get_displayed_logs(neg_model)
+    assert length(neg_logs) == 2
+    refute Enum.any?(neg_logs, &(&1.message =~ "healthz"))
+
+    # Negative regex filter "!(healthz|ping)"
+    neg_re_model = %{base_model | filter_regex: "!(healthz|ping)"}
+    neg_re_logs = Caudata.UI.ViewHelper.get_displayed_logs(neg_re_model)
+    assert length(neg_re_logs) == 1
+    assert hd(neg_re_logs).message =~ "ERROR"
   end
 end

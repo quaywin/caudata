@@ -54,16 +54,9 @@ defmodule Caudata.UI.Components.Footer do
 
     size = if current_src_id, do: Map.get(buffer_sizes, current_src_id, 0), else: 0
 
-    capacity =
-      if Process.whereis(Caudata.ConfigStore) do
-        Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :global, :capacity, 10000)
-      else
-        10000
-      end
-
     final_spans =
       if size > 0 do
-        footer_spans ++ [Span.new(" | Lines: #{size}/#{capacity}")]
+        footer_spans ++ [Span.new(" | Lines: #{size}")]
       else
         footer_spans
       end

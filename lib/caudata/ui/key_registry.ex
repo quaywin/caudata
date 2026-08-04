@@ -150,12 +150,6 @@ defmodule Caudata.UI.KeyRegistry do
                 shortcut("[a]", "Add Path ", :green),
                 shortcut("[d/Backspace]", "Delete Path ", :red)
               ]
-
-            :general ->
-              [
-                shortcut("[⇅]", "Navigate fields ", :cyan),
-                shortcut("[Type]", "Edit text ", :green)
-              ]
           end
 
         [shortcut("[Tab/⇅/⇄]", "Switch Tab ", :yellow)] ++
@@ -576,13 +570,6 @@ defmodule Caudata.UI.KeyRegistry do
           }
         end
 
-      capacity =
-        if Process.whereis(Caudata.ConfigStore) do
-          Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :global, :capacity, 10000)
-        else
-          10000
-        end
-
       {%{
          model
          | modal_visible: true,
@@ -593,8 +580,6 @@ defmodule Caudata.UI.KeyRegistry do
            settings_custom_log_idx: 0,
            settings_connection_focus_idx: 0,
            settings_connection_fields: connection_fields,
-           settings_global_focus_idx: 0,
-           settings_global_capacity: to_string(capacity),
            settings_input_active: false,
            settings_input_value: "",
            settings_service_search: "",

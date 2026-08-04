@@ -52,29 +52,44 @@ defmodule Caudata.UI.ViewHelper do
   defp do_get_displayed_logs(model) do
     filtered_logs =
       if model.filter_regex != "" and not model.filter_error do
-        query = model.filter_regex
-
-        if String.contains?(query, ["\\", "^", "$", "*", "+", "?", "(", ")", "[", "]", "{", "}", "|"]) do
-          re =
-            Map.get(model, :compiled_filter_regex) ||
-              case Regex.compile(query) do
-                {:ok, compiled} -> compiled
-                _ -> nil
-              end
-
-          if re do
-            Enum.filter(model.logs, fn
-              %{message: msg} -> Regex.match?(re, msg)
-              line when is_binary(line) -> Regex.match?(re, line)
-            end)
+        {is_negative, query} =
+          if String.starts_with?(model.filter_regex, "!") do
+            {true, String.slice(model.filter_regex, 1..-1//1)}
           else
-            model.logs
+            {false, model.filter_regex}
           end
+
+        if query == "" do
+          model.logs
         else
-          Enum.filter(model.logs, fn
-            %{message: msg} -> String.contains?(msg, query)
-            line when is_binary(line) -> String.contains?(line, query)
-          end)
+          if String.contains?(query, ["\\", "^", "$", "*", "+", "?", "(", ")", "[", "]", "{", "}", "|"]) do
+            re =
+              Map.get(model, :compiled_filter_regex) ||
+                case Regex.compile(query) do
+                  {:ok, compiled} -> compiled
+                  _ -> nil
+                end
+
+            if re do
+              Enum.filter(model.logs, fn
+                %{message: msg} ->
+                  if is_negative, do: not Regex.match?(re, msg), else: Regex.match?(re, msg)
+
+                line when is_binary(line) ->
+                  if is_negative, do: not Regex.match?(re, line), else: Regex.match?(re, line)
+              end)
+            else
+              model.logs
+            end
+          else
+            Enum.filter(model.logs, fn
+              %{message: msg} ->
+                if is_negative, do: not String.contains?(msg, query), else: String.contains?(msg, query)
+
+              line when is_binary(line) ->
+                if is_negative, do: not String.contains?(line, query), else: String.contains?(line, query)
+            end)
+          end
         end
       else
         model.logs

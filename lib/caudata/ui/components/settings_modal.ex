@@ -14,8 +14,7 @@ defmodule Caudata.UI.Components.SettingsModal do
     ConnectionTab,
     ContainersTab,
     ServicesTab,
-    CustomLogsTab,
-    GeneralTab
+    CustomLogsTab
   }
 
   @doc """
@@ -46,8 +45,7 @@ defmodule Caudata.UI.Components.SettingsModal do
       {:connection, "SSH Connection"},
       {:containers, "Docker Containers"},
       {:services, "System Services"},
-      {:custom_logs, "Custom Logs"},
-      {:general, "General"}
+      {:custom_logs, "Custom Logs"}
     ]
 
     tab_spans =
@@ -83,9 +81,6 @@ defmodule Caudata.UI.Components.SettingsModal do
 
         :custom_logs ->
           CustomLogsTab.render(state, profile, custom_logs)
-
-        :general ->
-          GeneralTab.render(state)
       end
 
     popup_widget = %Popup{
@@ -146,9 +141,6 @@ defmodule Caudata.UI.Components.SettingsModal do
     cond do
       model.settings_focus == :connection ->
         handle_connection_key(key, key_data, model, profile)
-
-      model.settings_focus == :general ->
-        handle_general_key(key, key_data, model)
 
       true ->
         cond do
@@ -232,8 +224,7 @@ defmodule Caudata.UI.Components.SettingsModal do
                     :connection -> :containers
                     :containers -> :services
                     :services -> :custom_logs
-                    :custom_logs -> :general
-                    :general -> :servers
+                    :custom_logs -> :servers
                   end
 
                 # Reset search state when leaving the services tab
@@ -249,12 +240,11 @@ defmodule Caudata.UI.Components.SettingsModal do
               k when k in [:left, "h"] ->
                 prev_focus =
                   case model.settings_focus do
-                    :servers -> :general
+                    :servers -> :custom_logs
                     :connection -> :servers
                     :containers -> :connection
                     :services -> :containers
                     :custom_logs -> :services
-                    :general -> :custom_logs
                   end
 
                 # Reset search state when leaving the services tab
@@ -914,101 +904,6 @@ defmodule Caudata.UI.Components.SettingsModal do
 
 
 
-  defp handle_general_key(key, key_data, model) do
-    # fields are: "capacity" (idx 0), :save (idx 1), :cancel (idx 2)
-    active_idx = model.settings_global_focus_idx || 0
-    num_fields = 3
-
-    case key do
-      :down ->
-        new_focus = rem(active_idx + 1, num_fields)
-        {%{model | settings_global_focus_idx: new_focus, settings_status_msg: nil}, []}
-
-      :up ->
-        new_focus = rem(active_idx - 1 + num_fields, num_fields)
-        {%{model | settings_global_focus_idx: new_focus, settings_status_msg: nil}, []}
-
-      k when k in [:tab, :right] ->
-        {%{model | settings_focus: :servers, settings_status_msg: nil}, []}
-
-      :left ->
-        {%{model | settings_focus: :custom_logs, settings_status_msg: nil}, []}
-
-      :enter ->
-        case active_idx do
-          # cancel
-          2 ->
-            # Revert capacity to config value and switch to servers
-            capacity =
-              if Process.whereis(Caudata.ConfigStore) do
-                Caudata.ConfigStore.get_setting(Caudata.ConfigStore, :global, :capacity, 10000)
-              else
-                10000
-              end
-
-            {%{
-               model
-               | settings_focus: :servers,
-                 settings_global_focus_idx: 0,
-                 settings_global_capacity: to_string(capacity),
-                 settings_status_msg: nil
-             }, []}
-
-          # save
-          1 ->
-            save_general_settings(model)
-
-          # capacity input
-          0 ->
-            # Enter key on input moves down to Save
-            {%{model | settings_global_focus_idx: 1}, []}
-        end
-
-      _ ->
-        if active_idx == 0 do
-          case key do
-            :paste ->
-              text = Map.get(key_data, :content, "")
-              clean_digits = String.replace(text, ~r/[^\d]/, "")
-              current_val = model.settings_global_capacity || ""
-              new_val = current_val <> clean_digits
-              {%{model | settings_global_capacity: new_val}, []}
-
-            :backspace ->
-              current_val = model.settings_global_capacity || ""
-              new_val = String.slice(current_val, 0..-2//1)
-              {%{model | settings_global_capacity: new_val}, []}
-
-            :char ->
-              char = Map.get(key_data, :char, "")
-
-              if is_binary(char) and char =~ ~r/^\d$/ do
-                current_val = model.settings_global_capacity || ""
-                new_val = current_val <> char
-                {%{model | settings_global_capacity: new_val}, []}
-              else
-                {model, []}
-              end
-
-            ch when is_binary(ch) and byte_size(ch) == 1 ->
-              if ch =~ ~r/^\d$/ do
-                current_val = model.settings_global_capacity || ""
-                new_val = current_val <> ch
-                {%{model | settings_global_capacity: new_val}, []}
-              else
-                {model, []}
-              end
-
-            _ ->
-              {model, []}
-          end
-        else
-          {model, []}
-        end
-    end
-  end
-
-
   @doc """
   Delegates service filtering to ServicesTab.
   """
@@ -1018,29 +913,4 @@ defmodule Caudata.UI.Components.SettingsModal do
   Delegates name truncation to ServicesTab.
   """
   defdelegate truncate_name(name, max_len), to: ServicesTab
-
-  defp save_general_settings(model) do
-    capacity_str = String.trim(model.settings_global_capacity || "")
-
-    case Integer.parse(capacity_str) do
-      {capacity, ""} when capacity > 0 ->
-        # Save to ConfigStore
-        if Process.whereis(Caudata.ConfigStore) do
-          Caudata.ConfigStore.put_setting(Caudata.ConfigStore, :global, :capacity, capacity)
-        end
-
-        # Update LogStore capacity dynamically
-        if Process.whereis(Caudata.LogStore) do
-          Caudata.LogStore.set_capacity(Caudata.LogStore, capacity)
-        end
-
-        {%{
-           model
-           | settings_status_msg: "Successfully saved log capacity: #{capacity}"
-         }, []}
-
-      _ ->
-        {%{model | settings_status_msg: "Error: Capacity must be a positive integer"}, []}
-    end
-  end
 end

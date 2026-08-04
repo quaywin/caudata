@@ -430,6 +430,16 @@ defmodule Caudata.ServerWorker do
       send(state.conn_task_pid, :stop)
     end
 
+    # Stop/close old channels on existing container workers so they don't hold stale SSH channels
+    Enum.each(state.container_pids, fn {_id, pid} ->
+      if Process.alive?(pid), do: Caudata.ContainerWorker.stop_streaming(pid)
+    end)
+
+    # Reset stale server-level monitoring channels so they re-subscribe on the new connection
+    state = close_metrics_channel(state)
+    state = close_events_channel(state)
+    state = close_container_stats_channel(state)
+
     case state.ssh_client.open_channel(conn_ref) do
       {:ok, list_channel_id} ->
         wrapped_cmd = wrap_sudo(@discovery_cmd, state.profile.password)

@@ -1164,7 +1164,7 @@ defmodule Caudata.ServerWorker do
           """
 
           wrapped_metrics_cmd =
-            "sh -c '#{String.replace(metrics_cmd, "'", "'\\''")} & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; read -r _; kill $pid 2>/dev/null'"
+            "sh -c '#{String.replace(metrics_cmd, "'", "'\\''")} & pid=$!; trap \"kill $pid 2>/dev/null\" EXIT HUP INT TERM; wait $pid 2>/dev/null; kill $pid 2>/dev/null'"
 
           case state.ssh_client.exec(state.conn_ref, metrics_channel_id, wrapped_metrics_cmd) do
             :ok ->

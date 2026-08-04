@@ -207,4 +207,129 @@ defmodule Caudata.ContainerWorkerTest do
     assert :ok = ContainerWorker.stop_streaming(pid)
     stop_supervised(ContainerWorker)
   end
+
+  test "update_container_info closes log stream when container state changes to exited" do
+    container = %{
+      id: "container123",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 3 hours",
+      state: "running"
+    }
+
+    Mock
+    |> expect(:open_channel, fn :dummy_conn ->
+      {:ok, :dummy_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_channel, _cmd ->
+      :ok
+    end)
+    |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->
+      :ok
+    end)
+
+    opts = [ssh_client: Mock]
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+
+    assert ContainerWorker.get_streaming_status(pid) == %{streaming?: true, opened_at: System.monotonic_time()} ||
+             ContainerWorker.get_streaming_status(pid).streaming? == true
+
+    exited_container = %{container | status: "Exited (0)", state: "exited"}
+    ContainerWorker.update_container_info(pid, exited_container)
+
+    status = ContainerWorker.get_streaming_status(pid)
+    assert status.streaming? == false
+
+    stop_supervised(ContainerWorker)
+  end
+
+  test "start_streaming uses --tail 0 when LogStore already has logs" do
+    container = %{
+      id: "container123",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 3 hours",
+      state: "running"
+    }
+
+    source_id = "my-server/container123"
+    LogStore.append_logs(source_id, ["existing log line 1"])
+
+    Mock
+    |> expect(:open_channel, fn :dummy_conn ->
+      {:ok, :dummy_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_channel, cmd ->
+      assert String.contains?(cmd, "--tail 0")
+      :ok
+    end)
+    |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->
+      :ok
+    end)
+
+    opts = [ssh_client: Mock]
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+
+    assert :ok = ContainerWorker.stop_streaming(pid)
+    stop_supervised(ContainerWorker)
+  end
+
+  test "start_streaming uses --since timestamp when LogStore has timestamped logs" do
+    container = %{
+      id: "container123",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 3 hours",
+      state: "running"
+    }
+
+    source_id = "my-server/container123"
+    LogStore.append_logs(source_id, ["2026-08-04T14:40:00.000000000Z existing log line 1"])
+
+    Mock
+    |> expect(:open_channel, fn :dummy_conn ->
+      {:ok, :dummy_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_channel, cmd ->
+      assert String.contains?(cmd, "--since")
+      assert String.contains?(cmd, "2026-08-04T14:40:00.000000000Z")
+      :ok
+    end)
+    |> expect(:close_channel, fn :dummy_conn, :dummy_channel ->
+      :ok
+    end)
+
+    opts = [ssh_client: Mock]
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+
+    assert :ok = ContainerWorker.stop_streaming(pid)
+    stop_supervised(ContainerWorker)
+  end
+
+  test "start_streaming skips opening channel when container is exited and logs exist" do
+    container = %{
+      id: "container123",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Exited (0)",
+      state: "exited"
+    }
+
+    source_id = "my-server/container123"
+    LogStore.append_logs(source_id, ["existing log line 1"])
+
+    # Expect NO calls to Mock open_channel or exec!
+
+    opts = [ssh_client: Mock]
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+
+    status = ContainerWorker.get_streaming_status(pid)
+    assert status.streaming? == false
+
+    stop_supervised(ContainerWorker)
+  end
 end

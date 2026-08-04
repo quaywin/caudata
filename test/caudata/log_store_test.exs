@@ -89,4 +89,26 @@ defmodule Caudata.LogStoreTest do
              %{timestamp: nil, stream: :stdout, message: "line without timestamp 2"}
            ]
   end
+
+  test "deduplicates leading log line if identical to last line in store" do
+    LogStore.append_logs(TestLogStore, "source_dedup", [
+      "2026-08-04T10:00:00Z line 1"
+    ])
+
+    Process.sleep(50)
+
+    # Re-append same line (from --since inclusive response) plus a new line
+    LogStore.append_logs(TestLogStore, "source_dedup", [
+      "2026-08-04T10:00:00Z line 1",
+      "2026-08-04T10:00:01Z line 2"
+    ])
+
+    Process.sleep(50)
+    snapshot = LogStore.get_snapshot(TestLogStore, "source_dedup")
+
+    assert snapshot == [
+             %{timestamp: "2026-08-04T10:00:00Z", stream: :stdout, message: "line 1"},
+             %{timestamp: "2026-08-04T10:00:01Z", stream: :stdout, message: "line 2"}
+           ]
+  end
 end

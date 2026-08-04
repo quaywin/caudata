@@ -138,6 +138,24 @@ defmodule Caudata.LogStore do
         last_ts: nil
       })
 
+    # Drop leading duplicate line if it matches the tail of the existing queue
+    last_item_in_queue =
+      case :queue.peek_r(source_state.queue) do
+        {:value, item} -> item
+        :empty -> nil
+      end
+
+    sanitized_lines =
+      case {last_item_in_queue, sanitized_lines} do
+        {%{timestamp: ts1, stream: st1, message: msg1},
+         [%{timestamp: ts2, stream: st2, message: msg2} | rest]}
+        when not is_nil(ts1) and ts1 != "" and ts1 == ts2 and st1 == st2 and msg1 == msg2 ->
+          rest
+
+        _ ->
+          sanitized_lines
+      end
+
     next_seq = Map.get(source_state, :next_seq, 0)
     last_ts = Map.get(source_state, :last_ts, nil)
 
@@ -270,10 +288,14 @@ defmodule Caudata.LogStore do
     stats =
       case Map.get(state.sources, source_id) do
         nil ->
-          %{size: 0, drop_count: 0}
+          %{size: 0, drop_count: 0, last_ts: nil}
 
         source_state ->
-          %{size: source_state.size, drop_count: source_state.drop_count}
+          %{
+            size: source_state.size,
+            drop_count: source_state.drop_count,
+            last_ts: source_state.last_ts
+          }
       end
 
     {:reply, stats, state}

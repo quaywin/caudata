@@ -113,20 +113,36 @@ defmodule Caudata.ContainerWorker do
 
   @impl true
   def handle_call({:start_streaming, conn_ref}, _from, state) do
-    if state.channel_id && state.conn_ref == conn_ref do
+    is_stopped =
+      state.state in ["exited", "stopped", "dead", "paused"] or
+        String.starts_with?(state.status, "Exited")
+
+    has_logs =
+      if Process.whereis(Caudata.LogStore) do
+        stats = Caudata.LogStore.get_stats(Caudata.LogStore, state.source_id)
+        stats.size > 0
+      else
+        false
+      end
+
+    if is_stopped and has_logs do
       {:reply, :ok, state}
     else
-      state = close_log_channel(state)
-
-      if is_nil(conn_ref) do
-        {:reply, {:error, :not_connected}, state}
+      if state.channel_id && state.conn_ref == conn_ref do
+        {:reply, :ok, state}
       else
-        case start_log_streaming(state, conn_ref) do
-          {:ok, new_state} ->
-            {:reply, :ok, new_state}
+        state = close_log_channel(state)
 
-          {:error, reason} ->
-            {:reply, {:error, reason}, state}
+        if is_nil(conn_ref) do
+          {:reply, {:error, :not_connected}, state}
+        else
+          case start_log_streaming(state, conn_ref) do
+            {:ok, new_state} ->
+              {:reply, :ok, new_state}
+
+            {:error, reason} ->
+              {:reply, {:error, reason}, state}
+          end
         end
       end
     end
@@ -324,12 +340,11 @@ defmodule Caudata.ContainerWorker do
   defp start_log_streaming(state, conn_ref) do
     Logger.info("Streaming logs for #{state.container_id} on #{state.profile_id}...")
 
-    effective_tail_limit =
+    stats =
       if Process.whereis(Caudata.LogStore) do
-        stats = Caudata.LogStore.get_stats(Caudata.LogStore, state.source_id)
-        if stats.size > 0, do: 0, else: state.tail_limit || 1000
+        Caudata.LogStore.get_stats(Caudata.LogStore, state.source_id)
       else
-        state.tail_limit || 1000
+        %{size: 0, drop_count: 0, last_ts: nil}
       end
 
     case state.ssh_client.open_channel(conn_ref) do
@@ -339,9 +354,10 @@ defmodule Caudata.ContainerWorker do
             String.starts_with?(state.container_id, "file:") ->
               "file:" <> path = state.container_id
               escaped_path = String.replace(path, "'", "'\\\'\''")
+              limit = if stats.size > 0, do: 0, else: state.tail_limit || 1000
 
               build_log_cmd(
-                "tail -n #{effective_tail_limit} -F \"#{escaped_path}\"",
+                "tail -n #{limit} -F \"#{escaped_path}\"",
                 state.password
               )
 
@@ -349,10 +365,15 @@ defmodule Caudata.ContainerWorker do
               "systemd:" <> service_name = state.container_id
               escaped_service = String.replace(service_name, "'", "'\\\'\''")
 
-              build_log_cmd(
-                "journalctl -u \"#{escaped_service}\" -f -n #{effective_tail_limit}",
-                state.password
-              )
+              cmd =
+                if stats.size > 0 && stats.last_ts && stats.last_ts != "" do
+                  "journalctl -u \"#{escaped_service}\" -f --since \"#{stats.last_ts}\""
+                else
+                  limit = if stats.size > 0, do: 0, else: state.tail_limit || 1000
+                  "journalctl -u \"#{escaped_service}\" -f -n #{limit}"
+                end
+
+              build_log_cmd(cmd, state.password)
 
             String.starts_with?(state.container_id, "launchd:") ->
               "launchd:" <> service_name = state.container_id
@@ -366,10 +387,15 @@ defmodule Caudata.ContainerWorker do
             true ->
               escaped_container_id = String.replace(state.container_id, "'", "'\\\'\''")
 
-              build_log_cmd(
-                "docker logs -t --follow --tail #{effective_tail_limit} #{escaped_container_id}",
-                state.password
-              )
+              cmd =
+                if stats.size > 0 && stats.last_ts && stats.last_ts != "" do
+                  "docker logs -t --follow --since \"#{stats.last_ts}\" #{escaped_container_id}"
+                else
+                  limit = if stats.size > 0, do: 0, else: state.tail_limit || 1000
+                  "docker logs -t --follow --tail #{limit} #{escaped_container_id}"
+                end
+
+              build_log_cmd(cmd, state.password)
           end
 
         case state.ssh_client.exec(conn_ref, channel_id, log_cmd) do

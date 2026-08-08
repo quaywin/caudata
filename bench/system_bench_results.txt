@@ -1,14 +1,22 @@
-=== Caudata System Macro-Benchmark Results ===
-Date: Tue Aug  4 13:15:02 +07 2026
+=== Caudata System Macro-Benchmark (Burrito binary) ===
+Date: Sat Aug  8 10:59:36 +07 2026
 OS: Darwin 24.3.0
+Binary: burrito_out/caudata_macos_aarch64 ( 13M)
+Tuning: +S 2:2, +sbwt none, +sbwtdcpu none (from rel/vm.args.eex)
 ----------------------------------------------
-[1/3] Compiling dev release...
-[2/3] Measuring Idle Memory & CPU (30s baseline)...
-  Sample 1: RSS = 92 MB, CPU = 0.0%
-  Sample 2: RSS = 87 MB, CPU = 0.0%
-  Sample 3: RSS = 85.25 MB, CPU = 0.0%
-  Sample 4: RSS = 83.7031 MB, CPU = 0.0%
-  Sample 5: RSS = 83.1875 MB, CPU = 0.0%
-=> Average Idle Memory (RSS): 86.2281 MB
+[1/2] Launching burrito_out/caudata_macos_aarch64 (headless), warmup 8s...
+[2/2] Sampling RSS & CPU (10x 2s)...
+  Sample 1: RSS = 85.7656 MB, CPU = 0.0%
+  Sample 2: RSS = 83.1562 MB, CPU = 0.0%
+  Sample 3: RSS = 82.6406 MB, CPU = 0.0%
+  Sample 4: RSS = 82.6406 MB, CPU = 0.0%
+  Sample 5: RSS = 82.6406 MB, CPU = 0.0%
+  Sample 6: RSS = 82.6406 MB, CPU = 0.0%
+  Sample 7: RSS = 82.6406 MB, CPU = 0.0%
+  Sample 8: RSS = 82.6719 MB, CPU = 0.0%
+  Sample 9: RSS = 82.6719 MB, CPU = 0.0%
+  Sample 10: RSS = 82.7031 MB, CPU = 0.0%
 ----------------------------------------------
-Macro-benchmark completed. Results saved to bench/system_bench_results.txt
+=> Average RSS: 83.02 MB | Min: 82.64 MB | Max: 85.77 MB
+(Min = settled idle footprint of the production binary)
+Results saved to bench/system_bench_results.txt

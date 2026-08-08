@@ -68,7 +68,7 @@ Benchee.run(
     # 5. UI ViewHelper (Filtering & Processing)
     "[ViewHelper] get_displayed_logs (Regex Filter over 5,000 lines)" => fn -> ViewHelper.get_displayed_logs(model_5k_filtered) end
   },
-  time: 2,
+  time: 5,
   warmup: 1,
   memory_time: 1
 )

@@ -159,17 +159,26 @@ defmodule Caudata.LogStore do
     next_seq = Map.get(source_state, :next_seq, 0)
     last_ts = Map.get(source_state, :last_ts, nil)
 
-    {meta_lines, final_seq, final_last_ts} =
+    # Carry an `ordered?` flag through the reduce: it stays true while the
+    # effective timestamps are non-decreasing. The common case (a monotonic
+    # log stream) leaves it true, which lets us skip the O(n log n) snapshot
+    # re-sort below. Only an out-of-order batch (e.g. interleaved docker
+    # stdout/stderr streams arriving with earlier timestamps) flips it false.
+    {meta_lines, final_seq, final_last_ts, ordered?} =
       Enum.reduce(
         sanitized_lines,
-        {[], next_seq, last_ts},
-        fn line, {acc, seq, cur_last_ts} ->
+        {[], next_seq, last_ts, true},
+        fn line, {acc, seq, cur_last_ts, ordered?} ->
           line_ts = Map.get(line, :timestamp)
           effective_ts = if is_binary(line_ts) and line_ts != "", do: line_ts, else: cur_last_ts
           sort_ts = effective_ts || ""
 
+          still_ordered? =
+            ordered? and
+              (cur_last_ts in [nil, ""] or sort_ts in ["", nil] or sort_ts >= cur_last_ts)
+
           item = Map.merge(line, %{seq: seq, sort_ts: sort_ts})
-          {[item | acc], seq + 1, effective_ts}
+          {[item | acc], seq + 1, effective_ts, still_ordered?}
         end
       )
 
@@ -209,19 +218,28 @@ defmodule Caudata.LogStore do
 
     new_sources = Map.put(state.sources, source_id, new_source_state)
 
-    # Update ETS snapshot table for zero-latency direct reads
-    sorted_lines =
-      new_queue
-      |> :queue.to_list()
-      |> Enum.sort_by(fn line ->
-        ts = Map.get(line, :sort_ts) || Map.get(line, :timestamp) || ""
-        seq = Map.get(line, :seq, 0)
-        {ts, seq}
-      end)
-      |> Enum.map(fn item -> Map.drop(item, [:seq, :sort_ts]) end)
+    # Update ETS snapshot table for zero-latency direct reads.
+    # The queue is FIFO by `seq`, so when this batch arrived in order the list
+    # is already chronologically sorted and we skip the expensive re-sort.
+    # Only out-of-order batches (ordered? == false) pay the O(n log n) sort.
+    snapshot_lines =
+      if ordered? do
+        new_queue
+        |> :queue.to_list()
+        |> Enum.map(fn item -> Map.drop(item, [:seq, :sort_ts]) end)
+      else
+        new_queue
+        |> :queue.to_list()
+        |> Enum.sort_by(fn line ->
+          ts = Map.get(line, :sort_ts) || Map.get(line, :timestamp) || ""
+          seq = Map.get(line, :seq, 0)
+          {ts, seq}
+        end)
+        |> Enum.map(fn item -> Map.drop(item, [:seq, :sort_ts]) end)
+      end
 
     if Map.has_key?(state, :table) do
-      :ets.insert(state.table, {{:snapshot, source_id}, sorted_lines})
+      :ets.insert(state.table, {{:snapshot, source_id}, snapshot_lines})
     end
 
     # Broadcast notification to PubSub

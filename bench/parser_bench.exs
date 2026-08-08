@@ -46,7 +46,7 @@ Benchee.run(
       LogStore.append_logs(:bench_log_store, "bench_stream", sample_batch)
     end
   },
-  time: 3,
+  time: 5,
   warmup: 1,
   memory_time: 1
 )

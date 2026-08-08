@@ -21,12 +21,12 @@ Tired of SSH-ing into 5 different servers just to tail Docker logs? Caudata brin
 - **Docker Management**: Control containers directly — Start, Stop, Restart, Kill, Inspect, and Remove.
 - **System Services & Custom Logs**: Stream Systemd (Linux), Launchd (macOS), or custom file paths.
 - **Real-time Metrics**: Live CPU, RAM, and disk monitoring for hosts and granular stats for containers.
-- **⚡ Rust NIF Accelerated Engine**: High-performance log parsing (117k–514k lines/s) and sub-element highlighting powered by Rustler.
+- **⚡ Rust NIF Accelerated Engine**: ~270k lines/s sustained ingest and 100k–530k lines/s across NIF parse/sanitize operations, with sub-element highlighting powered by Rustler.
 - **⏱️ Zero-Latency ETS Direct Read**: ETS-backed log buffers for non-blocking snapshot reads.
 - **🖱️ Mouse & Visual Controls**: SGR mouse support for scroll wheeling, drag-to-copy, sidebar clicking, footer action bar, and modal backdrop closing.
 - **Development Web View**: Render the exact TUI inside a web browser via Phoenix LiveView.
 - **Tailscale VPN Integration**: Connect to Tailscale hosts without a system daemon.
-- **Single-Binary Packaging**: Self-contained Burrito executable (~14 MB binary, ~25 MB RAM).
+- **Single-Binary Packaging**: Self-contained Burrito executable (~13 MB binary, ~84 MB idle RAM).
 - **Self-Upgrades**: Stay up to date with `caudata upgrade`.
 
 ---
@@ -45,7 +45,7 @@ Caudata is engineered for ultra-low memory footprint and high 60 FPS TUI scrolli
 | **LogFormatter (Text SubHighlight)**| 18,590 lines/s | **49,050 lines/s** | 🚀 **2.6x Faster** | ⬇️ **4.12 KB (-68.3% RAM)** |
 | **LogStore.get_snapshot** | 1,050 ops/s (952 μs latency) | **5,150 ops/s (121 μs latency)** | 🚀 **4.9x Faster** | 0.71 KB |
 | **ViewHelper.get_displayed_logs**| 7,434.52 KB / filter | **4.59 KB / filter** | 💣 **1,620x RAM Reduction (-99.94%)** | **4.59 KB** |
-| **Production Binary RAM Footprint** | ~90 MB - 120 MB | **`56.18 MB` (Active)** / **`25.00 MB` (Tuned `+S 2:2`)** | 🧠 **50% - 75% RAM reduction** | **~25 MB - 56 MB** |
+| **Production Binary RAM Footprint** | ~98 MB (`mix run` dev) | **`~84 MB` (Burrito binary, `+S 2:2`)** | 🧠 ~14% lower via release tuning (`strip_beams`, `exclude_apps`, `+S 2:2`) | **~84 MB** |
 
 ---
 
@@ -205,7 +205,7 @@ If you are looking for other tools to monitor or view logs, here is how Caudata 
 
 | Project | Interface | Primary Focus | Multi-Server (SSH) | Docker Container Auto-Discovery | Peak Throughput / RAM |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Caudata** | TUI & Web | Agentless Multi-Server Log/Metrics | **Yes** (native SSH config) | **Yes** (remote/local) | **514k lines/s (`62.88 MB` RAM)** |
+| **Caudata** | TUI & Web | Agentless Multi-Server Log/Metrics | **Yes** (native SSH config) | **Yes** (remote/local) | **~270k lines/s ingest (`~84 MB` RAM)** |
 | **[MultiTail](https://github.com/folkertvanheusden/multitail)** | TUI | Aggregated file/command logs | Yes (manual pipes) | No | ~50k lines/s (~80 MB RAM) |
 | **[Dozzle](https://github.com/amir20/dozzle)** | Web | Docker container logs | Yes (requires agents) | Yes (needs setup) | ~50k lines/s (~70 MB RAM) |
 | **[lnav](https://github.com/tstack/lnav)** | TUI | Log parsing & SQL query | No (mainly local) | No | ~300k lines/s (~80 MB RAM) |

@@ -101,20 +101,21 @@ defmodule Caudata.BurritoPatch do
   end
 
   defp download_file(url, path) do
-    headers = [{~c"user-agent", ~c"caudata"}]
+    Application.ensure_all_started(:req)
 
-    case :httpc.request(:get, {to_charlist(url), headers}, [autoredirect: true],
-           body_format: :binary
+    case Req.get(url,
+           headers: [{"user-agent", "caudata"}],
+           receive_timeout: 30_000,
+           connect_options: [timeout: 15_000],
+           retry: :safe_transient,
+           max_retries: 3
          ) do
-      {:ok, {{_, 200, _}, _headers, body}} ->
+      {:ok, %Req.Response{status: 200, body: body}} when is_binary(body) ->
         File.write!(path, body)
         :ok
 
-      {:ok, {{_, status, _}, _, _}} ->
+      {:ok, %Req.Response{status: status}} ->
         {:error, "HTTP status #{status}"}
-
-      {:ok, status} ->
-        {:ok, status}
 
       {:error, reason} ->
         {:error, reason}

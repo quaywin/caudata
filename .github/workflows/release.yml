@@ -12,6 +12,7 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       matrix:
         include:
@@ -44,19 +45,43 @@ jobs:
         with:
           toolchain: stable
           target: ${{ matrix.rust_target }}
+          cache: true
+
+      - name: Cache Mix dependencies & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ matrix.target }}-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ matrix.target }}-mix-
+
+      - name: Cache Burrito downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/burrito
+          key: ${{ matrix.target }}-burrito-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ matrix.target }}-burrito-
 
       - name: Install system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xz-utils p7zip-full
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils p7zip-full
 
       - name: Install system dependencies (macOS)
         if: startsWith(matrix.os, 'macos-')
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: |
           brew install p7zip
 
       - name: Install Hex & Rebar dependencies
+        env:
+          HEX_HTTP_TIMEOUT: "120"
         run: |
           mix local.rebar --force
           mix local.hex --force
@@ -67,8 +92,6 @@ jobs:
           MIX_ENV: prod
           BURRITO_TARGET: ${{ matrix.target }}
         run: |
-          # Clean tailscale build to ensure correct target NIF is compiled
-          mix deps.clean tailscale --build
           mix release
 
       - name: List outputs
@@ -86,6 +109,7 @@ jobs:
     name: Create GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

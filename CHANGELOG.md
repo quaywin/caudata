@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.74] - 2026-08-19
+
+### Performance & CI/CD
+
+- Added workflow timeouts (25m build / 10m release) to prevent runaway hung jobs
+- Added comprehensive CI caching for Mix dependencies (`deps/`, `_build/`), Rust/Cargo targets, and Burrito downloads
+- Switched Burrito NIF patching from `:httpc` to `Req` with bounded timeouts and automatic retries
+- Optimized Linux (`apt-get`) and macOS (Homebrew) CI package installations
+- Removed obsolete tailscale clean step from release pipeline
+
 ## [0.1.59] - 2026-07-29
 
 ### Refactored & Cleaned

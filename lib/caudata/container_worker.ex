@@ -21,7 +21,9 @@ defmodule Caudata.ContainerWorker do
     :pending_logs,
     :flush_timer,
     :password,
-    :reconnecting_stream
+    :reconnecting_stream,
+    :should_stream,
+    :reconnect_timer
   ]
 
   # Client API
@@ -84,7 +86,9 @@ defmodule Caudata.ContainerWorker do
       pending_logs: [],
       flush_timer: nil,
       password: Keyword.get(opts, :password),
-      reconnecting_stream: false
+      reconnecting_stream: false,
+      should_stream: false,
+      reconnect_timer: nil
     }
 
     {:ok, state}
@@ -115,6 +119,9 @@ defmodule Caudata.ContainerWorker do
 
   @impl true
   def handle_call({:start_streaming, conn_ref}, _from, state) do
+    state = cancel_reconnect_timer(state)
+    state = %{state | should_stream: true}
+
     is_stopped =
       state.state in ["exited", "stopped", "dead", "paused"] or
         String.starts_with?(state.status, "Exited")
@@ -134,6 +141,7 @@ defmodule Caudata.ContainerWorker do
         {:reply, :ok, state}
       else
         state = close_log_channel(state)
+        state = %{state | should_stream: true}
 
         if is_nil(conn_ref) do
           {:reply, {:error, :not_connected}, state}
@@ -152,6 +160,8 @@ defmodule Caudata.ContainerWorker do
 
   @impl true
   def handle_call(:stop_streaming, _from, state) do
+    state = cancel_reconnect_timer(state)
+    state = %{state | should_stream: false}
     new_state = close_log_channel(state)
     {:reply, :ok, new_state}
   end
@@ -167,9 +177,11 @@ defmodule Caudata.ContainerWorker do
     }
 
     new_state =
-      if new_state.channel_id &&
-           (new_state.state in ["exited", "stopped"] or
+      if (new_state.channel_id || new_state.reconnect_timer) &&
+           (new_state.state in ["exited", "stopped", "dead", "paused"] or
               String.starts_with?(new_state.status, "Exited")) do
+        new_state = cancel_reconnect_timer(new_state)
+        new_state = %{new_state | should_stream: false}
         close_log_channel(new_state)
       else
         new_state
@@ -208,6 +220,9 @@ defmodule Caudata.ContainerWorker do
   def handle_info({:ssh_cm, conn_ref, {:data, channel_id, stream_id, chunk}}, state) do
     if conn_ref == state.conn_ref && channel_id == state.channel_id do
       chunk_str = to_string(chunk)
+
+      # Maintain SSH flow-control window (RFC 4254) so remote stream never stalls
+      _ = state.ssh_client.adjust_window(conn_ref, channel_id, byte_size(chunk_str))
 
       {lines, new_buffer, state_key} =
         if stream_id == 1 do
@@ -287,6 +302,35 @@ defmodule Caudata.ContainerWorker do
   end
 
   @impl true
+  def handle_info(:reconnect_stream, state) do
+    state = %{state | reconnect_timer: nil}
+
+    is_stopped =
+      state.state in ["exited", "stopped", "dead", "paused"] or
+        String.starts_with?(state.status, "Exited")
+
+    if state.should_stream and not is_stopped and not is_nil(state.conn_ref) and
+         is_nil(state.channel_id) do
+      Logger.info("Attempting auto-reconnect log stream for #{state.container_id}...")
+
+      case start_log_streaming(state, state.conn_ref) do
+        {:ok, new_state} ->
+          {:noreply, new_state}
+
+        {:error, reason} ->
+          Logger.warning(
+            "Failed to auto-reconnect log stream for #{state.container_id}: #{inspect(reason)}. Retrying in 2000ms..."
+          )
+
+          timer = Process.send_after(self(), :reconnect_stream, 2000)
+          {:noreply, %{state | reconnect_timer: timer}}
+      end
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
   def handle_info({:ssh_cm, _, _}, state) do
     {:noreply, state}
   end
@@ -298,6 +342,9 @@ defmodule Caudata.ContainerWorker do
 
   @impl true
   def terminate(_reason, state) do
+    state = cancel_reconnect_timer(state)
+    state = %{state | should_stream: false}
+
     # Force flush any buffered lines and pending logs on termination
     state = flush_pending_logs(state)
 
@@ -314,7 +361,6 @@ defmodule Caudata.ContainerWorker do
   end
 
   # Helpers
-
 
   defp handle_disconnect(state, reason) do
     # Force flush any pending logs before disconnecting
@@ -336,7 +382,33 @@ defmodule Caudata.ContainerWorker do
       {:container_log_disconnected, state.profile_id, state.container_id, reason}
     )
 
-    close_log_channel(state)
+    is_stopped =
+      state.state in ["exited", "stopped", "dead", "paused"] or
+        String.starts_with?(state.status, "Exited")
+
+    if state.channel_id && state.conn_ref do
+      Logger.info(
+        "Closing log channel #{inspect(state.channel_id)} for container #{state.container_id} (reason: #{reason})"
+      )
+
+      state.ssh_client.close_channel(state.conn_ref, state.channel_id)
+    end
+
+    state = %{
+      state
+      | channel_id: nil,
+        channel_opened_at: nil,
+        reconnecting_stream: false
+    }
+
+    if state.should_stream and not is_stopped and not is_nil(state.conn_ref) do
+      Logger.info("Scheduling log stream reconnect for #{state.container_id} in 1000ms")
+      state = cancel_reconnect_timer(state)
+      timer = Process.send_after(self(), :reconnect_stream, 1000)
+      %{state | reconnect_timer: timer}
+    else
+      %{state | conn_ref: nil, should_stream: false}
+    end
   end
 
   defp start_log_streaming(state, conn_ref) do
@@ -444,7 +516,8 @@ defmodule Caudata.ContainerWorker do
   end
 
   defp close_log_channel(state) do
-    # Cancel any active flush timer and flush logs before closing the channel
+    # Cancel any active reconnect timer or flush timer and flush logs before closing the channel
+    state = cancel_reconnect_timer(state)
     state = cancel_flush_timer(state)
     state = flush_pending_logs(state)
 
@@ -461,8 +534,26 @@ defmodule Caudata.ContainerWorker do
       | channel_id: nil,
         conn_ref: nil,
         channel_opened_at: nil,
-        reconnecting_stream: false
+        reconnecting_stream: false,
+        reconnect_timer: nil
     }
+  end
+
+  # Cancels the active reconnect timer if it exists and flushes any message from the mailbox
+  defp cancel_reconnect_timer(state) do
+    if state.reconnect_timer do
+      Process.cancel_timer(state.reconnect_timer)
+
+      receive do
+        :reconnect_stream -> :ok
+      after
+        0 -> :ok
+      end
+
+      %{state | reconnect_timer: nil}
+    else
+      state
+    end
   end
 
   # Flush logs helper that writes all pending logs to LogStore

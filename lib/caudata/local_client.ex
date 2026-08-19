@@ -22,6 +22,11 @@ defmodule Caudata.LocalClient do
   end
 
   @impl true
+  def adjust_window(_conn_ref, _channel_pid, _bytes) do
+    :ok
+  end
+
+  @impl true
   def close_channel(_conn_ref, channel_pid) when is_pid(channel_pid) do
     send(channel_pid, :close)
     :ok

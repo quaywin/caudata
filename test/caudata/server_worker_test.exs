@@ -10,6 +10,7 @@ defmodule Caudata.ServerWorkerTest do
 
   setup do
     set_mox_global()
+    stub(Mock, :adjust_window, fn _conn, _chan, _bytes -> :ok end)
     # No need to start PubSub or ServerRegistry because they are already booted globally
     # via the application supervision tree.
     :ok

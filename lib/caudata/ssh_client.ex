@@ -6,6 +6,7 @@ defmodule Caudata.SSHClient do
   @callback connect(String.t(), integer(), list()) :: {:ok, term()} | {:error, any()}
   @callback open_channel(term()) :: {:ok, term()} | {:error, any()}
   @callback exec(term(), term(), String.t()) :: :ok | {:error, any()}
+  @callback adjust_window(term(), term(), non_neg_integer()) :: :ok | {:error, any()}
   @callback close_channel(term(), term()) :: :ok
   @callback close(term()) :: :ok
 
@@ -129,6 +130,15 @@ defmodule Caudata.SSHClient do
 
         {:error, reason} ->
           {:error, reason}
+      end
+    end
+
+    @impl true
+    def adjust_window(conn_ref, channel_id, bytes) do
+      try do
+        :ssh_connection.adjust_window(conn_ref, channel_id, bytes)
+      catch
+        _, _ -> :ok
       end
     end
 

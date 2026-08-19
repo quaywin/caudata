@@ -522,6 +522,10 @@ defmodule Caudata.ServerWorker do
         {:ssh_cm, conn_ref, {:data, channel_id, _stream_id, chunk}},
         state
       ) do
+    if conn_ref == state.conn_ref do
+      _ = state.ssh_client.adjust_window(conn_ref, channel_id, byte_size(to_string(chunk)))
+    end
+
     now = System.monotonic_time(:millisecond)
 
     cond do

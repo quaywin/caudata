@@ -9,6 +9,7 @@ defmodule Caudata.ContainerWorkerTest do
 
   setup do
     set_mox_global()
+    stub(Mock, :adjust_window, fn _conn, _chan, _bytes -> :ok end)
     Caudata.LogStore.clear_logs("my-server/container123")
     :ok
   end
@@ -414,6 +415,80 @@ defmodule Caudata.ContainerWorkerTest do
     # Verify old log was preserved and merged with 5 new lines
     assert Enum.any?(snapshot, fn msg -> String.contains?(to_string(msg.message), "old log 1") end)
     assert length(snapshot) == 6
+
+    assert :ok = ContainerWorker.stop_streaming(pid)
+    stop_supervised(ContainerWorker)
+  end
+
+  test "adjust_window is called on incoming data chunks" do
+    container = %{
+      id: "container123",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 3 hours",
+      state: "running"
+    }
+
+    test_pid = self()
+
+    Mock
+    |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_channel} end)
+    |> expect(:exec, fn :dummy_conn, :dummy_channel, _cmd -> :ok end)
+    |> expect(:adjust_window, fn :dummy_conn, :dummy_channel, bytes ->
+      send(test_pid, {:adjusted_window, bytes})
+      :ok
+    end)
+    |> expect(:close_channel, fn :dummy_conn, :dummy_channel -> :ok end)
+
+    opts = [ssh_client: Mock]
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+
+    send(pid, {:ssh_cm, :dummy_conn, {:data, :dummy_channel, 0, "hello world\n"}})
+    assert_receive {:adjusted_window, 12}, 1000
+
+    assert :ok = ContainerWorker.stop_streaming(pid)
+    stop_supervised(ContainerWorker)
+  end
+
+  test "auto-reconnects stream when channel is closed unexpectedly and container is running" do
+    container = %{
+      id: "container123",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 3 hours",
+      state: "running"
+    }
+
+    test_pid = self()
+
+    Mock
+    # Initial streaming
+    |> expect(:open_channel, fn :dummy_conn -> {:ok, :dummy_channel_1} end)
+    |> expect(:exec, fn :dummy_conn, :dummy_channel_1, _cmd -> :ok end)
+    # Channel 1 close
+    |> expect(:close_channel, fn :dummy_conn, :dummy_channel_1 ->
+      send(test_pid, :closed_channel_1)
+      :ok
+    end)
+    # Auto-reconnect stream
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :reconnected_channel_2)
+      {:ok, :dummy_channel_2}
+    end)
+    |> expect(:exec, fn :dummy_conn, :dummy_channel_2, _cmd -> :ok end)
+    |> expect(:close_channel, fn :dummy_conn, :dummy_channel_2 -> :ok end)
+
+    opts = [ssh_client: Mock]
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+
+    # Simulate unexpected remote EOF
+    send(pid, {:ssh_cm, :dummy_conn, {:eof, :dummy_channel_1}})
+
+    assert_receive :closed_channel_1, 1000
+    # Wait for auto-reconnect timer (1000ms)
+    assert_receive :reconnected_channel_2, 2000
 
     assert :ok = ContainerWorker.stop_streaming(pid)
     stop_supervised(ContainerWorker)

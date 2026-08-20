@@ -3,11 +3,13 @@ defmodule Caudata.ServerWorker do
   require Logger
   alias Caudata.LogSanitizer
 
-  @max_reconnect_delay 30_000
+  @max_reconnect_delay 10_000
   @initial_reconnect_delay 1000
   @max_active_streams 5
   @health_check_interval 15_000
   @activity_timeout 30_000
+  @connect_timeout 15_000
+  @discovery_timeout 15_000
 
   @docker_discovery_cmd "echo '===DOCKER==='; docker ps -a --no-trunc --format '{{json .}}' 2>/dev/null"
   @os_discovery_cmd "echo '===OS==='; uname -s"
@@ -56,7 +58,9 @@ defmodule Caudata.ServerWorker do
     log_debounce_delay: 100,
     stats_debounce_delay: 300,
     containers_dirty: false,
-    broadcast_timer: nil
+    broadcast_timer: nil,
+    connect_timer: nil,
+    discovery_timer: nil
   ]
 
   # Client API
@@ -166,7 +170,9 @@ defmodule Caudata.ServerWorker do
       container_stats_buffer: "",
       log_stream_timer: nil,
       log_debounce_delay: log_delay,
-      stats_debounce_delay: stats_delay
+      stats_debounce_delay: stats_delay,
+      connect_timer: nil,
+      discovery_timer: nil
     }
 
     # Broadcast initial connecting status
@@ -334,11 +340,15 @@ defmodule Caudata.ServerWorker do
                  wrapped_cmd
                ) do
             :ok ->
+              state = cancel_discovery_timer(state)
+              discovery_timer = Process.send_after(self(), :discovery_timeout, @discovery_timeout)
+
               {:noreply,
                %{
                  state
                  | list_channel_id: list_channel_id,
-                   list_buffer: ""
+                   list_buffer: "",
+                   discovery_timer: discovery_timer
                }}
 
             {:error, reason} ->
@@ -351,15 +361,18 @@ defmodule Caudata.ServerWorker do
           {:noreply, state}
       end
     else
+      state = cancel_reconnect_timer(state)
       send(self(), :connect)
-      {:noreply, state}
+      {:noreply, %{state | reconnect_delay: @initial_reconnect_delay}}
     end
   end
 
   @impl true
   def handle_info(:connect, state) do
-    # Cancel any active reconnect timer
+    # Cancel any active reconnect, connect, or discovery timers
     state = cancel_reconnect_timer(state)
+    state = cancel_connect_timer(state)
+    state = cancel_discovery_timer(state)
     state = stop_existing_conn_task(state)
 
     Logger.info(
@@ -401,12 +414,14 @@ defmodule Caudata.ServerWorker do
       end)
 
     Process.monitor(task_pid)
+    connect_timer = Process.send_after(self(), :connect_timeout, @connect_timeout)
 
-    {:noreply, %{state | conn_task_pid: task_pid}}
+    {:noreply, %{state | conn_task_pid: task_pid, connect_timer: connect_timer}}
   end
 
   @impl true
   def handle_info({:ssh_connect_failed, reason}, state) do
+    state = cancel_connect_timer(state)
     Logger.info("Failed to establish SSH connection to #{state.profile.id}: #{inspect(reason)}")
     handle_disconnect(state, "Connection failed: #{inspect(reason)}")
   end
@@ -423,6 +438,7 @@ defmodule Caudata.ServerWorker do
 
   @impl true
   def handle_info({:ssh_connected, conn_ref, task_pid}, state) do
+    state = cancel_connect_timer(state)
     Logger.info("SSH connection established to #{state.profile.id}, discovering containers...")
 
     # Stop any existing task just in case
@@ -439,6 +455,7 @@ defmodule Caudata.ServerWorker do
     state = close_metrics_channel(state)
     state = close_events_channel(state)
     state = close_container_stats_channel(state)
+    state = cancel_discovery_timer(state)
 
     case state.ssh_client.open_channel(conn_ref) do
       {:ok, list_channel_id} ->
@@ -450,6 +467,8 @@ defmodule Caudata.ServerWorker do
                wrapped_cmd
              ) do
           :ok ->
+            discovery_timer = Process.send_after(self(), :discovery_timeout, @discovery_timeout)
+
             {:noreply,
              %{
                state
@@ -457,7 +476,8 @@ defmodule Caudata.ServerWorker do
                  list_channel_id: list_channel_id,
                  list_buffer: "",
                  conn_task_pid: task_pid,
-                 reconnect_delay: @initial_reconnect_delay
+                 reconnect_delay: @initial_reconnect_delay,
+                 discovery_timer: discovery_timer
              }}
 
           {:error, reason} ->
@@ -478,7 +498,8 @@ defmodule Caudata.ServerWorker do
                 status: :connected,
                 containers: [],
                 conn_task_pid: task_pid,
-                reconnect_delay: @initial_reconnect_delay
+                reconnect_delay: @initial_reconnect_delay,
+                discovery_timer: nil
             }
 
             state = sync_container_workers(state, [])
@@ -504,7 +525,8 @@ defmodule Caudata.ServerWorker do
             status: :connected,
             containers: [],
             conn_task_pid: task_pid,
-            reconnect_delay: @initial_reconnect_delay
+            reconnect_delay: @initial_reconnect_delay,
+            discovery_timer: nil
         }
 
         state = sync_container_workers(state, [])
@@ -627,6 +649,7 @@ defmodule Caudata.ServerWorker do
         {:noreply, %{state | validation_channels: remaining_validations}}
 
       conn_ref == state.conn_ref && channel_id == state.list_channel_id ->
+        state = cancel_discovery_timer(state)
         containers = parse_discovery_output(state.list_buffer)
 
         Logger.info(
@@ -639,7 +662,8 @@ defmodule Caudata.ServerWorker do
           state
           | list_channel_id: nil,
             list_buffer: "",
-            status: :connected
+            status: :connected,
+            discovery_timer: nil
         }
 
         custom_containers =
@@ -801,6 +825,32 @@ defmodule Caudata.ServerWorker do
   end
 
   @impl true
+  def handle_info(:connect_timeout, state) do
+    state = %{state | connect_timer: nil}
+
+    if state.status == :connecting and is_nil(state.conn_ref) do
+      Logger.warning("SSH connect attempt timed out on #{state.profile.id}, retrying...")
+      state = stop_existing_conn_task(state)
+      handle_disconnect(state, "SSH connect attempt timed out")
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info(:discovery_timeout, state) do
+    state = %{state | discovery_timer: nil}
+
+    if state.list_channel_id do
+      Logger.warning("Container discovery timed out on #{state.profile.id}, reconnecting...")
+      state = close_list_channel(state)
+      handle_disconnect(state, "Container discovery timed out")
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
   def handle_info(_other, state) do
     # Catch-all to ignore other spurious messages (e.g. {:EXIT, pid, :normal} from Tasks)
     {:noreply, state}
@@ -817,14 +867,22 @@ defmodule Caudata.ServerWorker do
 
   defp async_health_check(server_pid, ssh_client, conn_ref) do
     Task.start(fn ->
-      res =
-        case ssh_client.open_channel(conn_ref) do
-          {:ok, temp_channel} ->
-            ssh_client.close_channel(conn_ref, temp_channel)
-            :ok
+      task =
+        Task.async(fn ->
+          case ssh_client.open_channel(conn_ref) do
+            {:ok, temp_channel} ->
+              ssh_client.close_channel(conn_ref, temp_channel)
+              :ok
 
-          {:error, reason} ->
-            {:error, reason}
+            {:error, reason} ->
+              {:error, reason}
+          end
+        end)
+
+      res =
+        case Task.yield(task, 5000) || Task.shutdown(task, :brutal_kill) do
+          {:ok, result} -> result
+          nil -> {:error, :health_check_timeout}
         end
 
       send(server_pid, {:health_check_result, conn_ref, res})
@@ -847,11 +905,11 @@ defmodule Caudata.ServerWorker do
     # Unregister immediately from Registry to prevent UI / callers from making blocking calls
     _ = Registry.unregister(Caudata.ServerRegistry, state.profile.id)
 
-    # Cancel reconnect timer
+    # Cancel timers
     state = cancel_reconnect_timer(state)
-
-    # Cancel health check timer
     state = cancel_health_check(state)
+    state = cancel_connect_timer(state)
+    state = cancel_discovery_timer(state)
 
     # 1. Stop all container workers in parallel while SSH connection is still active
     # This allows container workers to close their channels cleanly.
@@ -949,8 +1007,10 @@ defmodule Caudata.ServerWorker do
     state = cancel_log_stream_timer(state)
     state = cancel_containers_broadcast_timer(state)
 
-    # Cancel health check timer
+    # Cancel timers
     state = cancel_health_check(state)
+    state = cancel_connect_timer(state)
+    state = cancel_discovery_timer(state)
 
     # Stop all container streams
     Enum.each(state.container_pids, fn {_id, pid} ->
@@ -974,6 +1034,8 @@ defmodule Caudata.ServerWorker do
          reconnect_delay: next_delay,
          reconnect_timer: timer,
          conn_task_pid: nil,
+         connect_timer: nil,
+         discovery_timer: nil,
          validation_channels: %{},
          last_activity_at: nil
      }}
@@ -1564,6 +1626,34 @@ defmodule Caudata.ServerWorker do
     end
 
     %{state | reconnect_timer: nil}
+  end
+
+  defp cancel_connect_timer(state) do
+    if state.connect_timer do
+      Process.cancel_timer(state.connect_timer)
+
+      receive do
+        :connect_timeout -> :ok
+      after
+        0 -> :ok
+      end
+    end
+
+    %{state | connect_timer: nil}
+  end
+
+  defp cancel_discovery_timer(state) do
+    if state.discovery_timer do
+      Process.cancel_timer(state.discovery_timer)
+
+      receive do
+        :discovery_timeout -> :ok
+      after
+        0 -> :ok
+      end
+    end
+
+    %{state | discovery_timer: nil}
   end
 
   defp schedule_health_check(state) do

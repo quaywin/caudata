@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.75] - 2026-08-20
+
+### Fixed & Resiliency
+
+- Fixed reconnect hanging on machine sleep/wake by adding bounded connect (15s) and discovery (15s) timeouts
+- Bounded health checks to 5s to rapidly detect and recover from dead/half-open TCP sockets
+- Configured TCP socket keepalive (`inet_args: [keepalive: true, nodelay: true]`) and reduced SSH idle time from 300s to 60s
+- Optimized reconnect backoff cap from 30s to 10s and immediate 1s reset on manual refresh
+- Preserved bounded memory consumption during reconnects via stream limits (max 5 active) and clamped timestamp lookbacks (max 1h)
+
 ## [0.1.74] - 2026-08-19
 
 ### Performance & CI/CD

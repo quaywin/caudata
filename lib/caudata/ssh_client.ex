@@ -54,8 +54,12 @@ defmodule Caudata.SSHClient do
         silently_accept_hosts: true,
         user_interaction: false,
         keepalive: true,
-        idle_time: 300_000,
-        connect_timeout: 15_000,
+        idle_time: 60_000,
+        connect_timeout: 10_000,
+        inet_args: [
+          keepalive: true,
+          nodelay: true
+        ],
         preferred_algorithms: [
           compression: [:zlib, :"zlib@openssh.com", :none]
         ]
@@ -93,7 +97,7 @@ defmodule Caudata.SSHClient do
           ssh_opts
         end
 
-      case :ssh.connect(char_host, port, ssh_opts, 15_000) do
+      case :ssh.connect(char_host, port, ssh_opts, 10_000) do
         {:ok, conn_ref} ->
           {:ok, conn_ref}
 

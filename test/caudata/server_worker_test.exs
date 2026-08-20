@@ -1365,4 +1365,98 @@ defmodule Caudata.ServerWorkerTest do
 
     stop_supervised(ServerWorker)
   end
+
+  test "recovers from discovery timeout and reconnects" do
+    profile =
+      Profile.new(%{
+        host_pattern: "disc-timeout-server",
+        host_name: "10.0.0.88",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, fn "10.0.0.88", 22, _ -> {:ok, :dummy_conn1} end)
+    |> expect(:open_channel, fn :dummy_conn1 ->
+      send(test_pid, :opened_list_channel1)
+      {:ok, :dummy_list_channel1}
+    end)
+    |> expect(:exec, fn :dummy_conn1, :dummy_list_channel1, _cmd ->
+      :ok
+    end)
+    |> expect(:close_channel, fn :dummy_conn1, :dummy_list_channel1 -> :ok end)
+    |> expect(:close, fn :dummy_conn1 -> :ok end)
+    # Reconnect attempt
+    |> expect(:connect, fn "10.0.0.88", 22, _ ->
+      send(test_pid, :reconnected)
+      {:ok, :dummy_conn2}
+    end)
+    |> stub(:open_channel, fn _conn -> {:ok, :dummy_list_channel2} end)
+    |> stub(:exec, fn _conn, _chan, _cmd -> :ok end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: false}})
+
+    assert_receive :opened_list_channel1, 1000
+
+    # Simulate discovery timeout message
+    send(worker_pid, :discovery_timeout)
+
+    # Worker should broadcast :connecting and reconnect
+    assert_receive {:status_updated, "disc-timeout-server", :connecting}, 1000
+    assert_receive :reconnected, 2000
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "recovers from connect timeout and reconnects" do
+    profile =
+      Profile.new(%{
+        host_pattern: "conn-timeout-server",
+        host_name: "10.0.0.89",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    # First connect will simulate a hang (Task never sends reply)
+    Mock
+    |> expect(:connect, fn "10.0.0.89", 22, _ ->
+      send(test_pid, :first_connect_started)
+      # Sleep long enough to trigger timeout
+      Process.sleep(5000)
+      {:error, :timeout}
+    end)
+    # Second connect should be triggered after timeout
+    |> expect(:connect, fn "10.0.0.89", 22, _ ->
+      send(test_pid, :second_connect_started)
+      {:ok, :dummy_conn2}
+    end)
+    |> stub(:open_channel, fn _conn -> {:ok, :dummy_chan} end)
+    |> stub(:exec, fn _conn, _chan, _cmd -> :ok end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: false}})
+
+    assert_receive :first_connect_started, 1000
+
+    # Send connect_timeout to simulate timer firing
+    send(worker_pid, :connect_timeout)
+
+    assert_receive {:status_updated, "conn-timeout-server", :connecting}, 1000
+    assert_receive :second_connect_started, 2500
+
+    stop_supervised(ServerWorker)
+  end
 end

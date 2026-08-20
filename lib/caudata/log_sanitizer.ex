@@ -15,11 +15,7 @@ defmodule Caudata.LogSanitizer do
   def sanitize(nil), do: ""
 
   def sanitize(line) when is_binary(line) do
-    line
-    |> make_valid_utf8()
-    |> strip_ansi_escapes()
-    |> strip_control_characters()
-    |> truncate_line()
+    Caudata.Native.sanitize_log(line)
   end
 
   @ansi_regex ~r{\x1B[@-_][0-?]*[ -/]*[@-~]}
@@ -93,44 +89,6 @@ defmodule Caudata.LogSanitizer do
   Returns `{complete_lines, remaining_buffer}`.
   """
   def process_chunk(chunk, buffer, max_size \\ @max_buffer_size) do
-    try do
-      Caudata.Native.process_chunk_native(chunk, buffer, max_size)
-    rescue
-      _ ->
-        do_process_chunk_fallback(chunk, buffer, max_size)
-    end
-  end
-
-  defp do_process_chunk_fallback(chunk, buffer, max_size) do
-    combined = buffer <> chunk
-
-    case String.split(combined, ~r{\r?\n}) do
-      [single_part] ->
-        if byte_size(single_part) > max_size do
-          {chunk_part, rest_part} = String.split_at(single_part, max_size)
-          {[chunk_part], rest_part}
-        else
-          {[], single_part}
-        end
-
-      parts ->
-        {complete_lines, [incomplete_part]} = Enum.split(parts, -1)
-
-        cleaned_complete_lines =
-          Enum.map(complete_lines, fn line ->
-            if byte_size(line) > max_size do
-              String.slice(line, 0, max_size)
-            else
-              line
-            end
-          end)
-
-        if byte_size(incomplete_part) > max_size do
-          {chunk_part, rest_part} = String.split_at(incomplete_part, max_size)
-          {cleaned_complete_lines ++ [chunk_part], rest_part}
-        else
-          {cleaned_complete_lines, incomplete_part}
-        end
-    end
+    Caudata.Native.process_chunk_native(chunk, buffer, max_size)
   end
 end

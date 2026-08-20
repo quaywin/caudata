@@ -11,8 +11,7 @@ defmodule Caudata.LogStoreTest do
 
   test "stores and retrieves log lines in chronological order" do
     LogStore.append_logs(TestLogStore, "source1", ["line 1", "line 2"])
-
-    Process.sleep(50)
+    _ = LogStore.get_stats(TestLogStore, "source1")
 
     snapshot = LogStore.get_snapshot(TestLogStore, "source1")
 
@@ -30,8 +29,7 @@ defmodule Caudata.LogStoreTest do
     # Capacity is 5
     LogStore.append_logs(TestLogStore, "source1", ["1", "2", "3"])
     LogStore.append_logs(TestLogStore, "source1", ["4", "5", "6", "7"])
-
-    Process.sleep(50)
+    _ = LogStore.get_stats(TestLogStore, "source1")
 
     snapshot = LogStore.get_snapshot(TestLogStore, "source1")
 
@@ -79,8 +77,8 @@ defmodule Caudata.LogStoreTest do
       "line without timestamp 1",
       "line without timestamp 2"
     ])
+    _ = LogStore.get_stats(TestLogStore, "source_ts")
 
-    Process.sleep(50)
     snapshot = LogStore.get_snapshot(TestLogStore, "source_ts")
 
     assert snapshot == [
@@ -94,16 +92,15 @@ defmodule Caudata.LogStoreTest do
     LogStore.append_logs(TestLogStore, "source_dedup", [
       "2026-08-04T10:00:00Z line 1"
     ])
-
-    Process.sleep(50)
+    _ = LogStore.get_stats(TestLogStore, "source_dedup")
 
     # Re-append same line (from --since inclusive response) plus a new line
     LogStore.append_logs(TestLogStore, "source_dedup", [
       "2026-08-04T10:00:00Z line 1",
       "2026-08-04T10:00:01Z line 2"
     ])
+    _ = LogStore.get_stats(TestLogStore, "source_dedup")
 
-    Process.sleep(50)
     snapshot = LogStore.get_snapshot(TestLogStore, "source_dedup")
 
     assert snapshot == [

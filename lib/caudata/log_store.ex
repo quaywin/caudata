@@ -156,38 +156,26 @@ defmodule Caudata.LogStore do
           sanitized_lines
       end
 
-    next_seq = Map.get(source_state, :next_seq, 0)
     last_ts = Map.get(source_state, :last_ts, nil)
 
-    # Carry an `ordered?` flag through the reduce: it stays true while the
-    # effective timestamps are non-decreasing. The common case (a monotonic
-    # log stream) leaves it true, which lets us skip the O(n log n) snapshot
-    # re-sort below. Only an out-of-order batch (e.g. interleaved docker
-    # stdout/stderr streams arriving with earlier timestamps) flips it false.
-    {meta_lines, final_seq, final_last_ts, ordered?} =
-      Enum.reduce(
-        sanitized_lines,
-        {[], next_seq, last_ts, true},
-        fn line, {acc, seq, cur_last_ts, ordered?} ->
-          line_ts = Map.get(line, :timestamp)
-          effective_ts = if is_binary(line_ts) and line_ts != "", do: line_ts, else: cur_last_ts
-          sort_ts = effective_ts || ""
+    # Check if incoming batch maintains chronological timestamp ordering.
+    {final_last_ts, ordered?} =
+      Enum.reduce(sanitized_lines, {last_ts, true}, fn line, {cur_last_ts, ordered?} ->
+        line_ts = Map.get(line, :timestamp)
+        effective_ts = if is_binary(line_ts) and line_ts != "", do: line_ts, else: cur_last_ts
+        sort_ts = effective_ts || ""
 
-          still_ordered? =
-            ordered? and
-              (cur_last_ts in [nil, ""] or sort_ts in ["", nil] or sort_ts >= cur_last_ts)
+        still_ordered? =
+          ordered? and
+            (cur_last_ts in [nil, ""] or sort_ts in ["", nil] or sort_ts >= cur_last_ts)
 
-          item = Map.merge(line, %{seq: seq, sort_ts: sort_ts})
-          {[item | acc], seq + 1, effective_ts, still_ordered?}
-        end
-      )
-
-    sanitized_with_meta = Enum.reverse(meta_lines)
+        {effective_ts, still_ordered?}
+      end)
 
     # Add each line to the queue
     {new_queue, new_size, new_drops} =
       Enum.reduce(
-        sanitized_with_meta,
+        sanitized_lines,
         {source_state.queue, source_state.size, source_state.drop_count},
         fn line, {q, sz, dr} ->
           q = :queue.in(line, q)
@@ -212,30 +200,22 @@ defmodule Caudata.LogStore do
       queue: new_queue,
       size: new_size,
       drop_count: new_drops,
-      next_seq: final_seq,
       last_ts: final_last_ts
     }
 
     new_sources = Map.put(state.sources, source_id, new_source_state)
 
     # Update ETS snapshot table for zero-latency direct reads.
-    # The queue is FIFO by `seq`, so when this batch arrived in order the list
+    # The queue is FIFO, so when this batch arrived in order the list
     # is already chronologically sorted and we skip the expensive re-sort.
-    # Only out-of-order batches (ordered? == false) pay the O(n log n) sort.
+    # Only out-of-order batches (ordered? == false) pay the sort.
     snapshot_lines =
       if ordered? do
-        new_queue
-        |> :queue.to_list()
-        |> Enum.map(fn item -> Map.drop(item, [:seq, :sort_ts]) end)
+        :queue.to_list(new_queue)
       else
         new_queue
         |> :queue.to_list()
-        |> Enum.sort_by(fn line ->
-          ts = Map.get(line, :sort_ts) || Map.get(line, :timestamp) || ""
-          seq = Map.get(line, :seq, 0)
-          {ts, seq}
-        end)
-        |> Enum.map(fn item -> Map.drop(item, [:seq, :sort_ts]) end)
+        |> Enum.sort_by(fn line -> Map.get(line, :timestamp) || "" end)
       end
 
     if Map.has_key?(state, :table) do
@@ -285,17 +265,8 @@ defmodule Caudata.LogStore do
       source_state ->
         lines = :queue.to_list(source_state.queue)
 
-        sorted_lines =
-          Enum.sort_by(lines, fn line ->
-            ts = Map.get(line, :sort_ts) || Map.get(line, :timestamp) || ""
-            seq = Map.get(line, :seq, 0)
-            {ts, seq}
-          end)
-
-        tail_lines =
-          sorted_lines
-          |> Enum.take(-limit)
-          |> Enum.map(fn item -> Map.drop(item, [:seq, :sort_ts]) end)
+        sorted_lines = Enum.sort_by(lines, fn line -> Map.get(line, :timestamp) || "" end)
+        tail_lines = Enum.take(sorted_lines, -limit)
 
         {:reply, tail_lines, state}
     end
@@ -338,16 +309,6 @@ defmodule Caudata.LogStore do
   end
 
   defp parse_docker_log(line) do
-    case String.split(line, " ", parts: 2) do
-      [timestamp, msg] ->
-        if String.match?(timestamp, ~r/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/) do
-          {timestamp, msg}
-        else
-          {nil, line}
-        end
-
-      _ ->
-        {nil, line}
-    end
+    Caudata.Native.parse_docker_log(line)
   end
 end

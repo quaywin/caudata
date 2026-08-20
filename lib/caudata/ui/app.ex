@@ -157,41 +157,7 @@ defmodule Caudata.UI.App do
   end
 
   def handle_event(%ExRatatui.Event.Key{code: code, modifiers: modifiers}, state) do
-    # Map the key to the Raxol format and handle
-    {_key, key_data} =
-      if String.length(code) == 1 do
-        {:char, %{key: :char, char: code, modifiers: modifiers}}
-      else
-        mapped_key =
-          case code do
-            "up" -> :up
-            "Up" -> :up
-            "down" -> :down
-            "Down" -> :down
-            "left" -> :left
-            "Left" -> :left
-            "right" -> :right
-            "Right" -> :right
-            "tab" -> :tab
-            "enter" -> :enter
-            "esc" -> :escape
-            "escape" -> :escape
-            "backspace" -> :backspace
-            "f2" -> :f2
-            "F2" -> :f2
-            "insert" -> :insert
-            "Insert" -> :insert
-            "pageup" -> :page_up
-            "page_up" -> :page_up
-            "PageUp" -> :page_up
-            "pagedown" -> :page_down
-            "page_down" -> :page_down
-            "PageDown" -> :page_down
-            _ -> nil
-          end
-
-        {mapped_key, %{key: mapped_key, modifiers: modifiers}}
-      end
+    key_data = KeyHandler.normalize_key(code, modifiers)
 
     now = System.monotonic_time(:millisecond)
     last_key = Map.get(state, :last_key)

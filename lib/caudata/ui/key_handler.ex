@@ -8,6 +8,39 @@ defmodule Caudata.UI.KeyHandler do
   alias Caudata.UI.Components.Sidebar
 
   @doc """
+  Normalizes an incoming Ratatui key code and modifiers into standard key_data.
+  """
+  def normalize_key(code, modifiers \\ [])
+
+  def normalize_key(code, modifiers) when is_binary(code) do
+    if String.length(code) == 1 do
+      %{key: :char, char: code, modifiers: modifiers}
+    else
+      mapped_key =
+        case String.downcase(code) do
+          "up" -> :up
+          "down" -> :down
+          "left" -> :left
+          "right" -> :right
+          "tab" -> :tab
+          "enter" -> :enter
+          "esc" -> :escape
+          "escape" -> :escape
+          "backspace" -> :backspace
+          "f2" -> :f2
+          "insert" -> :insert
+          "pageup" -> :page_up
+          "page_up" -> :page_up
+          "pagedown" -> :page_down
+          "page_down" -> :page_down
+          _ -> nil
+        end
+
+      %{key: mapped_key, modifiers: modifiers}
+    end
+  end
+
+  @doc """
   Main dispatch function for key events.
   Routes events based on modal visibility, active mode, and key type via KeyRegistry.
   """

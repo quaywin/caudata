@@ -53,10 +53,8 @@ defmodule Caudata.SSHClient do
         user: to_charlist(user),
         silently_accept_hosts: true,
         user_interaction: false,
-        keepalive: true,
-        idle_time: 60_000,
         connect_timeout: 10_000,
-        inet_args: [
+        socket_options: [
           keepalive: true,
           nodelay: true
         ],

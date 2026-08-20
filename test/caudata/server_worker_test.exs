@@ -1404,4 +1404,25 @@ defmodule Caudata.ServerWorkerTest do
 
     stop_supervised(ServerWorker)
   end
+
+  test "Native SSHClient connects without invalid option errors" do
+    # When connecting to a closed port, it should return a connection/network error, NOT {:error, {:options, ...}}
+    result =
+      Caudata.SSHClient.Native.connect("127.0.0.1", 59999,
+        user: "testuser",
+        password: "testpassword"
+      )
+
+    case result do
+      {:error, {:options, _}} ->
+        flunk("Native.connect passed invalid options to :ssh.connect: #{inspect(result)}")
+
+      {:error, _network_reason} ->
+        :ok
+
+      {:ok, conn} ->
+        Caudata.SSHClient.Native.close(conn)
+        :ok
+    end
+  end
 end

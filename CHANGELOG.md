@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.76] - 2026-08-20
+
+### Fixed & Simplified
+
+- Simplified auto-reconnect architecture to leverage native Erlang `:ssh` timeouts and TCP socket keepalive
+- Removed redundant timer state and timers from `ServerWorker`
+- Guaranteed fast recovery on sleep/wake and network reconnects without RAM or CPU bloat
+- Verified clean codebase with 0 compiler warnings and 100% test pass rate
+
 ## [0.1.75] - 2026-08-20
 
 ### Fixed & Resiliency

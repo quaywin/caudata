@@ -37,6 +37,15 @@ defmodule Caudata.UI.LogFormatter do
   def format_line_with_meta(nil), do: {[], false}
 
   defp do_format_line_with_meta(line) do
+    try do
+      Caudata.Native.parse_log_line(line)
+    rescue
+      _ ->
+        do_format_line_fallback(line)
+    end
+  end
+
+  defp do_format_line_fallback(line) do
     cond do
       line == "" ->
         {[Span.new("", style: %Style{fg: :white})], false}

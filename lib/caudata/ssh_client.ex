@@ -95,43 +95,58 @@ defmodule Caudata.SSHClient do
           ssh_opts
         end
 
-      case :ssh.connect(char_host, port, ssh_opts, 10_000) do
-        {:ok, conn_ref} ->
-          {:ok, conn_ref}
+      try do
+        case :ssh.connect(char_host, port, ssh_opts, 10_000) do
+          {:ok, conn_ref} ->
+            {:ok, conn_ref}
 
-        {:error, reason} ->
-          {:error, reason}
+          {:error, reason} ->
+            {:error, reason}
+        end
+      catch
+        :exit, reason -> {:error, {:exit, reason}}
+        kind, reason -> {:error, {kind, reason}}
       end
     end
 
     @impl true
     def open_channel(conn_ref) do
-      case :ssh_connection.session_channel(conn_ref, @channel_timeout) do
-        {:ok, channel_id} ->
-          {:ok, channel_id}
+      try do
+        case :ssh_connection.session_channel(conn_ref, @channel_timeout) do
+          {:ok, channel_id} ->
+            {:ok, channel_id}
 
-        {:error, reason} ->
-          {:error, reason}
+          {:error, reason} ->
+            {:error, reason}
 
-        {:open_error, reason_code, description, lang} ->
-          {:error, {:open_error, reason_code, description, lang}}
+          {:open_error, reason_code, description, lang} ->
+            {:error, {:open_error, reason_code, description, lang}}
 
-        other ->
-          {:error, other}
+          other ->
+            {:error, other}
+        end
+      catch
+        :exit, reason -> {:error, {:exit, reason}}
+        kind, reason -> {:error, {kind, reason}}
       end
     end
 
     @impl true
     def exec(conn_ref, channel_id, command) do
-      case :ssh_connection.exec(conn_ref, channel_id, to_charlist(command), @channel_timeout) do
-        :success ->
-          :ok
+      try do
+        case :ssh_connection.exec(conn_ref, channel_id, to_charlist(command), @channel_timeout) do
+          :success ->
+            :ok
 
-        :failure ->
-          {:error, :exec_failure}
+          :failure ->
+            {:error, :exec_failure}
 
-        {:error, reason} ->
-          {:error, reason}
+          {:error, reason} ->
+            {:error, reason}
+        end
+      catch
+        :exit, reason -> {:error, {:exit, reason}}
+        kind, reason -> {:error, {kind, reason}}
       end
     end
 
@@ -167,7 +182,12 @@ defmodule Caudata.SSHClient do
 
     @impl true
     def close(conn_ref) do
-      :ssh.close(conn_ref)
+      try do
+        :ssh.close(conn_ref)
+      catch
+        _, _ -> :ok
+      end
+
       :ok
     end
   end

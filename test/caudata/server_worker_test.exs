@@ -1425,4 +1425,127 @@ defmodule Caudata.ServerWorkerTest do
         :ok
     end
   end
+
+
+
+  test "recovers immediately when monitored conn_ref process dies" do
+    profile =
+      Profile.new(%{
+        host_pattern: "conn-proc-die-server",
+        host_name: "10.0.0.86",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+    # Spawn a fake connection process that we can kill to simulate socket/process death
+    fake_conn_pid =
+      spawn(fn ->
+        receive do
+          :die -> :ok
+        end
+      end)
+
+    Mock
+    |> expect(:connect, fn "10.0.0.86", 22, _ ->
+      {:ok, fake_conn_pid}
+    end)
+    |> expect(:open_channel, fn ^fake_conn_pid ->
+      send(test_pid, :opened_list_chan)
+      {:ok, :dummy_list_chan}
+    end)
+    |> expect(:exec, fn ^fake_conn_pid, :dummy_list_chan, _cmd ->
+      :ok
+    end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+    # Reconnect expectation
+    |> expect(:connect, fn "10.0.0.86", 22, _ ->
+      send(test_pid, :reconnected_after_proc_death)
+      {:ok, :dummy_conn2}
+    end)
+    |> stub(:open_channel, fn _conn -> {:ok, :dummy_chan2} end)
+    |> stub(:exec, fn _conn, _chan, _cmd -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: false}})
+
+    assert_receive :opened_list_chan, 1000
+
+    # Close list channel to transition to connected
+    send(worker_pid, {:ssh_cm, fake_conn_pid, {:closed, :dummy_list_chan}})
+    assert_receive {:status_updated, "conn-proc-die-server", :connected}, 1000
+
+    # Kill the fake connection process (simulates SSH connection crash during sleep/wake)
+    send(fake_conn_pid, :die)
+
+    # Worker should detect :DOWN immediately and broadcast :connecting, then reconnect
+    assert_receive {:status_updated, "conn-proc-die-server", :connecting}, 1000
+    assert_receive :reconnected_after_proc_death, 2500
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "recovers when health check detects dead connection or failure" do
+    profile =
+      Profile.new(%{
+        host_pattern: "health-check-fail-server",
+        host_name: "10.0.0.85",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, fn "10.0.0.85", 22, _ ->
+      {:ok, :dummy_conn1}
+    end)
+    |> expect(:open_channel, fn :dummy_conn1 ->
+      send(test_pid, :opened_list_chan1)
+      {:ok, :dummy_list_chan}
+    end)
+    |> expect(:exec, fn :dummy_conn1, :dummy_list_chan, _cmd ->
+      :ok
+    end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+    # Reconnect expectation
+    |> expect(:connect, fn "10.0.0.85", 22, _ ->
+      send(test_pid, :reconnected_after_health_fail)
+      {:ok, :dummy_conn2}
+    end)
+    |> stub(:open_channel, fn _conn -> {:ok, :dummy_chan2} end)
+    |> stub(:exec, fn _conn, _chan, _cmd -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: false}})
+
+    assert_receive :opened_list_chan1, 1000
+
+    # Transition to connected
+    send(worker_pid, {:ssh_cm, :dummy_conn1, {:closed, :dummy_list_chan}})
+    assert_receive {:status_updated, "health-check-fail-server", :connected}, 1000
+
+    # Send health check failure message (e.g. from open_channel exit/timeout)
+    send(worker_pid, {:health_check_result, :dummy_conn1, {:error, :closed}})
+
+    assert_receive {:status_updated, "health-check-fail-server", :connecting}, 1000
+    assert_receive :reconnected_after_health_fail, 2500
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "Native SSHClient open_channel safely catches exits without crashing caller" do
+    dead_pid = spawn(fn -> :ok end)
+    Process.sleep(20)
+
+    # Calling open_channel on a dead PID should return {:error, ...}, not raise an exit
+    result = Caudata.SSHClient.Native.open_channel(dead_pid)
+    assert match?({:error, _}, result)
+  end
 end

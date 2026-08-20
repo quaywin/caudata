@@ -38,14 +38,25 @@ defmodule Caudata.UI.ViewHelper do
   """
   def get_displayed_logs(model) do
     logs_len = if is_list(model.logs), do: length(model.logs), else: 0
-    cache_key = {model.filter_regex, model.selected_container_id, logs_len}
 
-    case Map.get(model, :cached_displayed_logs) do
-      {^cache_key, cached_result} ->
-        cached_result
+    hd_log =
+      case model.logs do
+        [%{seq: seq} | _] -> seq
+        [first | _] when is_map(first) -> Map.get(first, :timestamp) || Map.get(first, :message)
+        [first | _] -> first
+        _ -> nil
+      end
 
-      _ ->
-        do_get_displayed_logs(model)
+    cache_key = {model.filter_regex, model.selected_container_id, logs_len, hd_log}
+
+    case Process.get({:cached_displayed_logs, cache_key}) do
+      nil ->
+        res = do_get_displayed_logs(model)
+        Process.put({:cached_displayed_logs, cache_key}, res)
+        res
+
+      cached ->
+        cached
     end
   end
 
@@ -154,9 +165,32 @@ defmodule Caudata.UI.ViewHelper do
   Counts the total number of lines when wrapping lines of a given width.
   """
   def count_wrapped_lines(lines, width) do
-    Enum.reduce(lines, 0, fn line, acc ->
-      acc + visual_line_count(line, width)
-    end)
+    w = max(1, width)
+    lines_len = if is_list(lines), do: length(lines), else: 0
+
+    hd_line =
+      case lines do
+        [%{seq: seq} | _] -> seq
+        [%{message: msg} | _] -> msg
+        [first | _] -> first
+        _ -> nil
+      end
+
+    cache_key = {:cached_wrapped_lines_count, lines_len, hd_line, w}
+
+    case Process.get(cache_key) do
+      nil ->
+        res =
+          Enum.reduce(lines, 0, fn line, acc ->
+            acc + visual_line_count(line, w)
+          end)
+
+        Process.put(cache_key, res)
+        res
+
+      cached ->
+        cached
+    end
   end
 
   @doc """

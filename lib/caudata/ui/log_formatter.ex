@@ -23,6 +23,20 @@ defmodule Caudata.UI.LogFormatter do
   Formats a single log line into a tuple `{spans, is_error}`.
   """
   def format_line_with_meta(line) when is_binary(line) do
+    case Process.get({:fmt_line_meta, line}) do
+      nil ->
+        res = do_format_line_with_meta(line)
+        Process.put({:fmt_line_meta, line}, res)
+        res
+
+      cached ->
+        cached
+    end
+  end
+
+  def format_line_with_meta(nil), do: {[], false}
+
+  defp do_format_line_with_meta(line) do
     cond do
       line == "" ->
         {[Span.new("", style: %Style{fg: :white})], false}
@@ -37,8 +51,6 @@ defmodule Caudata.UI.LogFormatter do
         parse_general_log(line)
     end
   end
-
-  def format_line_with_meta(nil), do: {[], false}
 
   @doc """
   Formats a single log line into a list of spans.

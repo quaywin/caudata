@@ -134,6 +134,9 @@ defmodule Caudata.UI.Components.LogsPane do
 
     prefix_width = if Map.get(state, :show_timestamps, false), do: 22, else: 2
     wrap_width = max(1, inner_width - prefix_width)
+    show_timestamps = Map.get(state, :show_timestamps, false)
+
+    total_wrapped_lines = ViewHelper.count_wrapped_lines(displayed_logs, wrap_width)
 
     # Calculate Virtual Windowing slice parameters using exact wrapped line mapping
     visible_buffer = 10
@@ -146,7 +149,6 @@ defmodule Caudata.UI.Components.LogsPane do
           {st, cnt, :bottom}
 
         val when is_integer(val) ->
-          total_wrapped_lines = ViewHelper.count_wrapped_lines(displayed_logs, wrap_width)
           max_scroll = max(0, total_wrapped_lines - viewport_height)
           target_line = min(max(0, val), max_scroll)
 
@@ -166,23 +168,19 @@ defmodule Caudata.UI.Components.LogsPane do
       visible_logs
       |> Enum.with_index(start_idx)
       |> Enum.flat_map(fn {%{timestamp: ts, stream: _stream, message: line}, idx} ->
-        {spans, is_err_level} = LogFormatter.format_line_with_meta(line)
-        is_error = is_err_level
+        {wrapped_chunks, is_error} = get_wrapped_line_chunks(line, wrap_width)
 
-        ViewHelper.wrap_spans(spans, wrap_width)
-        |> Enum.with_index()
+        prefix_span =
+          if is_error do
+            Span.new("┃ ", style: %Style{fg: :red, modifiers: [:bold]})
+          else
+            Span.new("  ", style: %Style{})
+          end
+
+        Enum.with_index(wrapped_chunks)
         |> Enum.map(fn {chunk_spans, chunk_idx} ->
-          prefix_span =
-            cond do
-              is_error ->
-                Span.new("┃ ", style: %Style{fg: :red, modifiers: [:bold]})
-
-              true ->
-                Span.new("  ", style: %Style{})
-            end
-
           final_spans =
-            if Map.get(state, :show_timestamps, false) do
+            if show_timestamps do
               ts_span =
                 if chunk_idx == 0 and ts do
                   Span.new(format_docker_timestamp(ts) <> " ", style: %Style{fg: :dark_gray})
@@ -223,8 +221,6 @@ defmodule Caudata.UI.Components.LogsPane do
       text: log_lines,
       scroll: {scroll_y, 0}
     }
-
-    total_wrapped_lines = ViewHelper.count_wrapped_lines(displayed_logs, wrap_width)
 
     content =
       if total_wrapped_lines > viewport_height do
@@ -350,6 +346,22 @@ defmodule Caudata.UI.Components.LogsPane do
   end
 
 
+  defp get_wrapped_line_chunks(line, wrap_width) do
+    cache_key = {:fmt_wrapped_chunks, line, wrap_width}
+
+    case Process.get(cache_key) do
+      nil ->
+        {spans, is_err_level} = LogFormatter.format_line_with_meta(line)
+        wrapped_chunks = ViewHelper.wrap_spans(spans, wrap_width)
+        res = {wrapped_chunks, is_err_level}
+        Process.put(cache_key, res)
+        res
+
+      cached ->
+        cached
+    end
+  end
+
   defp format_docker_timestamp(ts) when is_binary(ts) do
     ts
     |> String.slice(0, 19)
@@ -368,20 +380,24 @@ defmodule Caudata.UI.Components.LogsPane do
     total_count = length(displayed_logs)
 
     {start_idx, line_offset} =
-      displayed_logs
-      |> Enum.reduce_while({0, 0}, fn item, {idx, accum_lines} ->
-        item_lines = ViewHelper.visual_line_count(item, wrap_width)
+      if target_line <= 0 do
+        {0, 0}
+      else
+        displayed_logs
+        |> Enum.reduce_while({0, 0}, fn item, {idx, accum_lines} ->
+          item_lines = ViewHelper.visual_line_count(item, wrap_width)
 
-        if accum_lines + item_lines > target_line do
-          offset = max(0, target_line - accum_lines)
-          {:halt, {idx, offset}}
-        else
-          {:cont, {idx + 1, accum_lines + item_lines}}
+          if accum_lines + item_lines > target_line do
+            offset = max(0, target_line - accum_lines)
+            {:halt, {idx, offset}}
+          else
+            {:cont, {idx + 1, accum_lines + item_lines}}
+          end
+        end)
+        |> case do
+          {:cont, {final_idx, _}} -> {max(0, final_idx - 1), 0}
+          res -> res
         end
-      end)
-      |> case do
-        {:cont, {final_idx, _}} -> {max(0, final_idx - 1), 0}
-        res -> res
       end
 
     start_idx = min(start_idx, max(0, total_count - 1))

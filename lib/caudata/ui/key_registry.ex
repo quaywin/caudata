@@ -188,7 +188,7 @@ defmodule Caudata.UI.KeyRegistry do
       :level_filter ->
         [
           shortcut("[⇅/j/k]", "Navigate ", :cyan),
-          shortcut("[0-5/Enter]", "Select Level ", :green),
+          shortcut("[0-3/Enter]", "Select Level ", :green),
           shortcut("[Esc/q]", "Close ", :red)
         ]
 
@@ -456,7 +456,7 @@ defmodule Caudata.UI.KeyRegistry do
         chosen_level = LevelFilterModal.get_level_by_index(idx)
         apply_level_filter(chosen_level, model)
 
-      char in ["0", "1", "2", "3", "4", "5"] ->
+      char in ["0", "1", "2", "3"] ->
         chosen_level = LevelFilterModal.get_level_by_key(char)
         apply_level_filter(chosen_level, model)
 

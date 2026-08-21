@@ -11,11 +11,9 @@ defmodule Caudata.UI.Components.LevelFilterModal do
 
   @levels [
     {"0", "All Logs (Default)", :all, :white, "Show all log streams without severity filtering"},
-    {"1", "Info and above (INFO+)", :info, :green, "Show INFO, WARN, ERROR, FATAL"},
-    {"2", "Warnings and above (WARN+)", :warn, :yellow, "Show WARN, ERROR, FATAL"},
-    {"3", "Errors and Fatal (ERROR+)", :error, :red, "Show ERROR and FATAL logs only"},
-    {"4", "Fatal only (FATAL)", :fatal, :red, "Show FATAL / Panic / Critical logs only"},
-    {"5", "Debug and above (DEBUG+)", :debug, :magenta, "Show DEBUG, INFO, WARN, ERROR, FATAL"}
+    {"1", "Info and above (INFO+)", :info, :green, "Show INFO, WARN, ERROR (hide debug/trace)"},
+    {"2", "Warnings and above (WARN+)", :warn, :yellow, "Show WARN, ERROR"},
+    {"3", "Errors only (ERROR+)", :error, :red, "Show ERROR and FATAL logs only"}
   ]
 
   def levels, do: @levels
@@ -83,7 +81,7 @@ defmodule Caudata.UI.Components.LevelFilterModal do
         Span.new(String.duplicate("─", 54), style: %Style{fg: :dark_gray})
       ]),
       Line.new([
-        Span.new("↑/↓ / j/k: navigate • 0-5 / Enter: select • Esc: close", style: %Style{fg: :dark_gray})
+        Span.new("↑/↓ / j/k: navigate • 0-3 / Enter: select • Esc: close", style: %Style{fg: :dark_gray})
       ])
     ]
 
@@ -97,8 +95,8 @@ defmodule Caudata.UI.Components.LevelFilterModal do
         border_type: :rounded,
         border_style: %Style{fg: :cyan}
       },
-      percent_width: 60,
-      percent_height: 48
+      percent_width: 58,
+      percent_height: 40
     }
 
     [popup_widget]

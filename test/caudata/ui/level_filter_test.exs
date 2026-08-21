@@ -5,7 +5,7 @@ defmodule Caudata.UI.LevelFilterTest do
   alias Caudata.UI.KeyRegistry
   alias Caudata.UI.ViewHelper
 
-  test "LevelFilterModal renders all 6 severity options" do
+  test "LevelFilterModal renders all 4 severity options" do
     state = %{
       modal_visible: true,
       modal_type: :level_filter,
@@ -24,9 +24,7 @@ defmodule Caudata.UI.LevelFilterTest do
     assert Enum.any?(text_contents, &String.contains?(&1, "[0] All Logs"))
     assert Enum.any?(text_contents, &String.contains?(&1, "[1] Info and above"))
     assert Enum.any?(text_contents, &String.contains?(&1, "[2] Warnings and above"))
-    assert Enum.any?(text_contents, &String.contains?(&1, "[3] Errors and Fatal"))
-    assert Enum.any?(text_contents, &String.contains?(&1, "[4] Fatal only"))
-    assert Enum.any?(text_contents, &String.contains?(&1, "[5] Debug and above"))
+    assert Enum.any?(text_contents, &String.contains?(&1, "[3] Errors only"))
     assert Enum.any?(text_contents, &String.contains?(&1, "[ACTIVE] ✓"))
   end
 

@@ -303,7 +303,7 @@ defmodule Caudata.UI.Components.LogsPane do
     level_suffix =
       case Map.get(state, :log_level_filter, :all) do
         :all -> ""
-        lvl -> " [Level: #{String.upcase(to_string(lvl))}+]"
+        lvl -> " [Level: #{String.upcase(to_string(lvl))}]"
       end
 
     suffix =

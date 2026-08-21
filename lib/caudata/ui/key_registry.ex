@@ -467,7 +467,7 @@ defmodule Caudata.UI.KeyRegistry do
 
   defp apply_level_filter(level, model) do
     level_name = Atom.to_string(level) |> String.upcase()
-    notif = if level == :all, do: "Log level filter cleared (All logs)", else: "Log level filter: #{level_name}+"
+    notif = if level == :all, do: "Log level filter cleared (All logs)", else: "Log level filter: #{level_name} only"
 
     new_model =
       model

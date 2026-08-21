@@ -10,10 +10,10 @@ defmodule Caudata.UI.Components.LevelFilterModal do
   alias ExRatatui.Widgets.Popup
 
   @levels [
-    {"0", "All Logs (Default)", :all, :white, "Show all log streams without severity filtering"},
-    {"1", "Info and above (INFO+)", :info, :green, "Show INFO, WARN, ERROR (hide debug/trace)"},
-    {"2", "Warnings and above (WARN+)", :warn, :yellow, "Show WARN, ERROR"},
-    {"3", "Errors only (ERROR+)", :error, :red, "Show ERROR and FATAL logs only"}
+    {"0", "All Logs (Default)", :all, :white, "Show all log streams"},
+    {"1", "Info only (INFO)", :info, :green, "Show INFO logs only"},
+    {"2", "Warnings only (WARN)", :warn, :yellow, "Show WARNING logs only"},
+    {"3", "Errors & Fatal (ERROR)", :error, :red, "Show ERROR and FATAL logs only"}
   ]
 
   def levels, do: @levels

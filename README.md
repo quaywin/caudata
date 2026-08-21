@@ -7,7 +7,7 @@ Caudata is a collaborative, zero-config multi-server log streamer, real-time met
 
 ⭐ If you like this project, star it on GitHub — it helps a lot!
 
-[Features](#features) • [Performance & Benchmarks](#performance--benchmarks) • [Installation](#installation) • [Quick Start](#quick-start) • [CLI Options](#cli-options) • [Keybindings & Mouse Controls](#keybindings--mouse-controls) • [Configuration](#configuration) • [Alternatives](#alternatives)
+[Features](#features) • [Installation](#installation) • [Quick Start](#quick-start) • [CLI Options](#cli-options) • [Keybindings & Mouse Controls](#keybindings--mouse-controls) • [Configuration](#configuration) • [Alternatives](#alternatives)
 
 ---
 
@@ -21,31 +21,16 @@ Tired of SSH-ing into 5 different servers just to tail Docker logs? Caudata brin
 - **Docker Management**: Control containers directly — Start, Stop, Restart, Kill, Inspect, and Remove.
 - **System Services & Custom Logs**: Stream Systemd (Linux), Launchd (macOS), or custom file paths.
 - **Real-time Metrics**: Live CPU, RAM, and disk monitoring for hosts and granular stats for containers.
-- **⚡ Rust NIF Accelerated Engine**: ~270k lines/s sustained ingest and 100k–530k lines/s across NIF parse/sanitize operations, with sub-element highlighting powered by Rustler.
+- **✨ `hl` Standard Structured Layout**: Automatically formats JSON, Logfmt, and plain text into clean, human-readable lines: `[TIMESTAMP] [LEVEL] (SERVICE) MESSAGE  key1=val1 key2=val2`.
+- **🎨 Sub-Element Syntax Highlighting**: Native token highlighting for IPv4/IPv6, URIs/paths, HTTP methods/statuses, durations (`ms`/`s`), UUIDs, and numbers.
+- **📊 Quick Log Level Filtering (`[l]`)**: Instant modal selector to filter logs by exact severity (`All`, `INFO only`, `WARN only`, `ERROR only`).
+- **⚡ Rust NIF Accelerated Engine**: High-throughput log ingest, parsing, and ANSI/escape sanitization powered by Rustler.
 - **⏱️ Zero-Latency ETS Direct Read**: ETS-backed log buffers for non-blocking snapshot reads.
 - **🖱️ Mouse & Visual Controls**: SGR mouse support for scroll wheeling, drag-to-copy, sidebar clicking, footer action bar, and modal backdrop closing.
 - **Development Web View**: Render the exact TUI inside a web browser via Phoenix LiveView.
 - **Tailscale VPN Integration**: Connect to Tailscale hosts without a system daemon.
 - **Single-Binary Packaging**: Self-contained Burrito executable (~13 MB binary, ~84 MB idle RAM).
 - **Self-Upgrades**: Stay up to date with `caudata upgrade`.
-
----
-
-## 🚀 Performance & Benchmarks
-
-Caudata is engineered for ultra-low memory footprint and high 60 FPS TUI scrolling over heavy log streams.
-
-### Benchmark Matrix (Apple M2, 8GB RAM, Elixir 1.19.5 + Erlang 28.5 + Rust NIF)
-
-| Component / Task | Before Optimization | **After Optimization** | Improvement | RAM Footprint |
-| :--- | :--- | :--- | :--- | :--- |
-| **ConfigStore.put_setting** | 91,340 ops/s (OS `:emfile` errors) | **726,010 ops/s** | 🚀 **8.0x Faster (Sạch 100% OS errors)** | 0.30 KB |
-| **LogSanitizer.process_chunk**| 39,490 chunks/s | **123,610 chunks/s** | 🚀 **3.1x Faster** | ⬇️ **1.50 KB (-90.1% RAM)** |
-| **LogFormatter (JSON Parsing)**| 29,800 lines/s | **111,970 lines/s** | 🚀 **3.8x Faster** | ⬇️ **5.61 KB (-52.6% RAM)** |
-| **LogFormatter (Text SubHighlight)**| 18,590 lines/s | **49,050 lines/s** | 🚀 **2.6x Faster** | ⬇️ **4.12 KB (-68.3% RAM)** |
-| **LogStore.get_snapshot** | 1,050 ops/s (952 μs latency) | **5,150 ops/s (121 μs latency)** | 🚀 **4.9x Faster** | 0.71 KB |
-| **ViewHelper.get_displayed_logs**| 7,434.52 KB / filter | **4.59 KB / filter** | 💣 **1,620x RAM Reduction (-99.94%)** | **4.59 KB** |
-| **Production Binary RAM Footprint** | ~98 MB (`mix run` dev) | **`~84 MB` (Burrito binary, `+S 2:2`)** | 🧠 ~14% lower via release tuning (`strip_beams`, `exclude_apps`, `+S 2:2`) | **~84 MB** |
 
 ---
 
@@ -142,16 +127,16 @@ caudata upgrade
 | **Scroll Wheel** | Logs Pane | Scroll log stream (auto-fetches history at top) |
 | **Drag & Select** | Logs Pane | Highlight log range & auto-copy to OS clipboard on release |
 | **Left Click** | Sidebar | Select server/container & start stream |
-| **Left Click** | Footer Bar | Trigger action shortcut (`[a] Add`, `[s] Settings`, `[?] Help`, etc.) |
+| **Left Click** | Footer Bar | Trigger action shortcut (`[a] Add`, `[s] Settings`, `[l] Level`, `[?] Help`, etc.) |
 | **Left Click** | Modals | Switch tabs, pick actions, or click backdrop to close (`Esc`) |
 
 ### Global
 
 | Key | Action |
 | :--- | :--- |
-| `1` / `h` / `←` | Jump focus to **Sidebar** panel |
-| `2` / `l` / `→` | Jump focus to **Logs** panel |
-| `Tab` | Toggle active panel focus / switch sidebar tabs |
+| `1` / `2` / `3` | Jump focus directly to **Servers (1)**, **Containers (2)**, or **Logs (3)** |
+| `Tab` / `←` / `→` | Cycle active panel focus (1 ↔ 2 ↔ 3) |
+| `l` / `L` | Open the **Log Level Filter** modal (`All`, `INFO`, `WARN`, `ERROR`) |
 | `a` / `A` | Open the **Add Connection** modal |
 | `s` / `S` | Open the **Global Settings** modal |
 | `f` / `F` | Toggle log panel full-screen view |
@@ -159,26 +144,27 @@ caudata upgrade
 | `?` | Toggle the **Help** modal |
 | `q` / `Q` / `Ctrl+C` | Exit Caudata |
 
-### Sidebar (Panel 1: Servers & Containers)
+### Servers & Containers (Panels 1 & 2)
 
 | Key | Action |
 | :--- | :--- |
-| `↑` / `↓` (or `k` / `j`) | Navigate server & container tree |
+| `↑` / `↓` (or `k` / `j`) | Navigate server & container list |
 | `Enter` | Connect to server / select container to stream |
 | `Space` | Toggle log stream on/off |
 | `m` / `M` | Open **Docker Container Actions** (Start/Stop/Restart/Kill/Inspect/Remove) |
 
-### Logs Pane (Panel 2: Log Stream)
+### Logs Pane (Panel 3)
 
 | Key | Action |
 | :--- | :--- |
 | `↑` / `↓` (or `k` / `j`) | Scroll logs up/down (auto-accelerates on hold) |
 | `g` / `G` | Jump to **top** (`g`) or **bottom** (`G`) of logs |
 | `PageUp` / `PageDown` | Scroll logs page-by-page |
-| `/` | Enter **live regex filter** search mode |
-| `v` / `V` | Enter **Visual Select Mode** (extend selection with `j`/`k`) |
+| `/` | Enter **live regex filter** search mode (supports `!` for negative filter) |
+| `v` / `V` | Enter **Visual Select Mode** (extend selection with `j`/`k` or mouse) |
 | `y` / `Y` | Copy all displayed logs (or selected lines in Visual Mode) to clipboard |
 | `o` | Swap anchor/cursor ends (in Visual Select Mode) |
+| `Space` | Pause / Resume live log auto-scrolling (`[PAUSED]`) |
 | `Esc` | Clear active filter regex / exit visual mode |
 
 ---

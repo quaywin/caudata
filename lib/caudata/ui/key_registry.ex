@@ -505,24 +505,17 @@ defmodule Caudata.UI.KeyRegistry do
 
         switch_to_panel(next_panel, model)
 
-      "L" ->
-        open_level_filter_modal(model)
+      :right ->
+        next_panel =
+          case current_panel_number(model) do
+            1 -> 2
+            2 -> 3
+            3 -> 1
+          end
 
-      k when k in ["l", :right] ->
-        if (k == "l" and Map.get(model, :active_panel, :sidebar) == :logs) or Map.get(model, :logs_full_screen, false) do
-          open_level_filter_modal(model)
-        else
-          next_panel =
-            case current_panel_number(model) do
-              1 -> 2
-              2 -> 3
-              3 -> 1
-            end
+        switch_to_panel(next_panel, model)
 
-          switch_to_panel(next_panel, model)
-        end
-
-      k when k in ["h", :left] ->
+      :left ->
         prev_panel =
           case current_panel_number(model) do
             1 -> 3
@@ -531,6 +524,9 @@ defmodule Caudata.UI.KeyRegistry do
           end
 
         switch_to_panel(prev_panel, model)
+
+      k when k in ["l", "L"] ->
+        open_level_filter_modal(model)
 
       k when k in ["j", "k", :up, :down] ->
         active_panel = Map.get(model, :active_panel, :sidebar)

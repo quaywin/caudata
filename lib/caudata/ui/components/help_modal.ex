@@ -12,8 +12,8 @@ defmodule Caudata.UI.Components.HelpModal do
   @sections [
     {"🌐 Global Shortcuts", [
       {"1 / 2 / 3", "Jump focus to Servers (1), Containers (2), or Logs (3)"},
-      {"h / l  or  ← / →", "Cycle active focus (1 ↔ 2 ↔ 3)"},
-      {"Tab", "Cycle active panel focus (1 → 2 → 3 → 1)"},
+      {"Tab  or  ← / →", "Cycle active panel focus (1 ↔ 2 ↔ 3)"},
+      {"l / L", "Open Log Level filter modal (hl standard)"},
       {"a / A", "Open Add Server connection modal"},
       {"s / S", "Open Global Settings modal"},
       {"f / F", "Toggle Fullscreen Logs view"},

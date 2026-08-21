@@ -8,7 +8,7 @@ defmodule Caudata.UI.LogFormatter do
   alias ExRatatui.Text.Span
 
   @doc """
-  Formats a single log line into a tuple `{spans, is_error}`.
+  Formats a single log line into a tuple `{spans, is_error, severity_num}`.
   Caches the result in the Process Dictionary for sub-millisecond redraws.
   """
   def format_line_with_meta(line) when is_binary(line) do
@@ -23,7 +23,7 @@ defmodule Caudata.UI.LogFormatter do
     end
   end
 
-  def format_line_with_meta(nil), do: {[], false, 2}
+  def format_line_with_meta(nil), do: {[], false, 0}
 
   @doc """
   Formats a single log line into a list of spans.
@@ -53,7 +53,7 @@ defmodule Caudata.UI.LogFormatter do
       Caudata.Native.parse_log_line(line)
     rescue
       _ ->
-        {[Span.new(line, style: %Style{fg: :white})], false, 2}
+        {[Span.new(line, style: %Style{fg: :white})], false, 0}
     end
   end
 end

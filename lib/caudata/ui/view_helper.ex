@@ -64,64 +64,11 @@ defmodule Caudata.UI.ViewHelper do
 
     level_filtered_logs =
       case level_filter do
-        :info ->
-          Enum.filter(model.logs, fn
-            %{message: msg} ->
-              {_spans, _is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(msg)
-              sev == 2
-
-            line when is_binary(line) ->
-              {_spans, _is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(line)
-              sev == 2
-
-            _ ->
-              false
-          end)
-
-        :warn ->
-          Enum.filter(model.logs, fn
-            %{message: msg} ->
-              {_spans, _is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(msg)
-              sev == 3
-
-            line when is_binary(line) ->
-              {_spans, _is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(line)
-              sev == 3
-
-            _ ->
-              false
-          end)
-
-        :error ->
-          Enum.filter(model.logs, fn
-            %{message: msg} ->
-              {_spans, is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(msg)
-              sev >= 4 or is_err
-
-            line when is_binary(line) ->
-              {_spans, is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(line)
-              sev >= 4 or is_err
-
-            _ ->
-              false
-          end)
-
-        :fatal ->
-          Enum.filter(model.logs, fn
-            %{message: msg} ->
-              {_spans, is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(msg)
-              sev >= 5 or is_err
-
-            line when is_binary(line) ->
-              {_spans, is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(line)
-              sev >= 5 or is_err
-
-            _ ->
-              false
-          end)
-
-        _ ->
-          model.logs
+        :info -> filter_logs_by_predicate(model.logs, fn _is_err, sev -> sev == 2 end)
+        :warn -> filter_logs_by_predicate(model.logs, fn _is_err, sev -> sev == 3 end)
+        :error -> filter_logs_by_predicate(model.logs, fn is_err, sev -> sev >= 4 or is_err end)
+        :fatal -> filter_logs_by_predicate(model.logs, fn is_err, sev -> sev >= 5 or is_err end)
+        _ -> model.logs
       end
 
     filtered_logs =
@@ -547,4 +494,19 @@ defmodule Caudata.UI.ViewHelper do
   end
 
   def get_selection_range(_state), do: nil
+
+  defp filter_logs_by_predicate(logs, pred) do
+    Enum.filter(logs, fn
+      %{message: msg} ->
+        {_spans, is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(msg)
+        pred.(is_err, sev)
+
+      line when is_binary(line) ->
+        {_spans, is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(line)
+        pred.(is_err, sev)
+
+      _ ->
+        false
+    end)
+  end
 end

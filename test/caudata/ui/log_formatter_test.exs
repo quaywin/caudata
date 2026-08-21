@@ -8,7 +8,7 @@ defmodule Caudata.UI.LogFormatterTest do
     assert [ts, lvl, msg] = spans
     assert ts.content == "2026-06-08 12:00:00 "
     assert ts.style.fg == :dark_gray
-    assert lvl.content == "[info] "
+    assert lvl.content == "[INFO] "
     assert lvl.style.fg == :green
     assert :bold in lvl.style.modifiers
     assert msg.content == "  message with leading spaces"
@@ -66,7 +66,7 @@ defmodule Caudata.UI.LogFormatterTest do
   describe "Stage 1: JSON Log Parser" do
     test "parses structured info JSON log" do
       json_line = ~s({"level":"info","timestamp":"2026-06-08 12:00:00","message":"Server booted","port":4000})
-      {spans, is_error} = LogFormatter.format_line_with_meta(json_line)
+      {spans, is_error, _level} = LogFormatter.format_line_with_meta(json_line)
 
       refute is_error
       contents = Enum.map(spans, & &1.content)
@@ -77,7 +77,7 @@ defmodule Caudata.UI.LogFormatterTest do
 
     test "parses error JSON log and flags is_error" do
       json_line = ~s({"severity":"ERROR","msg":"Database timeout","error":"ETIMEDOUT"})
-      {spans, is_error} = LogFormatter.format_line_with_meta(json_line)
+      {spans, is_error, _level} = LogFormatter.format_line_with_meta(json_line)
 
       assert is_error
       contents = Enum.map(spans, & &1.content)
@@ -88,14 +88,14 @@ defmodule Caudata.UI.LogFormatterTest do
 
     test "handles nested JSON map/list values" do
       json_line = ~s({"level":"debug","message":"Event dispatched","meta":{"active":true}})
-      {_spans, is_error} = LogFormatter.format_line_with_meta(json_line)
+      {_spans, is_error, _level} = LogFormatter.format_line_with_meta(json_line)
 
       refute is_error
     end
 
     test "parses container prefixed JSON logs" do
       prefixed_line = ~s(2026-08-04T10:15:00Z stdout F {"level":"info","message":"App started","port":4000})
-      {spans, is_error} = LogFormatter.format_line_with_meta(prefixed_line)
+      {spans, is_error, _level} = LogFormatter.format_line_with_meta(prefixed_line)
 
       refute is_error
       contents = Enum.map(spans, & &1.content)
@@ -105,7 +105,7 @@ defmodule Caudata.UI.LogFormatterTest do
 
     test "supports alternative message keys like event or payload" do
       json_line = ~s({"level":"info","event":"User login successful","user_id":123})
-      {spans, is_error} = LogFormatter.format_line_with_meta(json_line)
+      {spans, is_error, _level} = LogFormatter.format_line_with_meta(json_line)
 
       refute is_error
       contents = Enum.map(spans, & &1.content)
@@ -118,7 +118,7 @@ defmodule Caudata.UI.LogFormatterTest do
   describe "Stage 2: Logfmt Parser" do
     test "parses key-value logfmt log in-place" do
       logfmt = ~s(ts="2026-06-08 12:00:00" level=info msg="User login" user_id=42 duration=15ms)
-      {spans, is_error} = LogFormatter.format_line_with_meta(logfmt)
+      {spans, is_error, _level} = LogFormatter.format_line_with_meta(logfmt)
 
       refute is_error
       contents = Enum.map(spans, & &1.content)
@@ -132,7 +132,7 @@ defmodule Caudata.UI.LogFormatterTest do
 
     test "flags error logfmt based on status 500 or error level" do
       logfmt = ~s(level=error msg="Internal error" status=500)
-      {_spans, is_error} = LogFormatter.format_line_with_meta(logfmt)
+      {_spans, is_error, _level} = LogFormatter.format_line_with_meta(logfmt)
 
       assert is_error
     end

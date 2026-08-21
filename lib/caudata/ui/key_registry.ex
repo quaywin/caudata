@@ -12,7 +12,8 @@ defmodule Caudata.UI.KeyRegistry do
     SettingsModal,
     ContainerActionModal,
     ContainerInspectModal,
-    HelpModal
+    HelpModal,
+    LevelFilterModal
   }
 
   alias Caudata.UI.ViewHelper
@@ -45,8 +46,14 @@ defmodule Caudata.UI.KeyRegistry do
           :confirm_docker_action ->
             :confirm_docker_action
 
+          :confirm_delete_server ->
+            :confirm_delete_server
+
           :container_inspect ->
             :container_inspect
+
+          :level_filter ->
+            :level_filter
 
           :select_ssh ->
             :select_ssh
@@ -178,6 +185,13 @@ defmodule Caudata.UI.KeyRegistry do
           shortcut("[n/Esc]", "Cancel ", :yellow)
         ]
 
+      :level_filter ->
+        [
+          shortcut("[⇅/j/k]", "Navigate ", :cyan),
+          shortcut("[0-5/Enter]", "Select Level ", :green),
+          shortcut("[Esc/q]", "Close ", :red)
+        ]
+
       :searching ->
         [
           shortcut("[Esc]", "Cancel ", :yellow),
@@ -222,6 +236,7 @@ defmodule Caudata.UI.KeyRegistry do
         shortcut("[q]", "Quit ", :white),
         shortcut("[f/Esc]", "Normal ", :yellow),
         shortcut("[s]", "Settings ", :yellow),
+        shortcut("[l]", "Level ", :yellow),
         shortcut("[t]", "Time ", :magenta),
         shortcut("[/]", "Filter ", :white),
         shortcut("[y]", "Copy All ", :green),
@@ -238,6 +253,7 @@ defmodule Caudata.UI.KeyRegistry do
             shortcut("[q]", "Quit ", :white),
             shortcut("[1-3/Tab]", "Panel ", :yellow),
             shortcut("[s]", "Settings ", :yellow),
+            shortcut("[l]", "Level ", :yellow),
             shortcut("[f]", "Full ", :yellow),
             shortcut("[t]", "Time ", :magenta),
             shortcut("[/]", "Filter ", :white),
@@ -268,6 +284,7 @@ defmodule Caudata.UI.KeyRegistry do
             [
               shortcut("[a]", "Add ", :white),
               shortcut("[s]", "Settings ", :yellow),
+              shortcut("[l]", "Level ", :yellow),
               shortcut("[f]", "Full ", :yellow),
               shortcut("[t]", "Time ", :magenta),
               shortcut("[/]", "Filter ", :white),
@@ -374,6 +391,9 @@ defmodule Caudata.UI.KeyRegistry do
       :container_inspect ->
         ContainerInspectModal.handle_key(key, key_data, model)
 
+      :level_filter ->
+        handle_level_filter_modal_key(key, key_data, model)
+
       _ ->
         AddServerModal.handle_key(key, key_data, model)
     end
@@ -402,6 +422,63 @@ defmodule Caudata.UI.KeyRegistry do
     end
   end
 
+  def open_level_filter_modal(model) do
+    current_level = Map.get(model, :log_level_filter, :all)
+    current_idx = LevelFilterModal.get_index_for_level(current_level)
+
+    new_model =
+      model
+      |> Map.put(:modal_visible, true)
+      |> Map.put(:modal_type, :level_filter)
+      |> Map.put(:level_filter_modal_selected_index, current_idx)
+
+    {new_model, []}
+  end
+
+  def handle_level_filter_modal_key(key, key_data, model) do
+    char = if key == :char, do: Map.get(key_data, :char), else: nil
+    idx = Map.get(model, :level_filter_modal_selected_index, 0)
+    total = length(LevelFilterModal.levels())
+
+    cond do
+      key in [:escape, :esc] or char in ["q", "Q"] ->
+        {%{model | modal_visible: false}, []}
+
+      key in [:up, "k", "K"] or char in ["k", "K"] ->
+        new_idx = if idx > 0, do: idx - 1, else: total - 1
+        {%{model | level_filter_modal_selected_index: new_idx}, []}
+
+      key in [:down, "j", "J"] or char in ["j", "J"] ->
+        new_idx = if idx < total - 1, do: idx + 1, else: 0
+        {%{model | level_filter_modal_selected_index: new_idx}, []}
+
+      key in [:enter, " "] or char == " " ->
+        chosen_level = LevelFilterModal.get_level_by_index(idx)
+        apply_level_filter(chosen_level, model)
+
+      char in ["0", "1", "2", "3", "4", "5"] ->
+        chosen_level = LevelFilterModal.get_level_by_key(char)
+        apply_level_filter(chosen_level, model)
+
+      true ->
+        {model, []}
+    end
+  end
+
+  defp apply_level_filter(level, model) do
+    level_name = Atom.to_string(level) |> String.upcase()
+    notif = if level == :all, do: "Log level filter cleared (All logs)", else: "Log level filter: #{level_name}+"
+
+    new_model =
+      model
+      |> Map.put(:modal_visible, false)
+      |> Map.put(:log_level_filter, level)
+      |> Map.put(:logs_scroll_y, :bottom)
+      |> Map.put(:notification, {notif, 25})
+
+    {new_model, []}
+  end
+
   defp handle_normal_key(key, key_data, model) do
     norm_key = if key == :char, do: Map.get(key_data, :char), else: key
 
@@ -428,15 +505,22 @@ defmodule Caudata.UI.KeyRegistry do
 
         switch_to_panel(next_panel, model)
 
-      k when k in ["l", :right] ->
-        next_panel =
-          case current_panel_number(model) do
-            1 -> 2
-            2 -> 3
-            3 -> 1
-          end
+      "L" ->
+        open_level_filter_modal(model)
 
-        switch_to_panel(next_panel, model)
+      k when k in ["l", :right] ->
+        if (k == "l" and Map.get(model, :active_panel, :sidebar) == :logs) or Map.get(model, :logs_full_screen, false) do
+          open_level_filter_modal(model)
+        else
+          next_panel =
+            case current_panel_number(model) do
+              1 -> 2
+              2 -> 3
+              3 -> 1
+            end
+
+          switch_to_panel(next_panel, model)
+        end
 
       k when k in ["h", :left] ->
         prev_panel =

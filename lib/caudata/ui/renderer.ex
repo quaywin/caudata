@@ -15,7 +15,8 @@ defmodule Caudata.UI.Renderer do
     AddServerModal,
     SettingsModal,
     ContainerActionModal,
-    ContainerInspectModal
+    ContainerInspectModal,
+    LevelFilterModal
   }
 
   @doc """
@@ -91,6 +92,10 @@ defmodule Caudata.UI.Renderer do
 
             state.modal_type == :container_inspect ->
               [widget] = ContainerInspectModal.render(state)
+              widget
+
+            state.modal_type == :level_filter ->
+              [widget] = LevelFilterModal.render(state)
               widget
 
             true ->

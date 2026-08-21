@@ -34,6 +34,7 @@ defmodule Caudata.UI.Components.HelpModal do
       {"j / k  or  ↑ / ↓", "Scroll logs down / up (with auto-acceleration)"},
       {"g / G", "Jump to Top (g) or Bottom (G) of logs"},
       {"PageUp / PageDown", "Scroll logs page-by-page"},
+      {"l / L", "Open Log Level filter modal (hl standard)"},
       {"/", "Enter Live Regex Filter search mode"},
       {"v / V", "Enter Visual Selection mode (extend selection with j/k)"},
       {"y / Y", "Copy all displayed logs (or selected lines) to clipboard"},

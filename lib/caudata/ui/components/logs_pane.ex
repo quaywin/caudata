@@ -300,12 +300,16 @@ defmodule Caudata.UI.Components.LogsPane do
         ""
       end
 
+    level_suffix =
+      case Map.get(state, :log_level_filter, :all) do
+        :all -> ""
+        lvl -> " [Level: #{String.upcase(to_string(lvl))}+]"
+      end
+
     suffix =
-      case {visual_suffix, freeze_suffix} do
-        {"", ""} -> " "
-        {vis, ""} -> " " <> vis <> " "
-        {"", frz} -> " " <> frz <> " "
-        {vis, frz} -> " " <> vis <> frz <> " "
+      case {visual_suffix, freeze_suffix, level_suffix} do
+        {"", "", ""} -> " "
+        {vis, frz, lvl} -> " " <> Enum.join(Enum.filter([vis, frz, lvl], &(&1 != "")), " ") <> " "
       end
 
     base <> suffix
@@ -351,7 +355,7 @@ defmodule Caudata.UI.Components.LogsPane do
 
     case Process.get(cache_key) do
       nil ->
-        {spans, is_err_level} = LogFormatter.format_line_with_meta(line)
+        {spans, is_err_level, _level} = LogFormatter.format_line_with_meta(line)
         wrapped_chunks = ViewHelper.wrap_spans(spans, wrap_width)
         res = {wrapped_chunks, is_err_level}
         Process.put(cache_key, res)

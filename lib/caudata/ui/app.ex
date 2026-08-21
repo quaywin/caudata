@@ -124,7 +124,9 @@ defmodule Caudata.UI.App do
       container_action_modal_selected_index: 0,
       container_inspect_data: "",
       container_inspect_scroll_y: 0,
-      help_modal_scroll_y: 0
+      help_modal_scroll_y: 0,
+      log_level_filter: :all,
+      level_filter_modal_selected_index: 0
     }
 
     state = adjust_log_subscription(nil, state)

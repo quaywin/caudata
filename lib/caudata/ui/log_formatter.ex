@@ -23,13 +23,13 @@ defmodule Caudata.UI.LogFormatter do
     end
   end
 
-  def format_line_with_meta(nil), do: {[], false}
+  def format_line_with_meta(nil), do: {[], false, 2}
 
   @doc """
   Formats a single log line into a list of spans.
   """
   def format_line(line) do
-    {spans, _is_error} = format_line_with_meta(line)
+    {spans, _is_error, _level} = format_line_with_meta(line)
     spans
   end
 
@@ -53,7 +53,7 @@ defmodule Caudata.UI.LogFormatter do
       Caudata.Native.parse_log_line(line)
     rescue
       _ ->
-        {[Span.new(line, style: %Style{fg: :white})], false}
+        {[Span.new(line, style: %Style{fg: :white})], false, 2}
     end
   end
 end

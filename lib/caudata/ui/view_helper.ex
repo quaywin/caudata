@@ -46,7 +46,7 @@ defmodule Caudata.UI.ViewHelper do
         _ -> nil
       end
 
-    cache_key = {model.filter_regex, model.selected_container_id, logs_len, hd_log}
+    cache_key = {model.filter_regex, Map.get(model, :log_level_filter, :all), model.selected_container_id, logs_len, hd_log}
 
     case Process.get({:cached_displayed_logs, cache_key}) do
       nil ->
@@ -60,6 +60,37 @@ defmodule Caudata.UI.ViewHelper do
   end
 
   defp do_get_displayed_logs(model) do
+    level_filter = Map.get(model, :log_level_filter, :all)
+
+    min_sev =
+      case level_filter do
+        :fatal -> 5
+        :error -> 4
+        :warn -> 3
+        :info -> 2
+        :debug -> 1
+        :trace -> 0
+        _ -> 0
+      end
+
+    level_filtered_logs =
+      if min_sev > 0 do
+        Enum.filter(model.logs, fn
+          %{message: msg} ->
+            {_spans, _is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(msg)
+            sev >= min_sev
+
+          line when is_binary(line) ->
+            {_spans, _is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(line)
+            sev >= min_sev
+
+          _ ->
+            true
+        end)
+      else
+        model.logs
+      end
+
     filtered_logs =
       if model.filter_regex != "" and not model.filter_error do
         {is_negative, query} =
@@ -70,7 +101,7 @@ defmodule Caudata.UI.ViewHelper do
           end
 
         if query == "" do
-          model.logs
+          level_filtered_logs
         else
           if String.contains?(query, ["\\", "^", "$", "*", "+", "?", "(", ")", "[", "]", "{", "}", "|"]) do
             re =
@@ -81,7 +112,7 @@ defmodule Caudata.UI.ViewHelper do
                 end
 
             if re do
-              Enum.filter(model.logs, fn
+              Enum.filter(level_filtered_logs, fn
                 %{message: msg} ->
                   if is_negative, do: not Regex.match?(re, msg), else: Regex.match?(re, msg)
 
@@ -89,10 +120,10 @@ defmodule Caudata.UI.ViewHelper do
                   if is_negative, do: not Regex.match?(re, line), else: Regex.match?(re, line)
               end)
             else
-              model.logs
+              level_filtered_logs
             end
           else
-            Enum.filter(model.logs, fn
+            Enum.filter(level_filtered_logs, fn
               %{message: msg} ->
                 if is_negative, do: not String.contains?(msg, query), else: String.contains?(msg, query)
 
@@ -102,7 +133,7 @@ defmodule Caudata.UI.ViewHelper do
           end
         end
       else
-        model.logs
+        level_filtered_logs
       end
 
     normalized =

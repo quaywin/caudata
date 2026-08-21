@@ -1094,7 +1094,7 @@ defmodule Caudata.UI.AppTest do
     assert span_pref.content == "  "
     assert span_ts.content == "15:33:22.268 "
     assert span_ts.style.fg == :dark_gray
-    assert span_lvl.content == "[info] "
+    assert span_lvl.content == "[INFO] "
     assert span_lvl.style.fg == :green
     assert :bold in span_lvl.style.modifiers
     assert span_msg.content == "Running Caudata"
@@ -1115,7 +1115,7 @@ defmodule Caudata.UI.AppTest do
     line3 = Enum.at(paragraph.text, 2)
     assert [span_pref3, span_lvl3, span_msg3] = line3.spans
     assert span_pref3.content == "  "
-    assert span_lvl3.content == "[warn] "
+    assert span_lvl3.content == "[WARN] "
     assert span_lvl3.style.fg == :yellow
     assert :bold in span_lvl3.style.modifiers
     assert span_msg3.content == "API warning"
@@ -1132,7 +1132,7 @@ defmodule Caudata.UI.AppTest do
     line5 = Enum.at(paragraph.text, 4)
     assert [span_pref5, span_lvl5, span_msg5] = line5.spans
     assert span_pref5.content == "┃ "
-    assert span_lvl5.content == "[stderr] "
+    assert span_lvl5.content == "[STDERR] "
     assert span_lvl5.style.fg == :red
     assert :bold in span_lvl5.style.modifiers
     assert span_msg5.content == "system error output"
@@ -1143,7 +1143,7 @@ defmodule Caudata.UI.AppTest do
     assert [span_pref6, span_ts6, span_lvl6, span_msg6] = line6.spans
     assert span_pref6.content == "┃ "
     assert span_ts6.content == "2026-06-08 15:33:22 "
-    assert span_lvl6.content == "crit: "
+    assert span_lvl6.content == "CRIT: "
     assert span_lvl6.style.fg == :red
     assert :bold in span_lvl6.style.modifiers
     assert span_msg6.content == "Critical system issue"
@@ -1153,7 +1153,7 @@ defmodule Caudata.UI.AppTest do
     line7 = Enum.at(paragraph.text, 6)
     assert [span_pref7, span_lvl7, span_msg7] = line7.spans
     assert span_pref7.content == "┃ "
-    assert span_lvl7.content == "fail: "
+    assert span_lvl7.content == "FAIL: "
     assert span_lvl7.style.fg == :red
     assert :bold in span_lvl7.style.modifiers
     assert span_msg7.content == "operation failed"

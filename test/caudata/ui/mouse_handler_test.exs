@@ -129,6 +129,62 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandlerTest do
     assert state_sidebar_up.mode == :browsing
   end
 
+  test "mouse drag selection auto-scrolls down when dragging past/at the bottom edge", %{state: state} do
+    # 50 log lines, height 15 -> inner height 11
+    logs = for i <- 0..49, do: %{timestamp: "2026-08-04T10:00:00Z", stream: "stdout", message: "Line #{i}"}
+    long_state = %{state | logs: logs, height: 15, width: 100, logs_scroll_y: 0}
+
+    # Start selection at top line (y = 1)
+    down_event = %Mouse{kind: "down", button: "left", x: 50, y: 1}
+    {state_down, []} = MouseHandler.handle_mouse(down_event, long_state)
+    assert state_down.mode == :selecting
+    assert state_down.logs_scroll_y == 0
+    assert state_down.visual_anchor == 0
+    assert state_down.visual_cursor == 0
+
+    # Drag to bottom edge (y = 11, which is inner.y + logs_height - 1 = 1 + 11 - 1 = 11)
+    drag_to_bottom = %Mouse{kind: "drag", button: "left", x: 50, y: 11}
+    {state_bottom, []} = MouseHandler.handle_mouse(drag_to_bottom, state_down)
+    assert state_bottom.visual_cursor == 10
+
+    # Drag further down past bottom (y = 13) -> scrolls logs down and extends visual_cursor
+    drag_overshoot = %Mouse{kind: "drag", button: "left", x: 50, y: 13}
+    {state_scrolled, []} = MouseHandler.handle_mouse(drag_overshoot, state_bottom)
+    assert state_scrolled.logs_scroll_y > 0
+    assert state_scrolled.visual_cursor > state_bottom.visual_cursor
+    assert state_scrolled.visual_anchor == 0
+
+    # Drag at bottom again -> continues scrolling down
+    {state_scrolled_more, []} = MouseHandler.handle_mouse(drag_overshoot, state_scrolled)
+    assert state_scrolled_more.logs_scroll_y > state_scrolled.logs_scroll_y
+    assert state_scrolled_more.visual_cursor > state_scrolled.visual_cursor
+  end
+
+  test "mouse drag selection auto-scrolls up when dragging past/at the top edge", %{state: state} do
+    # 50 log lines, height 15, scrolled down to scroll_y = 20
+    logs = for i <- 0..49, do: %{timestamp: "2026-08-04T10:00:00Z", stream: "stdout", message: "Line #{i}"}
+    scrolled_state = %{state | logs: logs, height: 15, width: 100, logs_scroll_y: 20}
+
+    # Start selection at row y = 5 (inner is y = 1..11)
+    down_event = %Mouse{kind: "down", button: "left", x: 50, y: 5}
+    {state_down, []} = MouseHandler.handle_mouse(down_event, scrolled_state)
+    assert state_down.mode == :selecting
+    assert state_down.logs_scroll_y == 20
+    assert state_down.visual_anchor == 24
+
+    # Drag to top line (y = 1)
+    drag_to_top = %Mouse{kind: "drag", button: "left", x: 50, y: 1}
+    {state_top, []} = MouseHandler.handle_mouse(drag_to_top, state_down)
+    assert state_top.visual_cursor == 20
+
+    # Drag past top (y = 0) -> scrolls logs up
+    drag_overshoot = %Mouse{kind: "drag", button: "left", x: 50, y: 0}
+    {state_scrolled, []} = MouseHandler.handle_mouse(drag_overshoot, state_top)
+    assert state_scrolled.logs_scroll_y < 20
+    assert state_scrolled.visual_cursor < 20
+    assert state_scrolled.visual_anchor == 24
+  end
+
   test "mouse click on footer triggers shortcut action button", %{state: state} do
     # Footer is at y=29 (height=30)
     # [q] Quit is near x=0

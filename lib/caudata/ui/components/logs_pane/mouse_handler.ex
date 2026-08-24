@@ -70,12 +70,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
   defp handle_scroll("scroll_up", state) do
     displayed_logs = ViewHelper.get_displayed_logs(state)
     max_scroll = get_max_scroll(state, displayed_logs)
-
-    current_scroll =
-      case state.logs_scroll_y do
-        :bottom -> max_scroll
-        val -> val
-      end
+    current_scroll = get_current_scroll(state, max_scroll)
 
     new_scroll = max(0, current_scroll - 3)
 
@@ -110,12 +105,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
   defp handle_scroll("scroll_down", state) do
     displayed_logs = ViewHelper.get_displayed_logs(state)
     max_scroll = get_max_scroll(state, displayed_logs)
-
-    current_scroll =
-      case state.logs_scroll_y do
-        :bottom -> max_scroll
-        val -> val
-      end
+    current_scroll = get_current_scroll(state, max_scroll)
 
     new_scroll = min(max_scroll, current_scroll + 3)
 
@@ -150,7 +140,9 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
     displayed_logs = ViewHelper.get_displayed_logs(state)
 
     if displayed_logs != [] do
-      log_index = screen_y_to_log_index(mouse.y, inner, state, displayed_logs)
+      max_scroll = get_max_scroll(state, displayed_logs)
+      current_scroll = get_current_scroll(state, max_scroll)
+      log_index = screen_y_to_log_index(mouse.y, inner, %{state | logs_scroll_y: current_scroll}, displayed_logs)
 
       new_state =
         %{
@@ -158,6 +150,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
           | mode: :selecting,
             visual_anchor: log_index,
             visual_cursor: log_index,
+            logs_scroll_y: current_scroll,
             freeze: true
         }
         |> Map.put(:mouse_dragging, false)
@@ -173,14 +166,76 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
     displayed_logs = ViewHelper.get_displayed_logs(state)
 
     if displayed_logs != [] do
-      target_y = clamp(mouse.y, inner.y, inner.y + inner.height - 1)
-      log_index = screen_y_to_log_index(target_y, inner, state, displayed_logs)
+      inner_width = ViewHelper.get_logs_inner_width(state)
+      logs_height = ViewHelper.get_logs_pane_height(state)
+      max_scroll = get_max_scroll(state, displayed_logs)
+      last_log_idx = max(0, length(displayed_logs) - 1)
+      current_scroll = get_current_scroll(state, max_scroll)
 
-      if log_index != state.visual_cursor do
-        new_state = %{state | visual_cursor: log_index, mouse_dragging: true}
-        {new_state, []}
-      else
-        {state, []}
+      log_index_at_visual_y = fn visual_y ->
+        displayed_logs
+        |> Caudata.UI.Components.LogsPane.EventHandler.get_raw_index_at_scroll(visual_y, inner_width)
+        |> clamp(0, last_log_idx)
+      end
+
+      top_edge = inner.y
+      bottom_edge = inner.y + logs_height - 1
+
+      cond do
+        # Dragging at or below bottom edge -> auto-scroll DOWN
+        mouse.y >= bottom_edge ->
+          bottom_log_idx = log_index_at_visual_y.(current_scroll + max(0, logs_height - 1))
+
+          if mouse.y > bottom_edge or state.visual_cursor == bottom_log_idx do
+            scroll_delta = max(1, mouse.y - bottom_edge)
+            new_scroll = min(max_scroll, current_scroll + scroll_delta)
+            new_cursor = log_index_at_visual_y.(new_scroll + max(0, logs_height - 1))
+
+            new_state = %{state | logs_scroll_y: new_scroll, visual_cursor: new_cursor, mouse_dragging: true}
+            {new_state, []}
+          else
+            new_state = %{state | logs_scroll_y: current_scroll, visual_cursor: bottom_log_idx, mouse_dragging: true}
+            {new_state, []}
+          end
+
+        # Dragging at or above top edge -> auto-scroll UP
+        mouse.y <= top_edge ->
+          top_log_idx = log_index_at_visual_y.(current_scroll)
+
+          if mouse.y < top_edge or state.visual_cursor == top_log_idx do
+            scroll_delta = max(1, top_edge - mouse.y)
+            new_scroll = max(0, current_scroll - scroll_delta)
+            new_cursor = log_index_at_visual_y.(new_scroll)
+
+            new_state = %{state | logs_scroll_y: new_scroll, visual_cursor: new_cursor, mouse_dragging: true}
+
+            if new_scroll == 0 and current_scroll > 0 and state.logs_fetch_limit < 10000 and
+                 not state.loading_history do
+              new_limit = min(state.logs_fetch_limit + 1000, 10000)
+
+              load_state = %{
+                new_state
+                | logs_fetch_limit: new_limit,
+                  loading_history: true,
+                  logs_len_before_history_load: length(state.logs)
+              }
+
+              {load_state, [{:command, {:load_history, new_limit}}]}
+            else
+              {new_state, []}
+            end
+          else
+            new_state = %{state | logs_scroll_y: current_scroll, visual_cursor: top_log_idx, mouse_dragging: true}
+            {new_state, []}
+          end
+
+        # Dragging strictly inside the visible logs area
+        true ->
+          relative_y = clamp(mouse.y - top_edge, 0, max(0, logs_height - 1))
+          log_index = log_index_at_visual_y.(current_scroll + relative_y)
+
+          new_state = %{state | logs_scroll_y: current_scroll, visual_cursor: log_index, mouse_dragging: true}
+          {new_state, []}
       end
     else
       {state, []}
@@ -335,12 +390,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
   def screen_y_to_log_index(mouse_y, %Rect{y: ry, height: rh}, state, displayed_logs) do
     inner_width = ViewHelper.get_logs_inner_width(state)
     max_scroll = get_max_scroll(state, displayed_logs)
-
-    current_scroll =
-      case state.logs_scroll_y do
-        :bottom -> max_scroll
-        val -> val
-      end
+    current_scroll = get_current_scroll(state, max_scroll)
 
     relative_y = clamp(mouse_y - ry, 0, rh - 1)
     target_visual_y = current_scroll + relative_y
@@ -353,6 +403,14 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
 
     max_idx = max(0, length(displayed_logs) - 1)
     clamp(log_index, 0, max_idx)
+  end
+
+  defp get_current_scroll(state, max_scroll) do
+    case state.logs_scroll_y do
+      :bottom -> max_scroll
+      val when is_integer(val) -> val
+      _ -> 0
+    end
   end
 
   defp get_max_scroll(state, displayed_logs) do

@@ -25,11 +25,7 @@ defmodule Caudata.UI.Components.SettingsModal.ServicesTab do
 
     popup_inner_width = div(state.width * 80, 100) - 4
 
-    services =
-      Enum.filter(containers, fn c ->
-        c.image == "systemd" or String.starts_with?(to_string(c.id), "systemd:") or
-          c.image == "launchd" or String.starts_with?(to_string(c.id), "launchd:")
-      end)
+    services = Caudata.UI.ViewHelper.filter_system_services(containers)
 
     filtered_services = filter_services(services, state.settings_service_search)
     max_name_len = max(20, div(state.width, 3))
@@ -118,10 +114,7 @@ defmodule Caudata.UI.Components.SettingsModal.ServicesTab do
           Line.new([Span.new(empty_msg, style: %Style{fg: :dark_gray})])
         ]
       else
-        start_row =
-          if state.settings_service_idx >= display_rows_limit,
-            do: state.settings_service_idx - display_rows_limit + 1,
-            else: 0
+        start_row = Caudata.UI.ViewHelper.scroll_start_row(state.settings_service_idx, display_rows_limit)
 
         filtered_services
         |> Enum.with_index()

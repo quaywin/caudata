@@ -86,4 +86,38 @@ defmodule Caudata.UI.Components.ContainerActionModalTest do
       assert new_state_esc.delete_server_id == nil
     end
   end
+
+  describe "handle_key bounded navigation" do
+    test "bounds cursor at top 0 and bottom total-1 with Home/End" do
+      state = %{
+        modal_visible: true,
+        modal_type: :container_action,
+        container_action_modal_selected_index: 0,
+        selected_profile_id: "s1",
+        selected_container_id: "c1",
+        profiles: [%Caudata.Profile{id: "s1", host_pattern: "s1"}],
+        containers: %{"s1" => [%{id: "c1", name: "c1", image: "test-image"}]}
+      }
+
+      # Up at 0 stays at 0
+      {s_up, []} = ContainerActionModal.handle_key(:up, %{}, state)
+      assert s_up.container_action_modal_selected_index == 0
+
+      # Down moves to 1
+      {s1, []} = ContainerActionModal.handle_key(:down, %{}, state)
+      assert s1.container_action_modal_selected_index == 1
+
+      # End / G moves to last
+      {s_end, []} = ContainerActionModal.handle_key(:char, %{char: "G"}, s1)
+      assert s_end.container_action_modal_selected_index > 1
+
+      # Down at last stays at last
+      {s_down_stop, []} = ContainerActionModal.handle_key(:down, %{}, s_end)
+      assert s_down_stop.container_action_modal_selected_index == s_end.container_action_modal_selected_index
+
+      # Home / g moves to 0
+      {s_home, []} = ContainerActionModal.handle_key(:char, %{char: "g"}, s_down_stop)
+      assert s_home.container_action_modal_selected_index == 0
+    end
+  end
 end

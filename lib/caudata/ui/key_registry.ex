@@ -437,27 +437,24 @@ defmodule Caudata.UI.KeyRegistry do
 
   def handle_level_filter_modal_key(key, key_data, model) do
     char = if key == :char, do: Map.get(key_data, :char), else: nil
-    idx = Map.get(model, :level_filter_modal_selected_index, 0)
+    norm_key = if char, do: char, else: key
+    idx = min(max(0, Map.get(model, :level_filter_modal_selected_index, 0)), 3)
     total = length(LevelFilterModal.levels())
 
     cond do
-      key in [:escape, :esc] or char in ["q", "Q"] ->
+      norm_key in [:escape, :esc, "q", "Q"] ->
         {%{model | modal_visible: false}, []}
 
-      key in [:up, "k", "K"] or char in ["k", "K"] ->
-        new_idx = if idx > 0, do: idx - 1, else: total - 1
+      norm_key in [:up, :down, :home, :end, "k", "j", "g", "G", "K", "J"] ->
+        new_idx = Caudata.UI.ViewHelper.navigate_bounded_index(idx, norm_key, total)
         {%{model | level_filter_modal_selected_index: new_idx}, []}
 
-      key in [:down, "j", "J"] or char in ["j", "J"] ->
-        new_idx = if idx < total - 1, do: idx + 1, else: 0
-        {%{model | level_filter_modal_selected_index: new_idx}, []}
-
-      key in [:enter, " "] or char == " " ->
+      norm_key in [:enter, " "] ->
         chosen_level = LevelFilterModal.get_level_by_index(idx)
         apply_level_filter(chosen_level, model)
 
-      char in ["0", "1", "2", "3"] ->
-        chosen_level = LevelFilterModal.get_level_by_key(char)
+      norm_key in ["0", "1", "2", "3"] ->
+        chosen_level = LevelFilterModal.get_level_by_key(norm_key)
         apply_level_filter(chosen_level, model)
 
       true ->
@@ -465,7 +462,7 @@ defmodule Caudata.UI.KeyRegistry do
     end
   end
 
-  defp apply_level_filter(level, model) do
+  def apply_level_filter(level, model) do
     level_name = Atom.to_string(level) |> String.upcase()
     notif = if level == :all, do: "Log level filter cleared (All logs)", else: "Log level filter: #{level_name} only"
 

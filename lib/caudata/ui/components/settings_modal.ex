@@ -9,6 +9,7 @@ defmodule Caudata.UI.Components.SettingsModal do
   alias ExRatatui.Widgets.Paragraph
   alias ExRatatui.Widgets.Popup
 
+  alias Caudata.UI.ViewHelper
   alias Caudata.UI.Components.SettingsModal.{
     ServersTab,
     ConnectionTab,
@@ -118,25 +119,18 @@ defmodule Caudata.UI.Components.SettingsModal do
   end
 
   defp handle_settings_key(key, key_data, model) do
-    profile = Enum.at(model.profiles, model.settings_selected_profile_idx)
+    selected_idx = Map.get(model, :settings_selected_profile_idx, 0)
+    profiles = Map.get(model, :profiles, [])
+    profile = Enum.at(profiles, selected_idx)
     containers = if profile, do: Map.get(model.containers, profile.id, []), else: []
     custom_logs = if profile, do: profile.custom_logs || [], else: []
 
     # Filtered containers to match UI
-    docker_only_containers =
-      Enum.reject(containers, fn c ->
-        c.image == "file" or String.starts_with?(to_string(c.id), "file:") or
-          c.image == "systemd" or String.starts_with?(to_string(c.id), "systemd:") or
-          c.image == "launchd" or String.starts_with?(to_string(c.id), "launchd:")
-      end)
+    docker_only_containers = ViewHelper.filter_docker_containers(containers)
 
     services_only =
-      containers
-      |> Enum.filter(fn c ->
-        c.image == "systemd" or String.starts_with?(to_string(c.id), "systemd:") or
-          c.image == "launchd" or String.starts_with?(to_string(c.id), "launchd:")
-      end)
-      |> ServicesTab.filter_services(model.settings_service_search)
+      ViewHelper.filter_system_services(containers)
+      |> ServicesTab.filter_services(Map.get(model, :settings_service_search, ""))
 
     cond do
       model.settings_focus == :connection ->
@@ -264,17 +258,15 @@ defmodule Caudata.UI.Components.SettingsModal do
                   {model, []}
                 end
 
-              k when k in [:up, "k"] ->
+              k when k in [:up, :down, :home, :end, :page_up, :page_down, :pageup, :pagedown, "k", "j", "g", "G", "K", "J"] ->
+                page_step = max(3, div(Map.get(model, :height, 24) * 90, 100) - 11)
+
                 case model.settings_focus do
                   :servers ->
-                    total = length(model.profiles)
-
-                    new_idx =
-                      if total > 0,
-                        do: rem(model.settings_selected_profile_idx - 1 + total, total),
-                        else: 0
-
-                    profile = Enum.at(model.profiles, new_idx)
+                    profiles = Map.get(model, :profiles, [])
+                    current_idx = Map.get(model, :settings_selected_profile_idx, 0)
+                    new_idx = ViewHelper.navigate_bounded_index(current_idx, k, length(profiles), page_step)
+                    profile = Enum.at(profiles, new_idx)
 
                     connection_fields =
                       if profile do
@@ -295,117 +287,32 @@ defmodule Caudata.UI.Components.SettingsModal do
                         %{}
                       end
 
-                    {%{
-                       model
-                       | settings_selected_profile_idx: new_idx,
-                         settings_container_idx: 0,
-                         settings_service_idx: 0,
-                         settings_service_search: "",
-                         settings_service_search_active: false,
-                         settings_custom_log_idx: 0,
-                         settings_connection_focus_idx: 0,
-                         settings_connection_fields: connection_fields,
-                         settings_status_msg: nil
-                     }, []}
+                    {Map.merge(model, %{
+                       settings_selected_profile_idx: new_idx,
+                       settings_container_idx: 0,
+                       settings_service_idx: 0,
+                       settings_service_search: "",
+                       settings_service_search_active: false,
+                       settings_custom_log_idx: 0,
+                       settings_connection_focus_idx: 0,
+                       settings_connection_fields: connection_fields,
+                       settings_status_msg: nil
+                     }), []}
 
                   :containers ->
-                    total = length(docker_only_containers)
-
-                    new_idx =
-                      if total > 0,
-                        do: rem(model.settings_container_idx - 1 + total, total),
-                        else: 0
-
-                    {%{model | settings_container_idx: new_idx, settings_status_msg: nil}, []}
+                    current_idx = Map.get(model, :settings_container_idx, 0)
+                    new_idx = ViewHelper.navigate_bounded_index(current_idx, k, length(docker_only_containers), page_step)
+                    {Map.merge(model, %{settings_container_idx: new_idx, settings_status_msg: nil}), []}
 
                   :services ->
-                    total = length(services_only)
-
-                    new_idx =
-                      if total > 0,
-                        do: rem(model.settings_service_idx - 1 + total, total),
-                        else: 0
-
-                    {%{model | settings_service_idx: new_idx, settings_status_msg: nil}, []}
+                    current_idx = Map.get(model, :settings_service_idx, 0)
+                    new_idx = ViewHelper.navigate_bounded_index(current_idx, k, length(services_only), page_step)
+                    {Map.merge(model, %{settings_service_idx: new_idx, settings_status_msg: nil}), []}
 
                   :custom_logs ->
-                    total = length(custom_logs)
-
-                    new_idx =
-                      if total > 0,
-                        do: rem(model.settings_custom_log_idx - 1 + total, total),
-                        else: 0
-
-                    {%{model | settings_custom_log_idx: new_idx, settings_status_msg: nil}, []}
-                end
-
-              k when k in [:down, "j"] ->
-                case model.settings_focus do
-                  :servers ->
-                    total = length(model.profiles)
-
-                    new_idx =
-                      if total > 0,
-                        do: rem(model.settings_selected_profile_idx + 1, total),
-                        else: 0
-
-                    profile = Enum.at(model.profiles, new_idx)
-
-                    connection_fields =
-                      if profile do
-                        if Map.get(profile, :is_local, false) do
-                          %{
-                            "password" => profile.password || ""
-                          }
-                        else
-                          %{
-                            "host_name" => profile.host_name || "",
-                            "port" => to_string(profile.port || 22),
-                            "user" => profile.user || "",
-                            "identity_file" => profile.identity_file || "",
-                            "password" => profile.password || ""
-                          }
-                        end
-                      else
-                        %{}
-                      end
-
-                    {%{
-                       model
-                       | settings_selected_profile_idx: new_idx,
-                         settings_container_idx: 0,
-                         settings_service_idx: 0,
-                         settings_service_search: "",
-                         settings_service_search_active: false,
-                         settings_custom_log_idx: 0,
-                         settings_connection_focus_idx: 0,
-                         settings_connection_fields: connection_fields,
-                         settings_status_msg: nil
-                     }, []}
-
-                  :containers ->
-                    total = length(docker_only_containers)
-
-                    new_idx =
-                      if total > 0, do: rem(model.settings_container_idx + 1, total), else: 0
-
-                    {%{model | settings_container_idx: new_idx, settings_status_msg: nil}, []}
-
-                  :services ->
-                    total = length(services_only)
-
-                    new_idx =
-                      if total > 0, do: rem(model.settings_service_idx + 1, total), else: 0
-
-                    {%{model | settings_service_idx: new_idx, settings_status_msg: nil}, []}
-
-                  :custom_logs ->
-                    total = length(custom_logs)
-
-                    new_idx =
-                      if total > 0, do: rem(model.settings_custom_log_idx + 1, total), else: 0
-
-                    {%{model | settings_custom_log_idx: new_idx, settings_status_msg: nil}, []}
+                    current_idx = Map.get(model, :settings_custom_log_idx, 0)
+                    new_idx = ViewHelper.navigate_bounded_index(current_idx, k, length(custom_logs), page_step)
+                    {Map.merge(model, %{settings_custom_log_idx: new_idx, settings_status_msg: nil}), []}
                 end
 
               " " ->

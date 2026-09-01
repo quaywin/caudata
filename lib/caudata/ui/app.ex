@@ -119,6 +119,7 @@ defmodule Caudata.UI.App do
       consecutive_key_count: 0,
       visual_anchor: nil,
       visual_cursor: nil,
+      mouse_drag_auto_scroll: nil,
       notification: nil,
       tick_scheduled: false,
       container_action_modal_selected_index: 0,
@@ -717,6 +718,10 @@ defmodule Caudata.UI.App do
       :toggle_freeze ->
         {:noreply, %{state | freeze: not state.freeze}}
 
+      :mouse_drag_tick ->
+        Caudata.UI.Components.LogsPane.MouseHandler.handle_drag_tick(state)
+        |> process_key_event_result(state)
+
       _ ->
         {:noreply, state}
     end
@@ -854,7 +859,11 @@ defmodule Caudata.UI.App do
 
           Task.start(fn ->
             res = Caudata.ServerWorker.exec_container_action(worker_pid, action, container_id)
-            send(caller, {:docker_action_result, profile_id, container_id, container_name, action, res})
+
+            send(
+              caller,
+              {:docker_action_result, profile_id, container_id, container_name, action, res}
+            )
           end)
 
           %{model | notification: {notif_msg, 35}}

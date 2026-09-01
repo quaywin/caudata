@@ -82,4 +82,32 @@ defmodule Caudata.UI.LevelFilterTest do
     # ERROR / FATAL (2 logs: error, fatal)
     assert length(ViewHelper.get_displayed_logs(%{base_model | log_level_filter: :error})) == 2
   end
+
+  test "KeyRegistry bounded cursor navigation in level filter modal" do
+    modal_state = %{
+      modal_visible: true,
+      modal_type: :level_filter,
+      level_filter_modal_selected_index: 0
+    }
+
+    # Up at 0 stays at 0
+    {s_up, []} = KeyRegistry.handle_level_filter_modal_key(:up, %{}, modal_state)
+    assert s_up.level_filter_modal_selected_index == 0
+
+    # Down moves to 1
+    {s1, []} = KeyRegistry.handle_level_filter_modal_key(:down, %{}, modal_state)
+    assert s1.level_filter_modal_selected_index == 1
+
+    # End / G moves to 3 (last option)
+    {s_end, []} = KeyRegistry.handle_level_filter_modal_key(:char, %{char: "G"}, s1)
+    assert s_end.level_filter_modal_selected_index == 3
+
+    # Down at 3 stays at 3
+    {s_down_stop, []} = KeyRegistry.handle_level_filter_modal_key(:down, %{}, s_end)
+    assert s_down_stop.level_filter_modal_selected_index == 3
+
+    # Home / g moves to 0
+    {s_home, []} = KeyRegistry.handle_level_filter_modal_key(:char, %{char: "g"}, s_down_stop)
+    assert s_home.level_filter_modal_selected_index == 0
+  end
 end

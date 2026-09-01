@@ -46,6 +46,8 @@ defmodule Caudata.UI.Components.ContainerInspectModal do
         Span.new(" [ 📜 RAW JSON ] ", style: %Style{fg: :black, bg: :magenta, modifiers: [:bold]})
       end
 
+    popup_inner_width = max(10, div(Map.get(state, :width, 80) * 85, 100) - 4)
+
     header_lines = [
       Line.new([
         Span.new(" Container: ", style: %Style{fg: :dark_gray}),
@@ -57,7 +59,7 @@ defmodule Caudata.UI.Components.ContainerInspectModal do
         Span.new("  Line #{scroll_y + 1}/#{total_lines}", style: %Style{fg: :dark_gray})
       ]),
       Line.new([
-        Span.new(String.duplicate("─", max(1, state.width - 15)), style: %Style{fg: :dark_gray})
+        Span.new(String.duplicate("─", popup_inner_width), style: %Style{fg: :dark_gray})
       ])
     ]
 
@@ -94,6 +96,8 @@ defmodule Caudata.UI.Components.ContainerInspectModal do
 
     summary = if parsed_json, do: extract_summary(parsed_json, server_host), else: nil
     total_lines = length(format_inspect_data(inspect_raw, mode, summary))
+    inner_height = max(1, div(Map.get(model, :height, 24) * 80, 100) - 4)
+    max_scroll = max(0, total_lines - inner_height)
 
     case norm_key do
       k when k in [:up, "k", "K"] ->
@@ -101,7 +105,21 @@ defmodule Caudata.UI.Components.ContainerInspectModal do
         {Map.put(model, :container_inspect_scroll_y, new_scroll), []}
 
       k when k in [:down, "j", "J"] ->
-        new_scroll = min(max(0, total_lines - 10), scroll_y + 1)
+        new_scroll = min(max_scroll, scroll_y + 1)
+        {Map.put(model, :container_inspect_scroll_y, new_scroll), []}
+
+      k when k in [:home, "g"] ->
+        {Map.put(model, :container_inspect_scroll_y, 0), []}
+
+      k when k in [:end, "G"] ->
+        {Map.put(model, :container_inspect_scroll_y, max_scroll), []}
+
+      k when k in [:page_down, :pagedown] ->
+        new_scroll = min(max_scroll, scroll_y + inner_height)
+        {Map.put(model, :container_inspect_scroll_y, new_scroll), []}
+
+      k when k in [:page_up, :pageup] ->
+        new_scroll = max(0, scroll_y - inner_height)
         {Map.put(model, :container_inspect_scroll_y, new_scroll), []}
 
       k when k in ["r", "R"] ->

@@ -24,12 +24,7 @@ defmodule Caudata.UI.Components.SettingsModal.ContainersTab do
       ])
 
     # Filter out virtual file containers, systemd, and launchd services
-    docker_only_containers =
-      Enum.reject(containers, fn c ->
-        c.image == "file" or String.starts_with?(to_string(c.id), "file:") or
-          c.image == "systemd" or String.starts_with?(to_string(c.id), "systemd:") or
-          c.image == "launchd" or String.starts_with?(to_string(c.id), "launchd:")
-      end)
+    docker_only_containers = Caudata.UI.ViewHelper.filter_docker_containers(containers)
 
     list_rows =
       if Enum.empty?(docker_only_containers) do
@@ -43,11 +38,7 @@ defmodule Caudata.UI.Components.SettingsModal.ContainersTab do
         ]
       else
         display_rows_limit = max(2, div(state.height * 90, 100) - 11)
-
-        start_row =
-          if state.settings_container_idx >= display_rows_limit,
-            do: state.settings_container_idx - display_rows_limit + 1,
-            else: 0
+        start_row = Caudata.UI.ViewHelper.scroll_start_row(state.settings_container_idx, display_rows_limit)
 
         docker_only_containers
         |> Enum.with_index()

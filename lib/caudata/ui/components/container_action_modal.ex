@@ -194,12 +194,8 @@ defmodule Caudata.UI.Components.ContainerActionModal do
     idx = min(Map.get(model, :container_action_modal_selected_index, 0), max(0, total - 1))
 
     case norm_key do
-      k when k in [:up, "k", "K"] ->
-        new_idx = if idx > 0, do: idx - 1, else: total - 1
-        {Map.put(model, :container_action_modal_selected_index, new_idx), []}
-
-      k when k in [:down, "j", "J"] ->
-        new_idx = if idx < total - 1, do: idx + 1, else: 0
+      k when k in [:up, :down, :home, :end, "k", "j", "g", "G", "K", "J"] ->
+        new_idx = Caudata.UI.ViewHelper.navigate_bounded_index(idx, k, total)
         {Map.put(model, :container_action_modal_selected_index, new_idx), []}
 
       num when num in ["1", "2", "3", "4", "5", "6"] ->

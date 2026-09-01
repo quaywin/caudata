@@ -5,7 +5,7 @@ defmodule Caudata.MixProject do
     [
       app: :caudata,
       version: current_version(),
-      elixir: "~> 1.19",
+      elixir: "~> 1.18 or ~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
         "A collaborative, zero-config multi-server log streamer built with Elixir/OTP, Ratatui (TUI), and Phoenix LiveView.",

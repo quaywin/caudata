@@ -18,7 +18,7 @@ if Mix.env() == :dev do
     code_reloader: true,
     live_reload: [
       patterns: [
-        ~r"lib/caudata/.*(ex)$"E
+        ~r"lib/caudata/.*(ex)$"
       ]
     ]
 end

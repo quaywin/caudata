@@ -21,13 +21,24 @@ defmodule Caudata.UI.Components.AddServerModal do
         options = [
           {"+ Manual SSH Connection", :manual},
           {"+ Local Machine Connection", :local}
-          | Enum.map(state.ssh_config_profiles, &{&1.id, &1})
+          | Enum.map(state.ssh_config_profiles || [], &{&1.id, &1})
         ]
 
+        popup_inner_width = max(10, div(Map.get(state, :width, 80) * 70, 100) - 4)
+        error_rows = if Map.get(state, :modal_error), do: 2, else: 0
+        inner_height = max(3, div(Map.get(state, :height, 24) * 60, 100) - 2)
+        display_rows_limit = max(3, inner_height - 2 - error_rows)
+
+        total_options = length(options)
+        selected_idx = min(max(0, Map.get(state, :modal_selected_index, 0)), max(0, total_options - 1))
+        start_row = ViewHelper.scroll_start_row(selected_idx, display_rows_limit)
+
         option_lines =
-          Enum.with_index(options)
+          options
+          |> Enum.with_index()
+          |> Enum.slice(start_row, display_rows_limit)
           |> Enum.map(fn {option, idx} ->
-            selected = state.modal_selected_index == idx
+            selected = selected_idx == idx
             prefix = if selected, do: "> ", else: "  "
             color = if selected, do: :green, else: :white
 
@@ -45,23 +56,28 @@ defmodule Caudata.UI.Components.AddServerModal do
 
             Line.new([
               Span.new(prefix, style: %Style{fg: color}),
-              Span.new(label, style: %Style{fg: color})
+              Span.new(label, style: %Style{fg: color, modifiers: if(selected, do: [:bold], else: [])})
             ])
           end)
 
+        header_title =
+          if total_options > display_rows_limit do
+            "Select a server from ~/.ssh/config or enter manually (#{selected_idx + 1}/#{total_options}):"
+          else
+            "Select a server from ~/.ssh/config or enter manually:"
+          end
+
         header_lines = [
           Line.new([
-            Span.new("Select a server from ~/.ssh/config or enter manually:",
-              style: %Style{fg: :cyan}
-            )
+            Span.new(header_title, style: %Style{fg: :cyan})
           ]),
           Line.new([
-            Span.new(String.duplicate("─", state.width - 4), style: %Style{fg: :dark_gray})
+            Span.new(String.duplicate("─", popup_inner_width), style: %Style{fg: :dark_gray})
           ])
         ]
 
         error_lines =
-          if state.modal_error do
+          if Map.get(state, :modal_error) do
             [
               Line.new([]),
               Line.new([Span.new("Error: #{state.modal_error}", style: %Style{fg: :red})])
@@ -70,12 +86,19 @@ defmodule Caudata.UI.Components.AddServerModal do
             []
           end
 
+        title =
+          if total_options > display_rows_limit do
+            " Add Connection [#{selected_idx + 1}/#{total_options}] "
+          else
+            " Add Connection "
+          end
+
         popup_widget = %Popup{
           content: %Paragraph{
             text: header_lines ++ option_lines ++ error_lines
           },
           block: %Block{
-            title: " Add Connection ",
+            title: title,
             borders: [:all],
             border_type: :rounded
           },
@@ -132,15 +155,17 @@ defmodule Caudata.UI.Components.AddServerModal do
             )
           ])
 
+        popup_inner_width = max(10, div(Map.get(state, :width, 80) * 80, 100) - 4)
+
         header_lines = [
           Line.new([Span.new("Configure SSH details:", style: %Style{fg: :cyan})]),
           Line.new([
-            Span.new(String.duplicate("─", state.width - 4), style: %Style{fg: :dark_gray})
+            Span.new(String.duplicate("─", popup_inner_width), style: %Style{fg: :dark_gray})
           ])
         ]
 
         error_lines =
-          if state.modal_error do
+          if Map.get(state, :modal_error) do
             [
               Line.new([]),
               Line.new([Span.new("Error: #{state.modal_error}", style: %Style{fg: :red})])
@@ -206,15 +231,17 @@ defmodule Caudata.UI.Components.AddServerModal do
             )
           ])
 
+        popup_inner_width = max(10, div(Map.get(state, :width, 80) * 80, 100) - 4)
+
         header_lines = [
           Line.new([Span.new("Configure Local Machine details:", style: %Style{fg: :cyan})]),
           Line.new([
-            Span.new(String.duplicate("─", state.width - 4), style: %Style{fg: :dark_gray})
+            Span.new(String.duplicate("─", popup_inner_width), style: %Style{fg: :dark_gray})
           ])
         ]
 
         error_lines =
-          if state.modal_error do
+          if Map.get(state, :modal_error) do
             [
               Line.new([]),
               Line.new([Span.new("Error: #{state.modal_error}", style: %Style{fg: :red})])
@@ -264,20 +291,18 @@ defmodule Caudata.UI.Components.AddServerModal do
 
   defp handle_select_ssh_key(key, key_data, model) do
     norm_key = if key == :char, do: Map.get(key_data, :char), else: key
-    total_options = 2 + length(model.ssh_config_profiles)
+    total_options = 2 + length(Map.get(model, :ssh_config_profiles, []))
+    current_index = Map.get(model, :modal_selected_index, 0)
+    page_step = max(3, div(Map.get(model, :height, 24) * 60, 100) - 4)
 
     case norm_key do
-      k when k in [:down, "j"] ->
-        new_index = rem(model.modal_selected_index + 1, total_options)
-        {%{model | modal_selected_index: new_index}, []}
-
-      k when k in [:up, "k"] ->
-        new_index = rem(model.modal_selected_index - 1 + total_options, total_options)
+      k when k in [:up, :down, :home, :end, :page_up, :page_down, :pageup, :pagedown, "k", "j", "g", "G", "K", "J"] ->
+        new_index = ViewHelper.navigate_bounded_index(current_index, k, total_options, page_step)
         {%{model | modal_selected_index: new_index}, []}
 
       :enter ->
         cond do
-          model.modal_selected_index == 0 ->
+          current_index == 0 ->
             # Switch to manual connection input
             {%{
                model
@@ -294,7 +319,7 @@ defmodule Caudata.UI.Components.AddServerModal do
                  }
              }, []}
 
-          model.modal_selected_index == 1 ->
+          current_index == 1 ->
             # Switch to local connection input
             {%{
                model
@@ -308,28 +333,34 @@ defmodule Caudata.UI.Components.AddServerModal do
 
           true ->
             # Add the selected profile
-            profile = Enum.at(model.ssh_config_profiles, model.modal_selected_index - 2)
-            profile_attrs = Map.from_struct(profile)
+            profile = Enum.at(model.ssh_config_profiles, current_index - 2)
 
-            case Caudata.ConfigManager.add_manual_profile(profile_attrs) do
-              {:ok, added_profile} ->
-                ViewHelper.start_worker_if_needed(added_profile)
+            if profile do
+              profile_attrs = Map.from_struct(profile)
 
-                # Update profile list in the model immediately
-                updated_profiles = model.profiles ++ [added_profile]
+              case Caudata.ConfigManager.add_manual_profile(profile_attrs) do
+                {:ok, added_profile} ->
+                  ViewHelper.start_worker_if_needed(added_profile)
 
-                {%{
-                   model
-                   | profiles: updated_profiles,
-                     selected_profile_id: added_profile.id,
-                     selected_container_id: nil,
-                     selected_container_name: nil,
-                     logs_scroll_y: :bottom,
-                     modal_visible: false
-                 }, []}
+                  # Update profile list in the model immediately
+                  updated_profiles = model.profiles ++ [added_profile]
 
-              {:error, reason} ->
-                {%{model | modal_error: "Failed to add profile: #{inspect(reason)}"}, []}
+                  {%{
+                     model
+                     | profiles: updated_profiles,
+                       selected_profile_id: added_profile.id,
+                       selected_container_id: nil,
+                       selected_container_name: nil,
+                       logs_scroll_y: :bottom,
+                       modal_visible: false,
+                       modal_error: nil
+                   }, []}
+
+                {:error, reason} ->
+                  {%{model | modal_error: "Failed to add profile: #{inspect(reason)}"}, []}
+              end
+            else
+              {model, []}
             end
         end
 

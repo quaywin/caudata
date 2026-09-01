@@ -72,6 +72,8 @@ defmodule Caudata.UI.Components.HelpModal do
         [header_line | shortcut_lines] ++ [Line.new([])]
       end)
 
+    popup_inner_width = max(10, div(Map.get(state, :width, 80) * 80, 100) - 4)
+
     header_bar = [
       Line.new([
         Span.new(" Caudata Keyboard Reference — Lazygit-Style Navigation",
@@ -79,7 +81,7 @@ defmodule Caudata.UI.Components.HelpModal do
         )
       ]),
       Line.new([
-        Span.new(String.duplicate("─", max(1, state.width - 15)), style: %Style{fg: :dark_gray})
+        Span.new(String.duplicate("─", popup_inner_width), style: %Style{fg: :dark_gray})
       ]),
       Line.new([])
     ]
@@ -115,34 +117,47 @@ defmodule Caudata.UI.Components.HelpModal do
     [popup_widget]
   end
 
+  def total_lines do
+    section_lines_count =
+      Enum.reduce(@sections, 0, fn {_h, list}, acc -> acc + 1 + length(list) + 1 end)
+
+    3 + section_lines_count + 1
+  end
+
   @doc """
   Handles key events when the help modal is active.
   """
   def handle_key(key, key_data, model) do
     norm_key = if key == :char, do: Map.get(key_data, :char), else: key
     scroll_y = Map.get(model, :help_modal_scroll_y, 0)
+    inner_height = max(1, div(Map.get(model, :height, 24) * 80, 100) - 4)
+    max_scroll = max(0, total_lines() - inner_height)
 
     case norm_key do
       k when k in [:escape, :esc, "q", "Q", "?"] ->
         {%{model | modal_visible: false, modal_type: :select_ssh}, []}
 
       k when k in [:down, "j", "J"] ->
-        {%{model | help_modal_scroll_y: scroll_y + 1}, []}
+        new_scroll = min(max_scroll, scroll_y + 1)
+        {%{model | help_modal_scroll_y: new_scroll}, []}
 
       k when k in [:up, "k", "K"] ->
-        {%{model | help_modal_scroll_y: max(0, scroll_y - 1)}, []}
+        new_scroll = max(0, scroll_y - 1)
+        {%{model | help_modal_scroll_y: new_scroll}, []}
 
       k when k in [:page_down, :pagedown] ->
-        {%{model | help_modal_scroll_y: scroll_y + 10}, []}
+        new_scroll = min(max_scroll, scroll_y + inner_height)
+        {%{model | help_modal_scroll_y: new_scroll}, []}
 
       k when k in [:page_up, :pageup] ->
-        {%{model | help_modal_scroll_y: max(0, scroll_y - 10)}, []}
+        new_scroll = max(0, scroll_y - inner_height)
+        {%{model | help_modal_scroll_y: new_scroll}, []}
 
-      "g" ->
+      k when k in [:home, "g"] ->
         {%{model | help_modal_scroll_y: 0}, []}
 
-      "G" ->
-        {%{model | help_modal_scroll_y: 50}, []}
+      k when k in [:end, "G"] ->
+        {%{model | help_modal_scroll_y: max_scroll}, []}
 
       _ ->
         {model, []}

@@ -33,6 +33,97 @@ defmodule Caudata.UI.ViewHelper do
   end
 
   @doc """
+  Checks if a container struct represents a system service (systemd or launchd).
+  """
+  def service_container?(container) do
+    case container do
+      %{image: image, id: id} ->
+        image in ["systemd", "launchd"] or
+          String.starts_with?(to_string(id), "systemd:") or
+          String.starts_with?(to_string(id), "launchd:")
+
+      _ ->
+        false
+    end
+  end
+
+  @doc """
+  Filters a list of containers into Docker containers only.
+  """
+  def filter_docker_containers(containers) when is_list(containers) do
+    Enum.filter(containers, &docker_container?/1)
+  end
+
+  def filter_docker_containers(_), do: []
+
+  @doc """
+  Filters a list of containers into System Services only (systemd/launchd).
+  """
+  def filter_system_services(containers) when is_list(containers) do
+    Enum.filter(containers, &service_container?/1)
+  end
+
+  def filter_system_services(_), do: []
+
+  @doc """
+  Calculates the starting row index for windowed list scrolling.
+  """
+  def scroll_start_row(selected_idx, display_limit) when is_integer(selected_idx) and is_integer(display_limit) do
+    if selected_idx >= display_limit, do: selected_idx - display_limit + 1, else: 0
+  end
+
+  def scroll_start_row(_selected_idx, _display_limit), do: 0
+
+  @doc """
+  Slices an enumerable or list into a visible window based on selected index and display limit.
+  """
+  def window_slice(items, selected_idx, display_limit) when is_list(items) do
+    start = scroll_start_row(selected_idx, display_limit)
+    Enum.slice(items, start, display_limit)
+  end
+
+  def window_slice(_items, _selected_idx, _display_limit), do: []
+
+  @doc """
+  Calculates the new index when navigating a list with bounded limits (0 to total - 1).
+  Supports :up, :down, :home, :end, :page_up, :page_down, "k", "j", "g", "G", "scroll_up", "scroll_down".
+  """
+  def navigate_bounded_index(current_idx, key, total, page_step \\ 10) do
+    max_idx = max(0, total - 1)
+    idx = min(max(0, current_idx || 0), max_idx)
+
+    case key do
+      k when k in [:up, "k", "K", "scroll_up"] ->
+        max(0, idx - 1)
+
+      k when k in [:down, "j", "J", "scroll_down"] ->
+        min(max_idx, idx + 1)
+
+      k when k in [:home, "g"] ->
+        0
+
+      k when k in [:end, "G"] ->
+        max_idx
+
+      k when k in [:page_up, :pageup] ->
+        max(0, idx - page_step)
+
+      k when k in [:page_down, :pagedown] ->
+        min(max_idx, idx + page_step)
+
+      _ ->
+        idx
+    end
+  end
+
+  @doc """
+  Computes the inner width of a popup based on terminal width and popup percent.
+  """
+  def popup_inner_width(width, percent) do
+    max(10, div(width * percent, 100) - 4)
+  end
+
+  @doc """
   Returns the logs list, optionally filtered by regex, or a fallback message if empty.
   """
   def get_displayed_logs(model) do

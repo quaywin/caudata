@@ -67,18 +67,20 @@ defmodule Caudata.UI.Components.LevelFilterModal do
         ])
       end)
 
+    popup_inner_width = max(10, div(Map.get(state, :width, 80) * 58, 100) - 4)
+
     header_lines = [
       Line.new([
         Span.new("Filter Logs by Minimum Severity Level (hl standard):", style: %Style{fg: :cyan, modifiers: [:bold]})
       ]),
       Line.new([
-        Span.new(String.duplicate("─", 54), style: %Style{fg: :dark_gray})
+        Span.new(String.duplicate("─", popup_inner_width), style: %Style{fg: :dark_gray})
       ])
     ]
 
     footer_lines = [
       Line.new([
-        Span.new(String.duplicate("─", 54), style: %Style{fg: :dark_gray})
+        Span.new(String.duplicate("─", popup_inner_width), style: %Style{fg: :dark_gray})
       ]),
       Line.new([
         Span.new("↑/↓ / j/k: navigate • 0-3 / Enter: select • Esc: close", style: %Style{fg: :dark_gray})

@@ -81,4 +81,78 @@ defmodule Caudata.UI.Components.SettingsModalTest do
       assert result == "lo…"
     end
   end
+
+  describe "handle_key bounded navigation" do
+    test "servers tab cursor bounds at top 0 and bottom total-1" do
+      profiles = [
+        %Caudata.Profile{id: "p1", host_pattern: "p1", host_name: "1.1.1.1"},
+        %Caudata.Profile{id: "p2", host_pattern: "p2", host_name: "2.2.2.2"},
+        %Caudata.Profile{id: "p3", host_pattern: "p3", host_name: "3.3.3.3"}
+      ]
+
+      state = %{
+        modal_visible: true,
+        modal_type: :settings,
+        settings_focus: :servers,
+        settings_selected_profile_idx: 0,
+        profiles: profiles,
+        containers: %{},
+        height: 24,
+        settings_input_active: false,
+        settings_service_search_active: false
+      }
+
+      # Up at 0 stays at 0
+      {s_up, []} = SettingsModal.handle_key(:up, %{}, state)
+      assert s_up.settings_selected_profile_idx == 0
+
+      # Down moves to 1
+      {s1, []} = SettingsModal.handle_key(:down, %{}, state)
+      assert s1.settings_selected_profile_idx == 1
+
+      # End / G moves to 2 (last)
+      {s_end, []} = SettingsModal.handle_key(:char, %{char: "G"}, s1)
+      assert s_end.settings_selected_profile_idx == 2
+
+      # Down at last stays at last
+      {s_down_stop, []} = SettingsModal.handle_key(:down, %{}, s_end)
+      assert s_down_stop.settings_selected_profile_idx == 2
+
+      # Home / g moves to 0
+      {s_home, []} = SettingsModal.handle_key(:char, %{char: "g"}, s_down_stop)
+      assert s_home.settings_selected_profile_idx == 0
+    end
+
+    test "containers tab cursor bounds" do
+      state = %{
+        modal_visible: true,
+        modal_type: :settings,
+        settings_focus: :containers,
+        settings_container_idx: 0,
+        selected_profile_id: "p1",
+        profiles: [%Caudata.Profile{id: "p1", host_pattern: "p1"}],
+        containers: %{
+          "p1" => [
+            %{id: "c1", name: "c1", image: "img1"},
+            %{id: "c2", name: "c2", image: "img2"}
+          ]
+        },
+        height: 24,
+        settings_input_active: false,
+        settings_service_search_active: false
+      }
+
+      # Up at 0 stays at 0
+      {s_up, []} = SettingsModal.handle_key(:up, %{}, state)
+      assert s_up.settings_container_idx == 0
+
+      # Down moves to 1
+      {s1, []} = SettingsModal.handle_key(:down, %{}, state)
+      assert s1.settings_container_idx == 1
+
+      # Down at 1 stays at 1
+      {s2, []} = SettingsModal.handle_key(:down, %{}, s1)
+      assert s2.settings_container_idx == 1
+    end
+  end
 end

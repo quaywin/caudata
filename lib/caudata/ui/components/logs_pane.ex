@@ -12,6 +12,7 @@ defmodule Caudata.UI.Components.LogsPane do
 
   alias Caudata.UI.ViewHelper
   alias Caudata.UI.LogFormatter
+  alias Caudata.UI.Cache
   alias Caudata.UI.Components.LogsPane.EventHandler
 
   @doc """
@@ -351,19 +352,11 @@ defmodule Caudata.UI.Components.LogsPane do
 
 
   defp get_wrapped_line_chunks(line, wrap_width) do
-    cache_key = {:fmt_wrapped_chunks, line, wrap_width}
-
-    case Process.get(cache_key) do
-      nil ->
-        {spans, is_err_level, _level} = LogFormatter.format_line_with_meta(line)
-        wrapped_chunks = ViewHelper.wrap_spans(spans, wrap_width)
-        res = {wrapped_chunks, is_err_level}
-        Process.put(cache_key, res)
-        res
-
-      cached ->
-        cached
-    end
+    Cache.fetch(:fmt_wrapped_chunks, {line, wrap_width}, fn ->
+      {spans, is_err_level, _level} = LogFormatter.format_line_with_meta(line)
+      wrapped_chunks = ViewHelper.wrap_spans(spans, wrap_width)
+      {wrapped_chunks, is_err_level}
+    end)
   end
 
   defp format_docker_timestamp(ts) when is_binary(ts) do

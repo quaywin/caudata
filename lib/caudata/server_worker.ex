@@ -1059,15 +1059,17 @@ defmodule Caudata.ServerWorker do
           disk_counter=0
 
           is_darwin=0
+          ncpu=1
           if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
             is_darwin=1
+            ncpu=$(sysctl -n hw.ncpu 2>/dev/null || echo 1)
           fi
 
           while true; do
 
             if [ "$is_darwin" -eq 1 ]; then
-              # macOS CPU
-              cpu_pct=$(top -l 1 -n 0 2>/dev/null | awk '/CPU usage/ {printf "%.0f\\n", $3+$5}')
+              # macOS CPU (lightweight ps calculation instead of heavy top -l 1)
+              cpu_pct=$(ps -A -o %cpu 2>/dev/null | awk -v n="$ncpu" '{s+=$1} END {v=s/n; printf "%.0f\n", (v > 100 ? 100 : v)}')
               cpu_pct=${cpu_pct:-0}
 
               # macOS RAM

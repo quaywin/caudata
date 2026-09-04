@@ -119,43 +119,15 @@ defmodule Caudata.UI.Components.AddServerModal do
         ]
 
         form_lines =
-          Enum.with_index(fields_config)
-          |> Enum.flat_map(fn {{key, label}, index} ->
-            active = state.modal_focus_index == index
-            prefix = if active, do: "> ", else: "  "
-            label_color = if active, do: :cyan, else: :white
-            value_color = if active, do: :green, else: :white
-            value = Map.get(state.modal_fields, key, "")
-
-            masked_value =
-              if key == "password", do: String.duplicate("*", String.length(value)), else: value
-
-            display_value = if active, do: masked_value <> "█", else: masked_value
-
-            [
-              Line.new([Span.new(prefix), Span.new(label, style: %Style{fg: label_color})]),
-              Line.new([
-                Span.new("    "),
-                Span.new(display_value, style: %Style{fg: value_color})
-              ])
-            ]
-          end)
-
-        save_active = state.modal_focus_index == 6
-        cancel_active = state.modal_focus_index == 7
+          ViewHelper.render_form_fields(fields_config, state.modal_fields, state.modal_focus_index)
 
         buttons_line =
-          Line.new([
-            Span.new(
-              if(save_active, do: "> [ Save Connection ]   ", else: "  [ Save Connection ]   "),
-              style: %Style{fg: if(save_active, do: :green, else: :white)}
-            ),
-            Span.new(if(cancel_active, do: "> [ Cancel ]", else: "  [ Cancel ]"),
-              style: %Style{fg: if(cancel_active, do: :red, else: :white)}
-            )
-          ])
+          ViewHelper.render_action_buttons(
+            state.modal_focus_index == 6,
+            state.modal_focus_index == 7
+          )
 
-        popup_inner_width = max(10, div(Map.get(state, :width, 80) * 80, 100) - 4)
+        popup_inner_width = ViewHelper.popup_inner_width(Map.get(state, :width, 80), 80)
 
         header_lines = [
           Line.new([Span.new("Configure SSH details:", style: %Style{fg: :cyan})]),
@@ -195,43 +167,15 @@ defmodule Caudata.UI.Components.AddServerModal do
         ]
 
         form_lines =
-          Enum.with_index(fields_config)
-          |> Enum.flat_map(fn {{key, label}, index} ->
-            active = state.modal_focus_index == index
-            prefix = if active, do: "> ", else: "  "
-            label_color = if active, do: :cyan, else: :white
-            value_color = if active, do: :green, else: :white
-            value = Map.get(state.modal_fields, key, "")
-
-            masked_value =
-              if key == "password", do: String.duplicate("*", String.length(value)), else: value
-
-            display_value = if active, do: masked_value <> "█", else: masked_value
-
-            [
-              Line.new([Span.new(prefix), Span.new(label, style: %Style{fg: label_color})]),
-              Line.new([
-                Span.new("    "),
-                Span.new(display_value, style: %Style{fg: value_color})
-              ])
-            ]
-          end)
-
-        save_active = state.modal_focus_index == 1
-        cancel_active = state.modal_focus_index == 2
+          ViewHelper.render_form_fields(fields_config, state.modal_fields, state.modal_focus_index)
 
         buttons_line =
-          Line.new([
-            Span.new(
-              if(save_active, do: "> [ Save Connection ]   ", else: "  [ Save Connection ]   "),
-              style: %Style{fg: if(save_active, do: :green, else: :white)}
-            ),
-            Span.new(if(cancel_active, do: "> [ Cancel ]", else: "  [ Cancel ]"),
-              style: %Style{fg: if(cancel_active, do: :red, else: :white)}
-            )
-          ])
+          ViewHelper.render_action_buttons(
+            state.modal_focus_index == 1,
+            state.modal_focus_index == 2
+          )
 
-        popup_inner_width = max(10, div(Map.get(state, :width, 80) * 80, 100) - 4)
+        popup_inner_width = ViewHelper.popup_inner_width(Map.get(state, :width, 80), 80)
 
         header_lines = [
           Line.new([Span.new("Configure Local Machine details:", style: %Style{fg: :cyan})]),
@@ -371,81 +315,51 @@ defmodule Caudata.UI.Components.AddServerModal do
 
   defp handle_manual_input_key(key, key_data, model) do
     fields = ["id", "host_name", "port", "user", "identity_file", "password", :save, :cancel]
+    handle_form_key(key, key_data, model, fields, &save_manual_connection/1)
+  end
+
+  defp handle_form_key(key, key_data, model, fields, on_save) do
     num_fields = length(fields)
     active_item = Enum.at(fields, model.modal_focus_index)
     modifiers = Map.get(key_data, :modifiers, [])
     is_shift = Enum.any?(modifiers, &(&1 in ["shift", "Shift"]))
 
-    cond do
-      key == :down ->
-        new_focus = rem(model.modal_focus_index + 1, num_fields)
+    case ViewHelper.cycle_focus_index(model.modal_focus_index, key, is_shift, num_fields) do
+      {:ok, new_focus} ->
         {%{model | modal_focus_index: new_focus}, []}
 
-      key == :up ->
-        new_focus = rem(model.modal_focus_index - 1 + num_fields, num_fields)
-        {%{model | modal_focus_index: new_focus}, []}
-
-      key == :tab and is_shift ->
-        new_focus = rem(model.modal_focus_index - 1 + num_fields, num_fields)
-        {%{model | modal_focus_index: new_focus}, []}
-
-      key == :tab ->
-        new_focus = rem(model.modal_focus_index + 1, num_fields)
-        {%{model | modal_focus_index: new_focus}, []}
-
-      key == :enter ->
-        case active_item do
-          :cancel ->
-            {%{model | modal_type: :select_ssh, modal_selected_index: 0, modal_error: nil}, []}
-
-          :save ->
-            save_manual_connection(model)
-
-          _input_field ->
-            # Enter key on input fields acts as Tab to move to next field
-            new_focus = rem(model.modal_focus_index + 1, num_fields)
-            {%{model | modal_focus_index: new_focus}, []}
-        end
-
-      is_binary(active_item) ->
+      :ignore ->
         case key do
-          :paste ->
-            text = Map.get(key_data, :content, "")
-            current_val = Map.get(model.modal_fields, active_item, "")
-            new_val = current_val <> text
-            new_fields = Map.put(model.modal_fields, active_item, new_val)
-            {%{model | modal_fields: new_fields}, []}
+          :enter ->
+            case active_item do
+              :cancel ->
+                {%{model | modal_type: :select_ssh, modal_selected_index: 0, modal_error: nil}, []}
 
-          :backspace ->
-            current_val = Map.get(model.modal_fields, active_item, "")
-            new_val = String.slice(current_val, 0..-2//1)
-            new_fields = Map.put(model.modal_fields, active_item, new_val)
-            {%{model | modal_fields: new_fields}, []}
+              :save ->
+                on_save.(model)
 
-          :char ->
-            char = Map.get(key_data, :char, "")
+              _input_field ->
+                # Enter key on input fields acts as Tab to move to next field
+                new_focus = rem(model.modal_focus_index + 1, num_fields)
+                {%{model | modal_focus_index: new_focus}, []}
+            end
 
-            if is_binary(char) and char != "" do
+          _ ->
+            if is_binary(active_item) do
               current_val = Map.get(model.modal_fields, active_item, "")
-              new_val = current_val <> char
-              new_fields = Map.put(model.modal_fields, active_item, new_val)
-              {%{model | modal_fields: new_fields}, []}
+
+              case ViewHelper.handle_text_input(key, key_data, current_val) do
+                {:ok, new_val} ->
+                  new_fields = Map.put(model.modal_fields, active_item, new_val)
+                  {%{model | modal_fields: new_fields}, []}
+
+                :ignore ->
+                  {model, []}
+              end
             else
               {model, []}
             end
-
-          ch when is_binary(ch) and byte_size(ch) == 1 ->
-            current_val = Map.get(model.modal_fields, active_item, "")
-            new_val = current_val <> ch
-            new_fields = Map.put(model.modal_fields, active_item, new_val)
-            {%{model | modal_fields: new_fields}, []}
-
-          _ ->
-            {model, []}
         end
-
-      true ->
-        {model, []}
     end
   end
 
@@ -516,82 +430,7 @@ defmodule Caudata.UI.Components.AddServerModal do
 
   defp handle_local_input_key(key, key_data, model) do
     fields = ["password", :save, :cancel]
-    num_fields = length(fields)
-    active_item = Enum.at(fields, model.modal_focus_index)
-    modifiers = Map.get(key_data, :modifiers, [])
-    is_shift = Enum.any?(modifiers, &(&1 in ["shift", "Shift"]))
-
-    cond do
-      key == :down ->
-        new_focus = rem(model.modal_focus_index + 1, num_fields)
-        {%{model | modal_focus_index: new_focus}, []}
-
-      key == :up ->
-        new_focus = rem(model.modal_focus_index - 1 + num_fields, num_fields)
-        {%{model | modal_focus_index: new_focus}, []}
-
-      key == :tab and is_shift ->
-        new_focus = rem(model.modal_focus_index - 1 + num_fields, num_fields)
-        {%{model | modal_focus_index: new_focus}, []}
-
-      key == :tab ->
-        new_focus = rem(model.modal_focus_index + 1, num_fields)
-        {%{model | modal_focus_index: new_focus}, []}
-
-      key == :enter ->
-        case active_item do
-          :cancel ->
-            {%{model | modal_type: :select_ssh, modal_selected_index: 0, modal_error: nil}, []}
-
-          :save ->
-            save_local_connection(model)
-
-          _input_field ->
-            # Enter key on input fields acts as Tab to move to next field
-            new_focus = rem(model.modal_focus_index + 1, num_fields)
-            {%{model | modal_focus_index: new_focus}, []}
-        end
-
-      is_binary(active_item) ->
-        case key do
-          :paste ->
-            text = Map.get(key_data, :content, "")
-            current_val = Map.get(model.modal_fields, active_item, "")
-            new_val = current_val <> text
-            new_fields = Map.put(model.modal_fields, active_item, new_val)
-            {%{model | modal_fields: new_fields}, []}
-
-          :backspace ->
-            current_val = Map.get(model.modal_fields, active_item, "")
-            new_val = String.slice(current_val, 0..-2//1)
-            new_fields = Map.put(model.modal_fields, active_item, new_val)
-            {%{model | modal_fields: new_fields}, []}
-
-          :char ->
-            char = Map.get(key_data, :char, "")
-
-            if is_binary(char) and char != "" do
-              current_val = Map.get(model.modal_fields, active_item, "")
-              new_val = current_val <> char
-              new_fields = Map.put(model.modal_fields, active_item, new_val)
-              {%{model | modal_fields: new_fields}, []}
-            else
-              {model, []}
-            end
-
-          ch when is_binary(ch) and byte_size(ch) == 1 ->
-            current_val = Map.get(model.modal_fields, active_item, "")
-            new_val = current_val <> ch
-            new_fields = Map.put(model.modal_fields, active_item, new_val)
-            {%{model | modal_fields: new_fields}, []}
-
-          _ ->
-            {model, []}
-        end
-
-      true ->
-        {model, []}
-    end
+    handle_form_key(key, key_data, model, fields, &save_local_connection/1)
   end
 
   defp save_local_connection(model) do

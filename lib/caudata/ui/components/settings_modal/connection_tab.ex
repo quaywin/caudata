@@ -39,42 +39,17 @@ defmodule Caudata.UI.Components.SettingsModal.ConnectionTab do
       end
 
     form_lines =
-      Enum.with_index(fields_config)
-      |> Enum.flat_map(fn {{key, label}, index} ->
-        active = state.settings_connection_focus_idx == index
-        prefix = if active, do: "> ", else: "  "
-        label_color = if active, do: :cyan, else: :white
-        value_color = if active, do: :green, else: :white
-        value = Map.get(state.settings_connection_fields || %{}, key, "")
-
-        masked_value =
-          if key == "password", do: String.duplicate("*", String.length(value)), else: value
-
-        display_value = if active, do: masked_value <> "█", else: masked_value
-
-        [
-          Line.new([Span.new(prefix), Span.new(label, style: %Style{fg: label_color})]),
-          Line.new([
-            Span.new("    "),
-            Span.new(display_value, style: %Style{fg: value_color})
-          ])
-        ]
-      end)
+      Caudata.UI.ViewHelper.render_form_fields(
+        fields_config,
+        state.settings_connection_fields,
+        state.settings_connection_focus_idx
+      )
 
     num_fields = length(fields_config)
     save_active = state.settings_connection_focus_idx == num_fields
     cancel_active = state.settings_connection_focus_idx == num_fields + 1
 
-    buttons_line =
-      Line.new([
-        Span.new(
-          if(save_active, do: "> [ Save Connection ]   ", else: "  [ Save Connection ]   "),
-          style: %Style{fg: if(save_active, do: :green, else: :white)}
-        ),
-        Span.new(if(cancel_active, do: "> [ Cancel ]", else: "  [ Cancel ]"),
-          style: %Style{fg: if(cancel_active, do: :red, else: :white)}
-        )
-      ])
+    buttons_line = Caudata.UI.ViewHelper.render_action_buttons(save_active, cancel_active)
 
     status_lines =
       if state.settings_status_msg do

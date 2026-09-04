@@ -7,20 +7,14 @@ defmodule Caudata.UI.LogFormatter do
   alias ExRatatui.Style
   alias ExRatatui.Text.Span
 
+  alias Caudata.UI.Cache
+
   @doc """
   Formats a single log line into a tuple `{spans, is_error, severity_num}`.
-  Caches the result in the Process Dictionary for sub-millisecond redraws.
+  Caches the result in a bounded 2-generation cache for sub-millisecond redraws.
   """
   def format_line_with_meta(line) when is_binary(line) do
-    case Process.get({:fmt_line_meta, line}) do
-      nil ->
-        res = do_format_line_with_meta(line)
-        Process.put({:fmt_line_meta, line}, res)
-        res
-
-      cached ->
-        cached
-    end
+    Cache.fetch(:fmt_line_meta, line, fn -> do_format_line_with_meta(line) end)
   end
 
   def format_line_with_meta(nil), do: {[], false, 0}
@@ -37,15 +31,7 @@ defmodule Caudata.UI.LogFormatter do
   Sub-highlights a line of text using native token parsing.
   """
   def sub_highlight(text) when is_binary(text) do
-    case Process.get({:sub_highlight, text}) do
-      nil ->
-        res = Caudata.Native.sub_highlight_native(text)
-        Process.put({:sub_highlight, text}, res)
-        res
-
-      cached ->
-        cached
-    end
+    Cache.fetch(:sub_highlight, text, fn -> Caudata.Native.sub_highlight_native(text) end)
   end
 
   defp do_format_line_with_meta(line) do

@@ -3,6 +3,7 @@ defmodule Caudata.UI.ViewHelper do
   Shared helper functions for calculations and state lookup in the UI layer.
   """
   alias ExRatatui.Layout.Rect
+  alias Caudata.UI.Cache
 
   @doc """
   Computes the inner rectangle for a widget pane by subtracting borders.
@@ -17,15 +18,12 @@ defmodule Caudata.UI.ViewHelper do
   end
 
   @doc """
-  Checks if a container struct represents a Docker container vs a custom file or system service.
+  Checks if a container struct represents a custom file log.
   """
-  def docker_container?(container) do
+  def file_container?(container) do
     case container do
       %{image: image, id: id} ->
-        image not in ["file", "systemd", "launchd"] and
-          not String.starts_with?(to_string(id), "file:") and
-          not String.starts_with?(to_string(id), "systemd:") and
-          not String.starts_with?(to_string(id), "launchd:")
+        image == "file" or String.starts_with?(to_string(id), "file:")
 
       _ ->
         false
@@ -41,6 +39,19 @@ defmodule Caudata.UI.ViewHelper do
         image in ["systemd", "launchd"] or
           String.starts_with?(to_string(id), "systemd:") or
           String.starts_with?(to_string(id), "launchd:")
+
+      _ ->
+        false
+    end
+  end
+
+  @doc """
+  Checks if a container struct represents a Docker container vs a custom file or system service.
+  """
+  def docker_container?(container) do
+    case container do
+      %{image: _image, id: _id} ->
+        not file_container?(container) and not service_container?(container)
 
       _ ->
         false
@@ -73,6 +84,20 @@ defmodule Caudata.UI.ViewHelper do
   end
 
   def scroll_start_row(_selected_idx, _display_limit), do: 0
+
+  @doc """
+  Calculates the scroll offset to keep the selected item centered in the viewport.
+  """
+  def centered_scroll_y(selected_idx, total_count, inner_height)
+      when is_integer(total_count) and is_integer(inner_height) do
+    cond do
+      total_count <= inner_height -> 0
+      is_nil(selected_idx) -> 0
+      true -> max(0, min(selected_idx - div(inner_height, 2), total_count - inner_height))
+    end
+  end
+
+  def centered_scroll_y(_selected_idx, _total_count, _inner_height), do: 0
 
   @doc """
   Slices an enumerable or list into a visible window based on selected index and display limit.
@@ -124,6 +149,104 @@ defmodule Caudata.UI.ViewHelper do
   end
 
   @doc """
+  Renders a vertical list of form input fields with active indicator and optional password masking.
+  """
+  def render_form_fields(fields_config, fields_map, active_focus_idx) do
+    Enum.with_index(fields_config)
+    |> Enum.flat_map(fn {{key, label}, index} ->
+      active = active_focus_idx == index
+      prefix = if active, do: "> ", else: "  "
+      label_color = if active, do: :cyan, else: :white
+      value_color = if active, do: :green, else: :white
+      value = Map.get(fields_map || %{}, key, "")
+
+      masked_value =
+        if key == "password", do: String.duplicate("*", String.length(value)), else: value
+
+      display_value = if active, do: masked_value <> "█", else: masked_value
+
+      [
+        ExRatatui.Text.Line.new([
+          ExRatatui.Text.Span.new(prefix),
+          ExRatatui.Text.Span.new(label, style: %ExRatatui.Style{fg: label_color})
+        ]),
+        ExRatatui.Text.Line.new([
+          ExRatatui.Text.Span.new("    "),
+          ExRatatui.Text.Span.new(display_value, style: %ExRatatui.Style{fg: value_color})
+        ])
+      ]
+    end)
+  end
+
+  @doc """
+  Renders save and cancel action buttons with focus styling.
+  """
+  def render_action_buttons(save_active, cancel_active, save_label \\ "Save Connection", cancel_label \\ "Cancel") do
+    ExRatatui.Text.Line.new([
+      ExRatatui.Text.Span.new(
+        if(save_active, do: "> [ #{save_label} ]   ", else: "  [ #{save_label} ]   "),
+        style: %ExRatatui.Style{fg: if(save_active, do: :green, else: :white)}
+      ),
+      ExRatatui.Text.Span.new(
+        if(cancel_active, do: "> [ #{cancel_label} ]", else: "  [ #{cancel_label} ]"),
+        style: %ExRatatui.Style{fg: if(cancel_active, do: :red, else: :white)}
+      )
+    ])
+  end
+
+  @doc """
+  Applies standard keyboard text editing (:paste, :backspace, :char, single character) to a string.
+  Returns `{:ok, new_string}` if text changed, or `:ignore` otherwise.
+  """
+  def handle_text_input(key, key_data, current_val) do
+    val = current_val || ""
+
+    case key do
+      :paste ->
+        text = Map.get(key_data, :content, "")
+        {:ok, val <> text}
+
+      :backspace ->
+        {:ok, String.slice(val, 0..-2//1)}
+
+      :char ->
+        char = Map.get(key_data, :char, "")
+
+        if is_binary(char) and char != "" do
+          {:ok, val <> char}
+        else
+          :ignore
+        end
+
+      ch when is_binary(ch) and byte_size(ch) == 1 ->
+        {:ok, val <> ch}
+
+      _ ->
+        :ignore
+    end
+  end
+
+  @doc """
+  Cycles focus index forward or backward for form fields with wrap-around.
+  Returns `{:ok, new_idx}` if key is navigation (:up, :down, :tab), or `:ignore` otherwise.
+  """
+  def cycle_focus_index(current_idx, key, is_shift, total_count)
+      when is_integer(current_idx) and is_integer(total_count) and total_count > 0 do
+    cond do
+      key in [:down, :tab] and not is_shift ->
+        {:ok, rem(current_idx + 1, total_count)}
+
+      key == :up or (key == :tab and is_shift) ->
+        {:ok, rem(current_idx - 1 + total_count, total_count)}
+
+      true ->
+        :ignore
+    end
+  end
+
+  def cycle_focus_index(_current_idx, _key, _is_shift, _total_count), do: :ignore
+
+  @doc """
   Returns the logs list, optionally filtered by regex, or a fallback message if empty.
   """
   def get_displayed_logs(model) do
@@ -139,15 +262,9 @@ defmodule Caudata.UI.ViewHelper do
 
     cache_key = {model.filter_regex, Map.get(model, :log_level_filter, :all), model.selected_container_id, logs_len, hd_log}
 
-    case Process.get({:cached_displayed_logs, cache_key}) do
-      nil ->
-        res = do_get_displayed_logs(model)
-        Process.put({:cached_displayed_logs, cache_key}, res)
-        res
-
-      cached ->
-        cached
-    end
+    Cache.fetch_latest(:cached_displayed_logs, cache_key, fn ->
+      do_get_displayed_logs(model)
+    end)
   end
 
   defp do_get_displayed_logs(model) do
@@ -279,19 +396,11 @@ defmodule Caudata.UI.ViewHelper do
 
     cache_key = {:cached_wrapped_lines_count, lines_len, hd_line, w}
 
-    case Process.get(cache_key) do
-      nil ->
-        res =
-          Enum.reduce(lines, 0, fn line, acc ->
-            acc + visual_line_count(line, w)
-          end)
-
-        Process.put(cache_key, res)
-        res
-
-      cached ->
-        cached
-    end
+    Cache.fetch_latest(:cached_wrapped_lines_count, cache_key, fn ->
+      Enum.reduce(lines, 0, fn line, acc ->
+        acc + visual_line_count(line, w)
+      end)
+    end)
   end
 
   @doc """
@@ -489,18 +598,26 @@ defmodule Caudata.UI.ViewHelper do
     else
       first_new = hd(new_logs)
 
-      old_logs
-      |> Stream.with_index()
-      |> Stream.filter(fn {item, _idx} -> item == first_new end)
-      |> Enum.find_value(fn {_item, idx} ->
-        remaining_old = Enum.drop(old_logs, idx)
-
-        if List.starts_with?(new_logs, remaining_old) do
-          idx
-        else
+      case Enum.find_index(old_logs, &(&1 == first_new)) do
+        nil ->
           nil
-        end
-      end)
+
+        idx ->
+          remaining_old = Enum.drop(old_logs, idx)
+
+          if List.starts_with?(new_logs, remaining_old) do
+            idx
+          else
+            old_logs
+            |> Stream.with_index()
+            |> Stream.drop(idx + 1)
+            |> Stream.filter(fn {item, _i} -> item == first_new end)
+            |> Enum.find_value(fn {_item, i} ->
+              rem_old = Enum.drop(old_logs, i)
+              if List.starts_with?(new_logs, rem_old), do: i, else: nil
+            end)
+          end
+      end
     end
   end
 
@@ -559,14 +676,8 @@ defmodule Caudata.UI.ViewHelper do
 
       Enum.filter(containers, fn c ->
         id_str = to_string(c.id)
-        image = Map.get(c, :image)
 
-        is_service =
-          image in ["systemd", "launchd"] or
-            String.starts_with?(id_str, "systemd:") or
-            String.starts_with?(id_str, "launchd:")
-
-        if is_service do
+        if service_container?(c) do
           id_str in enabled_services or to_string(c.name) in enabled_services
         else
           id_str not in disabled_containers and
@@ -588,6 +699,9 @@ defmodule Caudata.UI.ViewHelper do
 
   defp filter_logs_by_predicate(logs, pred) do
     Enum.filter(logs, fn
+      %{is_err: is_err, severity: sev} when not is_nil(is_err) and not is_nil(sev) ->
+        pred.(is_err, sev)
+
       %{message: msg} ->
         {_spans, is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(msg)
         pred.(is_err, sev)

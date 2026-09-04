@@ -332,14 +332,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
     if has_real_logs? do
       text = displayed_logs |> Enum.map(&extract_log_text/1) |> Enum.join("\n")
       count = length(displayed_logs)
-
-      notification_msg =
-        case ViewHelper.copy_to_clipboard(text) do
-          :ok -> "Copied #{count} log lines to clipboard!"
-          {:error, _reason} -> "Failed to copy to clipboard"
-        end
-
-      {%{model | notification: {notification_msg, 25}}, []}
+      copy_text_to_clipboard(text, count, model)
     else
       {%{model | notification: {"No logs to copy", 25}}, []}
     end

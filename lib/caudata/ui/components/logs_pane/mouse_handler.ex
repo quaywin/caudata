@@ -893,11 +893,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
     cond do
       context in [:settings, :settings_input, :settings_service_search, :settings_tab] or
           Map.get(state, :modal_type) == :settings ->
-        modal_w = clamp(div(w * 80, 100), 40, w)
-        modal_h = clamp(div(h * 90, 100), 12, h)
-        modal_x = div(w - modal_w, 2)
-        modal_y = div(h - modal_h, 2)
-        modal_rect = %Rect{x: modal_x, y: modal_y, width: modal_w, height: modal_h}
+        modal_rect = modal_centered_rect(w, h, 80, 90, 40, 12)
 
         if inside_area?(mouse, modal_rect) do
           inner = ViewHelper.inner_rect(modal_rect)
@@ -938,7 +934,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
 
             # Tab content rows (rel_y >= 4)
             rel_y >= 4 ->
-              display_rows_limit = max(3, modal_h - 11)
+              display_rows_limit = max(3, modal_rect.height - 11)
               clicked_row = rel_y - 4
 
               case state.settings_focus do
@@ -1071,11 +1067,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
         end
 
       context == :level_filter or Map.get(state, :modal_type) == :level_filter ->
-        modal_w = clamp(div(w * 58, 100), 30, w)
-        modal_h = clamp(div(h * 40, 100), 8, h)
-        modal_x = div(w - modal_w, 2)
-        modal_y = div(h - modal_h, 2)
-        modal_rect = %Rect{x: modal_x, y: modal_y, width: modal_w, height: modal_h}
+        modal_rect = modal_centered_rect(w, h, 58, 40, 30, 8)
 
         if inside_area?(mouse, modal_rect) do
           inner = ViewHelper.inner_rect(modal_rect)
@@ -1090,16 +1082,11 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
             {state, []}
           end
         else
-          key_data = %{key: :escape, modifiers: []}
-          Caudata.UI.KeyHandler.handle_key_event(key_data, state)
+          dismiss_modal(state)
         end
 
       context == :container_action or Map.get(state, :modal_type) == :container_action ->
-        modal_w = clamp(div(w * 55, 100), 30, w)
-        modal_h = clamp(div(h * 35, 100), 8, h)
-        modal_x = div(w - modal_w, 2)
-        modal_y = div(h - modal_h, 2)
-        modal_rect = %Rect{x: modal_x, y: modal_y, width: modal_w, height: modal_h}
+        modal_rect = modal_centered_rect(w, h, 55, 35, 30, 8)
 
         if inside_area?(mouse, modal_rect) do
           inner = ViewHelper.inner_rect(modal_rect)
@@ -1116,17 +1103,11 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
             {state, []}
           end
         else
-          # Clicked outside modal window -> Close modal
-          key_data = %{key: :escape, modifiers: []}
-          Caudata.UI.KeyHandler.handle_key_event(key_data, state)
+          dismiss_modal(state)
         end
 
       context in [:select_ssh, :add_server] or Map.get(state, :modal_type) == :select_ssh ->
-        modal_w = clamp(div(w * 70, 100), 40, w)
-        modal_h = clamp(div(h * 60, 100), 10, h)
-        modal_x = div(w - modal_w, 2)
-        modal_y = div(h - modal_h, 2)
-        modal_rect = %Rect{x: modal_x, y: modal_y, width: modal_w, height: modal_h}
+        modal_rect = modal_centered_rect(w, h, 70, 60, 40, 10)
 
         if inside_area?(mouse, modal_rect) do
           inner = ViewHelper.inner_rect(modal_rect)
@@ -1143,17 +1124,13 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
 
           total_options = length(options)
           error_rows = if Map.get(state, :modal_error), do: 2, else: 0
-          inner_height = max(3, modal_h - 2)
+          inner_height = max(3, modal_rect.height - 2)
           display_rows_limit = max(3, inner_height - 2 - error_rows)
 
           selected_idx =
             min(max(0, Map.get(state, :modal_selected_index, 0)), max(0, total_options - 1))
 
-          start_row =
-            if selected_idx >= display_rows_limit,
-              do: selected_idx - display_rows_limit + 1,
-              else: 0
-
+          start_row = ViewHelper.scroll_start_row(selected_idx, display_rows_limit)
           target_idx = start_row + clicked_row
 
           if clicked_row >= 0 and clicked_row < display_rows_limit and target_idx < total_options do
@@ -1162,9 +1139,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
             {state, []}
           end
         else
-          # Clicked outside modal window -> Close modal
-          key_data = %{key: :escape, modifiers: []}
-          Caudata.UI.KeyHandler.handle_key_event(key_data, state)
+          dismiss_modal(state)
         end
 
       true ->
@@ -1175,20 +1150,25 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
   defp handle_modal_backdrop_click(mouse, state) do
     w = Map.get(state, :width, 80)
     h = Map.get(state, :height, 24)
-
-    modal_w = clamp(div(w * 70, 100), 40, w)
-    modal_h = clamp(div(h * 70, 100), 12, h)
-    modal_x = div(w - modal_w, 2)
-    modal_y = div(h - modal_h, 2)
-
-    modal_rect = %Rect{x: modal_x, y: modal_y, width: modal_w, height: modal_h}
+    modal_rect = modal_centered_rect(w, h, 70, 70, 40, 12)
 
     if not inside_area?(mouse, modal_rect) do
-      # Clicked on backdrop outside modal popup window -> Close modal
-      key_data = %{key: :escape, modifiers: []}
-      Caudata.UI.KeyHandler.handle_key_event(key_data, state)
+      dismiss_modal(state)
     else
       {state, []}
     end
+  end
+
+  defp modal_centered_rect(w, h, pct_w, pct_h, min_w, min_h) do
+    modal_w = clamp(div(w * pct_w, 100), min_w, w)
+    modal_h = clamp(div(h * pct_h, 100), min_h, h)
+    modal_x = div(w - modal_w, 2)
+    modal_y = div(h - modal_h, 2)
+    %Rect{x: modal_x, y: modal_y, width: modal_w, height: modal_h}
+  end
+
+  defp dismiss_modal(state) do
+    key_data = %{key: :escape, modifiers: []}
+    Caudata.UI.KeyHandler.handle_key_event(key_data, state)
   end
 end

@@ -448,28 +448,37 @@ defmodule Caudata.UI.App do
                 {state.logs, true, logs_scroll_y, state.visual_cursor, state.visual_anchor}
             end
           else
-            inner_width = ViewHelper.get_logs_inner_width(state)
-            raw_shift = ViewHelper.find_overlap_index(state.logs, new_logs) || 0
+            needs_shift? = is_integer(logs_scroll_y) or not is_nil(state.visual_cursor)
 
-            new_scroll =
-              case logs_scroll_y do
-                :bottom ->
-                  :bottom
+            {new_scroll, new_cursor, new_anchor} =
+              if needs_shift? do
+                inner_width = ViewHelper.get_logs_inner_width(state)
+                raw_shift = ViewHelper.find_overlap_index(state.logs, new_logs) || 0
 
-                val when is_integer(val) ->
-                  shift =
-                    state.logs
-                    |> Enum.take(raw_shift)
-                    |> ViewHelper.count_wrapped_lines(inner_width)
+                scroll =
+                  case logs_scroll_y do
+                    :bottom ->
+                      :bottom
 
-                  max(0, val - shift)
+                    val when is_integer(val) ->
+                      shift =
+                        state.logs
+                        |> Enum.take(raw_shift)
+                        |> ViewHelper.count_wrapped_lines(inner_width)
+
+                      max(0, val - shift)
+                  end
+
+                cursor =
+                  if state.visual_cursor, do: max(0, state.visual_cursor - raw_shift), else: nil
+
+                anchor =
+                  if state.visual_anchor, do: max(0, state.visual_anchor - raw_shift), else: nil
+
+                {scroll, cursor, anchor}
+              else
+                {:bottom, nil, nil}
               end
-
-            new_cursor =
-              if state.visual_cursor, do: max(0, state.visual_cursor - raw_shift), else: nil
-
-            new_anchor =
-              if state.visual_anchor, do: max(0, state.visual_anchor - raw_shift), else: nil
 
             {new_logs, false, new_scroll, new_cursor, new_anchor}
           end

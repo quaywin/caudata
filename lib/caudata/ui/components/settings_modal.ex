@@ -657,53 +657,16 @@ defmodule Caudata.UI.Components.SettingsModal do
 
       _ ->
         if is_binary(active_item) do
-          case key do
-            :paste ->
-              text = Map.get(key_data, :content, "")
-              current_val = Map.get(model.settings_connection_fields || %{}, active_item, "")
-              new_val = current_val <> text
+          current_val = Map.get(model.settings_connection_fields || %{}, active_item, "")
 
+          case ViewHelper.handle_text_input(key, key_data, current_val) do
+            {:ok, new_val} ->
               new_fields =
                 Map.put(model.settings_connection_fields || %{}, active_item, new_val)
 
               {%{model | settings_connection_fields: new_fields}, []}
 
-            :backspace ->
-              current_val = Map.get(model.settings_connection_fields || %{}, active_item, "")
-              new_val = String.slice(current_val, 0..-2//1)
-
-              new_fields =
-                Map.put(model.settings_connection_fields || %{}, active_item, new_val)
-
-              {%{model | settings_connection_fields: new_fields}, []}
-
-            :char ->
-              char = Map.get(key_data, :char, "")
-
-              if is_binary(char) and char != "" do
-                current_val =
-                  Map.get(model.settings_connection_fields || %{}, active_item, "")
-
-                new_val = current_val <> char
-
-                new_fields =
-                  Map.put(model.settings_connection_fields || %{}, active_item, new_val)
-
-                {%{model | settings_connection_fields: new_fields}, []}
-              else
-                {model, []}
-              end
-
-            ch when is_binary(ch) and byte_size(ch) == 1 ->
-              current_val = Map.get(model.settings_connection_fields || %{}, active_item, "")
-              new_val = current_val <> ch
-
-              new_fields =
-                Map.put(model.settings_connection_fields || %{}, active_item, new_val)
-
-              {%{model | settings_connection_fields: new_fields}, []}
-
-            _ ->
+            :ignore ->
               {model, []}
           end
         else

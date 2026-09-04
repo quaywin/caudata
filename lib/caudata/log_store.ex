@@ -26,8 +26,9 @@ defmodule Caudata.LogStore do
   """
   def get_snapshot(server \\ __MODULE__, source_id, limit \\ @default_capacity) do
     tab = get_table_name(server)
+    key = if limit <= 500, do: {:snapshot_tail, source_id}, else: {:snapshot, source_id}
 
-    case try_ets_lookup(tab, {:snapshot, source_id}) do
+    case try_ets_lookup(tab, key) do
       {:ok, lines} ->
         Enum.take(lines, -limit)
 
@@ -218,8 +219,13 @@ defmodule Caudata.LogStore do
         |> Enum.sort_by(fn line -> Map.get(line, :timestamp) || "" end)
       end
 
+    tail_lines = Enum.take(snapshot_lines, -500)
+
     if Map.has_key?(state, :table) do
-      :ets.insert(state.table, {{:snapshot, source_id}, snapshot_lines})
+      :ets.insert(state.table, [
+        {{:snapshot, source_id}, snapshot_lines},
+        {{:snapshot_tail, source_id}, tail_lines}
+      ])
     end
 
     # Broadcast notification to PubSub
@@ -234,22 +240,9 @@ defmodule Caudata.LogStore do
 
   @impl true
   def handle_cast({:delete_stream, source_id}, state) do
-    new_sources = Map.delete(state.sources, source_id)
-
-    if Map.has_key?(state, :table) do
-      :ets.delete(state.table, {:snapshot, source_id})
-    end
-
-    Phoenix.PubSub.broadcast(
-      Caudata.PubSub,
-      "logs:#{source_id}",
-      {:logs_cleared, source_id}
-    )
-
-    {:noreply, %{state | sources: new_sources}}
+    new_state = do_delete_stream(state, source_id)
+    {:noreply, new_state}
   end
-
-
 
   @impl true
   def handle_call(:get_table_name, _from, state) do
@@ -297,7 +290,17 @@ defmodule Caudata.LogStore do
 
   @impl true
   def handle_call({:clear_logs, source_id}, _from, state) do
+    new_state = do_delete_stream(state, source_id)
+    {:reply, :ok, new_state}
+  end
+
+  defp do_delete_stream(state, source_id) do
     new_sources = Map.delete(state.sources, source_id)
+
+    if Map.has_key?(state, :table) do
+      :ets.delete(state.table, {:snapshot, source_id})
+      :ets.delete(state.table, {:snapshot_tail, source_id})
+    end
 
     Phoenix.PubSub.broadcast(
       Caudata.PubSub,
@@ -305,7 +308,7 @@ defmodule Caudata.LogStore do
       {:logs_cleared, source_id}
     )
 
-    {:reply, :ok, %{state | sources: new_sources}}
+    %{state | sources: new_sources}
   end
 
   defp parse_docker_log(line) do

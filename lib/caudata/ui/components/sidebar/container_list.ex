@@ -7,6 +7,7 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
   alias ExRatatui.Text.Span
   alias ExRatatui.Widgets.Block
   alias ExRatatui.Widgets.Paragraph
+  alias Caudata.UI.ViewHelper
 
   def render(state, box_area) do
     focus = Map.get(state, :sidebar_focus, :servers)
@@ -41,27 +42,23 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
             is_selected = to_string(state.selected_container_id) == to_string(container.id)
             prefix = if is_selected, do: "> ", else: "  "
 
-            is_file =
-              container.image == "file" or String.starts_with?(to_string(container.id), "file:")
+            is_file = ViewHelper.file_container?(container)
+            is_service = ViewHelper.service_container?(container)
 
             container_image = Map.get(container, :image)
-
-            is_systemd =
-              container_image == "systemd" or
-                String.starts_with?(to_string(container.id), "systemd:")
 
             is_launchd =
               container_image == "launchd" or
                 String.starts_with?(to_string(container.id), "launchd:")
 
             is_running =
-              Map.get(container, :state) == "running" or is_file or is_systemd or is_launchd
+              Map.get(container, :state) == "running" or is_file or is_service
 
             {icon, icon_color} =
               cond do
                 is_file -> {"📄 ", :yellow}
-                is_systemd -> {"⚙ ", :magenta}
                 is_launchd -> {"⚙ ", :light_blue}
+                is_service -> {"⚙ ", :magenta}
                 is_running -> {"🐳 ", :cyan}
                 true -> {"🔴 ", :red}
               end
@@ -105,12 +102,7 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
     n = length(enabled_containers)
     inner_height = max(0, box_area.height - 2)
 
-    scroll_y =
-      cond do
-        n <= inner_height -> 0
-        is_nil(selected_idx) -> 0
-        true -> max(0, min(selected_idx - div(inner_height, 2), n - inner_height))
-      end
+    scroll_y = ViewHelper.centered_scroll_y(selected_idx, n, inner_height)
 
     widget = %Paragraph{
       text: container_rows,

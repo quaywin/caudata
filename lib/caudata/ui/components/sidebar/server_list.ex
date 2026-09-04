@@ -78,12 +78,7 @@ defmodule Caudata.UI.Components.Sidebar.ServerList do
     n = length(state.profiles)
     inner_height = max(0, box_area.height - 2)
 
-    scroll_y =
-      cond do
-        n <= inner_height -> 0
-        is_nil(selected_idx) -> 0
-        true -> max(0, min(selected_idx - div(inner_height, 2), n - inner_height))
-      end
+    scroll_y = ViewHelper.centered_scroll_y(selected_idx, n, inner_height)
 
     widget = %Paragraph{
       text: server_rows,

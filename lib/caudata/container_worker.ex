@@ -13,8 +13,6 @@ defmodule Caudata.ContainerWorker do
     :state,
     :conn_ref,
     :channel_id,
-    :stdout_buffer,
-    :stderr_buffer,
     :ssh_client,
     :tail_limit,
     :channel_opened_at,
@@ -23,7 +21,9 @@ defmodule Caudata.ContainerWorker do
     :password,
     :reconnecting_stream,
     :should_stream,
-    :reconnect_timer
+    :reconnect_timer,
+    :stream_channel,
+    :pool
   ]
 
   # Client API
@@ -46,11 +46,15 @@ defmodule Caudata.ContainerWorker do
     GenServer.call(pid, :stop_streaming)
   end
 
+  def get_stream_channel(pid) do
+    GenServer.call(pid, :get_stream_channel)
+  end
+
   def get_streaming_status(pid) do
     try do
       GenServer.call(pid, :get_streaming_status, 100)
     catch
-      :exit, _ -> %{streaming?: false, opened_at: nil}
+      :exit, _ -> %{streaming?: false, opened_at: nil, stream_channel: nil}
     end
   end
 
@@ -78,8 +82,6 @@ defmodule Caudata.ContainerWorker do
       state: Map.get(container, :state, ""),
       conn_ref: nil,
       channel_id: nil,
-      stdout_buffer: "",
-      stderr_buffer: "",
       ssh_client: ssh_client,
       tail_limit: 1000,
       channel_opened_at: nil,
@@ -88,7 +90,9 @@ defmodule Caudata.ContainerWorker do
       password: Keyword.get(opts, :password),
       reconnecting_stream: false,
       should_stream: false,
-      reconnect_timer: nil
+      reconnect_timer: nil,
+      stream_channel: nil,
+      pool: Keyword.get(opts, :pool)
     }
 
     {:ok, state}
@@ -108,10 +112,16 @@ defmodule Caudata.ContainerWorker do
   end
 
   @impl true
+  def handle_call(:get_stream_channel, _from, state) do
+    {:reply, state.stream_channel, state}
+  end
+
+  @impl true
   def handle_call(:get_streaming_status, _from, state) do
     info = %{
       streaming?: not is_nil(state.channel_id),
-      opened_at: state.channel_opened_at
+      opened_at: state.channel_opened_at,
+      stream_channel: state.stream_channel
     }
 
     {:reply, info, state}
@@ -137,13 +147,17 @@ defmodule Caudata.ContainerWorker do
     if is_stopped and has_logs do
       {:reply, :ok, state}
     else
-      if state.channel_id && state.conn_ref == conn_ref do
+      already_streaming? =
+        state.channel_id != nil and
+          ((is_pid(state.pool) and Process.alive?(state.pool)) or state.conn_ref == conn_ref)
+
+      if already_streaming? do
         {:reply, :ok, state}
       else
         state = close_log_channel(state)
         state = %{state | should_stream: true}
 
-        if is_nil(conn_ref) do
+        if is_nil(conn_ref) and not (is_pid(state.pool) and Process.alive?(state.pool)) do
           {:reply, {:error, :not_connected}, state}
         else
           case start_log_streaming(state, conn_ref) do
@@ -196,15 +210,15 @@ defmodule Caudata.ContainerWorker do
 
     # Cancel timer and discard pending logs to ensure a clean restart
     state = cancel_flush_timer(state)
-    state = %{state | pending_logs: [], stdout_buffer: "", stderr_buffer: ""}
+    state = %{state | pending_logs: []}
 
     conn_ref = state.conn_ref
 
-    if state.channel_id && conn_ref do
-      state.ssh_client.close_channel(conn_ref, state.channel_id)
+    if state.stream_channel do
+      Caudata.SSH.StreamChannel.stop(state.stream_channel)
     end
 
-    state = %{state | channel_id: nil}
+    state = %{state | channel_id: nil, stream_channel: nil}
 
     case start_log_streaming(%{state | tail_limit: new_limit}, conn_ref) do
       {:ok, new_state} ->
@@ -215,49 +229,39 @@ defmodule Caudata.ContainerWorker do
     end
   end
 
-  # Handle SSH incoming messages
+  # Handle StreamChannel high-level events
   @impl true
-  def handle_info({:ssh_cm, conn_ref, {:data, channel_id, stream_id, chunk}}, state) do
-    if conn_ref == state.conn_ref && channel_id == state.channel_id do
-      chunk_str = to_string(chunk)
+  def handle_info({:stream_lines, _pid, stream, lines}, state) do
+    streamed_lines = Enum.map(lines, fn line -> {stream, line} end)
+    new_pending_logs = Enum.reverse(streamed_lines) ++ state.pending_logs
 
-      # Maintain SSH flow-control window (RFC 4254) so remote stream never stalls
-      _ = state.ssh_client.adjust_window(conn_ref, channel_id, byte_size(chunk_str))
+    state =
+      if is_nil(state.flush_timer) do
+        timer_ref = Process.send_after(self(), :flush_logs, 100)
+        %{state | pending_logs: new_pending_logs, flush_timer: timer_ref}
+      else
+        %{state | pending_logs: new_pending_logs}
+      end
 
-      {lines, new_buffer, state_key} =
-        if stream_id == 1 do
-          {lines, new_buf} = Caudata.LogSanitizer.process_chunk(chunk_str, state.stderr_buffer)
-          {lines, new_buf, :stderr_buffer}
-        else
-          {lines, new_buf} = Caudata.LogSanitizer.process_chunk(chunk_str, state.stdout_buffer)
-          {lines, new_buf, :stdout_buffer}
-        end
+    {:noreply, state}
+  end
 
-      state = Map.put(state, state_key, new_buffer)
+  @impl true
+  def handle_info({:stream_eof, _pid}, state) do
+    Logger.info("Received EOF from log stream for container #{state.container_id}")
+    {:noreply, handle_disconnect(state, "EOF received")}
+  end
 
-      state =
-        if length(lines) > 0 do
-          stream = if stream_id == 1, do: :stderr, else: :stdout
-          streamed_lines = Enum.map(lines, fn line -> {stream, line} end)
+  @impl true
+  def handle_info({:stream_exit_status, _pid, status}, state) do
+    Logger.info("Remote command for #{state.container_id} exited with status #{status}")
+    {:noreply, handle_disconnect(state, "Command exited with status #{status}")}
+  end
 
-          # Accumulate logs to be flushed in batch (prepended for O(1) efficiency)
-          new_pending_logs = Enum.reverse(streamed_lines) ++ state.pending_logs
-
-          # Lazy-start the timer to flush pending logs after 100ms
-          if is_nil(state.flush_timer) do
-            timer_ref = Process.send_after(self(), :flush_logs, 100)
-            %{state | pending_logs: new_pending_logs, flush_timer: timer_ref}
-          else
-            %{state | pending_logs: new_pending_logs}
-          end
-        else
-          state
-        end
-
-      {:noreply, state}
-    else
-      {:noreply, state}
-    end
+  @impl true
+  def handle_info({:stream_closed, _pid}, state) do
+    Logger.info("SSH Channel closed for container #{state.container_id}")
+    {:noreply, handle_disconnect(state, "Channel closed")}
   end
 
   @impl true
@@ -269,39 +273,6 @@ defmodule Caudata.ContainerWorker do
   end
 
   @impl true
-  def handle_info({:ssh_cm, conn_ref, {:eof, channel_id}}, state) do
-    if conn_ref == state.conn_ref && channel_id == state.channel_id do
-      Logger.info("Received EOF from log stream for container #{state.container_id}")
-      new_state = handle_disconnect(state, "EOF received")
-      {:noreply, new_state}
-    else
-      {:noreply, state}
-    end
-  end
-
-  @impl true
-  def handle_info({:ssh_cm, conn_ref, {:exit_status, channel_id, status}}, state) do
-    if conn_ref == state.conn_ref && channel_id == state.channel_id do
-      Logger.info("Remote command for #{state.container_id} exited with status #{status}")
-      new_state = handle_disconnect(state, "Command exited with status #{status}")
-      {:noreply, new_state}
-    else
-      {:noreply, state}
-    end
-  end
-
-  @impl true
-  def handle_info({:ssh_cm, conn_ref, {:closed, channel_id}}, state) do
-    if conn_ref == state.conn_ref && channel_id == state.channel_id do
-      Logger.info("SSH Channel closed for container #{state.container_id}")
-      new_state = handle_disconnect(state, "Channel closed")
-      {:noreply, new_state}
-    else
-      {:noreply, state}
-    end
-  end
-
-  @impl true
   def handle_info(:reconnect_stream, state) do
     state = %{state | reconnect_timer: nil}
 
@@ -309,8 +280,11 @@ defmodule Caudata.ContainerWorker do
       state.state in ["exited", "stopped", "dead", "paused"] or
         String.starts_with?(state.status, "Exited")
 
-    if state.should_stream and not is_stopped and not is_nil(state.conn_ref) and
-         is_nil(state.channel_id) do
+    can_stream? =
+      state.should_stream and not is_stopped and
+        ((is_pid(state.pool) and Process.alive?(state.pool)) or not is_nil(state.conn_ref))
+
+    if can_stream? and is_nil(state.channel_id) do
       Logger.info("Attempting auto-reconnect log stream for #{state.container_id}...")
 
       case start_log_streaming(state, state.conn_ref) do
@@ -331,7 +305,7 @@ defmodule Caudata.ContainerWorker do
   end
 
   @impl true
-  def handle_info({:ssh_cm, _, _}, state) do
+  def handle_info({:EXIT, _from, :normal}, state) do
     {:noreply, state}
   end
 
@@ -345,17 +319,8 @@ defmodule Caudata.ContainerWorker do
     state = cancel_reconnect_timer(state)
     state = %{state | should_stream: false}
 
-    # Force flush any buffered lines and pending logs on termination
-    state = flush_pending_logs(state)
-
-    remaining =
-      [{:stdout, state.stdout_buffer}, {:stderr, state.stderr_buffer}]
-      |> Enum.filter(fn {_, b} -> b != "" end)
-
-    if remaining != [] do
-      LogStore.append_logs(state.source_id, remaining)
-    end
-
+    # Force flush any pending logs on termination
+    _ = flush_pending_logs(state)
     _ = close_log_channel(state)
     :ok
   end
@@ -365,16 +330,6 @@ defmodule Caudata.ContainerWorker do
   defp handle_disconnect(state, reason) do
     # Force flush any pending logs before disconnecting
     state = flush_pending_logs(state)
-
-    remaining =
-      [{:stdout, state.stdout_buffer}, {:stderr, state.stderr_buffer}]
-      |> Enum.filter(fn {_, b} -> b != "" end)
-
-    if remaining != [] do
-      LogStore.append_logs(state.source_id, remaining)
-    end
-
-    state = %{state | stdout_buffer: "", stderr_buffer: ""}
 
     Phoenix.PubSub.broadcast(
       Caudata.PubSub,
@@ -386,22 +341,23 @@ defmodule Caudata.ContainerWorker do
       state.state in ["exited", "stopped", "dead", "paused"] or
         String.starts_with?(state.status, "Exited")
 
-    if state.channel_id && state.conn_ref do
-      Logger.info(
-        "Closing log channel #{inspect(state.channel_id)} for container #{state.container_id} (reason: #{reason})"
-      )
-
-      state.ssh_client.close_channel(state.conn_ref, state.channel_id)
+    if state.stream_channel do
+      Caudata.SSH.StreamChannel.stop(state.stream_channel)
     end
 
     state = %{
       state
-      | channel_id: nil,
+      | stream_channel: nil,
+        channel_id: nil,
         channel_opened_at: nil,
         reconnecting_stream: false
     }
 
-    if state.should_stream and not is_stopped and not is_nil(state.conn_ref) do
+    can_stream? =
+      state.should_stream and not is_stopped and
+        ((is_pid(state.pool) and Process.alive?(state.pool)) or not is_nil(state.conn_ref))
+
+    if can_stream? do
       Logger.info("Scheduling log stream reconnect for #{state.container_id} in 1000ms")
       state = cancel_reconnect_timer(state)
       timer = Process.send_after(self(), :reconnect_stream, 1000)
@@ -421,97 +377,104 @@ defmodule Caudata.ContainerWorker do
         %{size: 0, drop_count: 0, last_ts: nil}
       end
 
-    case state.ssh_client.open_channel(conn_ref) do
-      {:ok, channel_id} ->
-        log_cmd =
-          cond do
-            String.starts_with?(state.container_id, "file:") ->
-              "file:" <> path = state.container_id
-              escaped_path = String.replace(path, "'", "'\\\'\''")
-              limit = if stats.size > 0, do: 0, else: state.tail_limit || 1000
+    log_cmd = build_log_command_for_container(state, stats)
+    is_reconnect = stats.size > 0 && stats.last_ts && stats.last_ts != ""
 
-              build_log_cmd(
-                "tail -n #{limit} -F \"#{escaped_path}\"",
-                state.password
-              )
+    stream_opts = [
+      cmd: log_cmd,
+      notify_to: self(),
+      ssh_client: state.ssh_client
+    ]
 
-            String.starts_with?(state.container_id, "systemd:") ->
-              "systemd:" <> service_name = state.container_id
-              escaped_service = String.replace(service_name, "'", "'\\\'\''")
+    stream_opts =
+      if is_pid(state.pool) and Process.alive?(state.pool) do
+        Keyword.put(stream_opts, :pool, state.pool)
+      else
+        Keyword.put(stream_opts, :conn_ref, conn_ref)
+      end
 
-              cmd =
-                cond do
-                  stats.size > 0 && stats.last_ts && stats.last_ts != "" ->
-                    limit = state.tail_limit || 1000
-                    since_ts = clamp_timestamp_max_age(stats.last_ts, 3600)
-                    "journalctl -u \"#{escaped_service}\" -f -n #{limit} --since \"#{since_ts}\""
+    case Caudata.SSH.StreamChannel.start_link(stream_opts) do
+      {:ok, stream_pid} ->
+        info = Caudata.SSH.StreamChannel.get_info(stream_pid)
 
-                  stats.size > 0 ->
-                    "journalctl -u \"#{escaped_service}\" -f -n 0"
-
-                  true ->
-                    limit = state.tail_limit || 1000
-                    "journalctl -u \"#{escaped_service}\" -f -n #{limit}"
-                end
-
-              build_log_cmd(cmd, state.password)
-
-            String.starts_with?(state.container_id, "launchd:") ->
-              "launchd:" <> service_name = state.container_id
-              escaped_service = String.replace(service_name, "'", "'\\\'\''")
-
-              build_log_cmd(
-                "log stream --predicate \"process == \\\"#{escaped_service}\\\"\"",
-                state.password
-              )
-
-            true ->
-              escaped_container_id = String.replace(state.container_id, "'", "'\\\'\''")
-
-              cmd =
-                cond do
-                  stats.size > 0 && stats.last_ts && stats.last_ts != "" ->
-                    limit = state.tail_limit || 1000
-                    since_ts = clamp_timestamp_max_age(stats.last_ts, 3600)
-                    "docker logs -t --follow --tail #{limit} --since \"#{since_ts}\" #{escaped_container_id}"
-
-                  stats.size > 0 ->
-                    "docker logs -t --follow --tail 0 #{escaped_container_id}"
-
-                  true ->
-                    limit = state.tail_limit || 1000
-                    "docker logs -t --follow --tail #{limit} #{escaped_container_id}"
-                end
-
-              build_log_cmd(cmd, state.password)
-          end
-
-        is_reconnect = stats.size > 0 && stats.last_ts && stats.last_ts != ""
-
-        case state.ssh_client.exec(conn_ref, channel_id, log_cmd) do
-          :ok ->
-            {:ok,
-             %{
-               state
-               | conn_ref: conn_ref,
-                 channel_id: channel_id,
-                 stdout_buffer: "",
-                 stderr_buffer: "",
-                 channel_opened_at: System.monotonic_time(),
-                 reconnecting_stream: is_reconnect
-             }}
-
-          {:error, reason} ->
-            Logger.info(
-              "Failed to execute log streaming for #{state.container_id}: #{inspect(reason)}"
-            )
-
-            {:error, reason}
-        end
+        {:ok,
+         %{
+           state
+           | stream_channel: stream_pid,
+             conn_ref: info.conn_ref,
+             channel_id: info.channel_id,
+             channel_opened_at: System.monotonic_time(),
+             reconnecting_stream: is_reconnect
+         }}
 
       {:error, reason} ->
         Logger.info("Failed to open channel for container logs: #{inspect(reason)}")
         {:error, reason}
+    end
+  end
+
+  defp build_log_command_for_container(state, stats) do
+    cond do
+      String.starts_with?(state.container_id, "file:") ->
+        "file:" <> path = state.container_id
+        escaped_path = String.replace(path, "'", "'\\\'\''")
+        limit = if stats.size > 0, do: 0, else: state.tail_limit || 1000
+
+        build_log_cmd(
+          "tail -n #{limit} -F \"#{escaped_path}\"",
+          state.password
+        )
+
+      String.starts_with?(state.container_id, "systemd:") ->
+        "systemd:" <> service_name = state.container_id
+        escaped_service = String.replace(service_name, "'", "'\\\'\''")
+
+        cmd =
+          cond do
+            stats.size > 0 && stats.last_ts && stats.last_ts != "" ->
+              limit = state.tail_limit || 1000
+              since_ts = clamp_timestamp_max_age(stats.last_ts, 3600)
+              "journalctl -u \"#{escaped_service}\" -f -n #{limit} --since \"#{since_ts}\""
+
+            stats.size > 0 ->
+              "journalctl -u \"#{escaped_service}\" -f -n 0"
+
+            true ->
+              limit = state.tail_limit || 1000
+              "journalctl -u \"#{escaped_service}\" -f -n #{limit}"
+          end
+
+        build_log_cmd(cmd, state.password)
+
+      String.starts_with?(state.container_id, "launchd:") ->
+        "launchd:" <> service_name = state.container_id
+        escaped_service = String.replace(service_name, "'", "'\\\'\''")
+
+        build_log_cmd(
+          "log stream --predicate \"process == \\\"#{escaped_service}\\\"\"",
+          state.password
+        )
+
+      true ->
+        escaped_container_id = String.replace(state.container_id, "'", "'\\\'\''")
+
+        cmd =
+          cond do
+            stats.size > 0 && stats.last_ts && stats.last_ts != "" ->
+              limit = state.tail_limit || 1000
+              since_ts = clamp_timestamp_max_age(stats.last_ts, 3600)
+
+              "docker logs -t --follow --tail #{limit} --since \"#{since_ts}\" #{escaped_container_id}"
+
+            stats.size > 0 ->
+              "docker logs -t --follow --tail 0 #{escaped_container_id}"
+
+            true ->
+              limit = state.tail_limit || 1000
+              "docker logs -t --follow --tail #{limit} #{escaped_container_id}"
+          end
+
+        build_log_cmd(cmd, state.password)
     end
   end
 
@@ -521,17 +484,14 @@ defmodule Caudata.ContainerWorker do
     state = cancel_flush_timer(state)
     state = flush_pending_logs(state)
 
-    if state.channel_id && state.conn_ref do
-      Logger.info(
-        "Closing log channel #{inspect(state.channel_id)} for container #{state.container_id}"
-      )
-
-      state.ssh_client.close_channel(state.conn_ref, state.channel_id)
+    if state.stream_channel do
+      Caudata.SSH.StreamChannel.stop(state.stream_channel)
     end
 
     %{
       state
-      | channel_id: nil,
+      | stream_channel: nil,
+        channel_id: nil,
         conn_ref: nil,
         channel_opened_at: nil,
         reconnecting_stream: false,
@@ -634,7 +594,8 @@ defmodule Caudata.ContainerWorker do
   def clamp_timestamp_max_age(nil, _max_seconds), do: nil
   def clamp_timestamp_max_age("", _max_seconds), do: nil
 
-  def clamp_timestamp_max_age(last_ts, max_seconds) when is_binary(last_ts) and is_integer(max_seconds) do
+  def clamp_timestamp_max_age(last_ts, max_seconds)
+      when is_binary(last_ts) and is_integer(max_seconds) do
     case parse_iso8601_dt(last_ts) do
       {:ok, dt} ->
         now = DateTime.utc_now()

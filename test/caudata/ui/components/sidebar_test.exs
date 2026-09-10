@@ -31,6 +31,11 @@ defmodule Caudata.UI.Components.SidebarTest do
     assert length(widgets) == 4
     # Check that widgets have correct area layouts
     assert Enum.all?(widgets, fn {_, area} -> area.width == 38 end)
+
+    # Verify fixed height 6 for ContainerInfo (box 3) and ServerMetrics (box 4)
+    [{_, _area1}, {_, _area2}, {_, area3}, {_, area4}] = widgets
+    assert area3.height == 6
+    assert area4.height == 6
   end
 
   test "renders only 2 components (ServerList & ContainerList) when height is small (< 18)", %{
@@ -129,5 +134,103 @@ defmodule Caudata.UI.Components.SidebarTest do
     {widget3, _} = Caudata.UI.Components.Sidebar.ServerList.render(state3, box_area)
     assert widget3.block.border_style.fg == :dark_gray
     assert widget3.block.title == " [1] Servers "
+  end
+
+  test "ContainerInfo renders Status, CPU, RAM, Net without Name and Image", %{state: state} do
+    box_area = %Rect{x: 0, y: 0, width: 38, height: 6}
+
+    container = %{
+      id: "container-1",
+      name: "app",
+      image: "nginx:latest",
+      state: "running",
+      status: "Up 2 hours",
+      cpu_text: "12.5%",
+      ram_text: "256MiB / 2GiB"
+    }
+
+    state = %{
+      state
+      | selected_container_id: "container-1",
+        containers: %{"test-server" => [container]}
+    }
+
+    {widget, _} = Caudata.UI.Components.Sidebar.ContainerInfo.render(state, box_area)
+    rendered_text = Enum.map_join(widget.text, "\n", fn line ->
+      Enum.map_join(line.spans, "", & &1.content)
+    end)
+
+    # Status, CPU, RAM, Net must be present
+    assert String.contains?(rendered_text, "Status:")
+    assert String.contains?(rendered_text, "Up 2 hours")
+    assert String.contains?(rendered_text, "CPU:")
+    assert String.contains?(rendered_text, "12.5%")
+    assert String.contains?(rendered_text, "RAM:")
+    assert String.contains?(rendered_text, "256MiB / 2GiB")
+    assert String.contains?(rendered_text, "Net:")
+    assert String.contains?(rendered_text, "--")
+
+    # Name and Image must NOT be present
+    refute String.contains?(rendered_text, "Name:")
+    refute String.contains?(rendered_text, "Image:")
+  end
+
+  test "ContainerInfo renders real-time network speed with arrows when available", %{state: state} do
+    box_area = %Rect{x: 0, y: 0, width: 38, height: 6}
+
+    container = %{
+      id: "container-1",
+      name: "app",
+      image: "nginx:latest",
+      state: "running",
+      status: "Up 2 hours",
+      cpu_text: "12.5%",
+      ram_text: "256MiB / 2GiB",
+      net_rx_speed: 15 * 1024,
+      net_tx_speed: 3 * 1024
+    }
+
+    state = %{
+      state
+      | selected_container_id: "container-1",
+        containers: %{"test-server" => [container]}
+    }
+
+    {widget, _} = Caudata.UI.Components.Sidebar.ContainerInfo.render(state, box_area)
+    rendered_text = Enum.map_join(widget.text, "\n", fn line ->
+      Enum.map_join(line.spans, "", & &1.content)
+    end)
+
+    assert String.contains?(rendered_text, "Net:")
+    assert String.contains?(rendered_text, "▼")
+    assert String.contains?(rendered_text, "15.0 KB/s")
+    assert String.contains?(rendered_text, "▲")
+    assert String.contains?(rendered_text, "3.0 KB/s")
+  end
+
+  test "ServerMetrics renders CPU, RAM, Disk, and Net rows", %{state: state} do
+    box_area = %Rect{x: 0, y: 0, width: 38, height: 6}
+
+    metrics = {25, 40, 6.4, 16.0, 50, 50.0, 100, 120 * 1024, 45 * 1024}
+    state = %{
+      state
+      | statuses: %{"test-server" => :connected},
+        metrics: %{"test-server" => metrics}
+    }
+
+    {widget, _} = Caudata.UI.Components.Sidebar.ServerMetrics.render(state, box_area)
+    rendered_text = Enum.map_join(widget.text, "\n", fn line ->
+      Enum.map_join(line.spans, "", & &1.content)
+    end)
+
+    assert String.contains?(rendered_text, "CPU:")
+    assert String.contains?(rendered_text, "25%")
+    assert String.contains?(rendered_text, "RAM:")
+    assert String.contains?(rendered_text, "6.4G / 16.0G")
+    assert String.contains?(rendered_text, "Disk:")
+    assert String.contains?(rendered_text, "50.0G / 100G")
+    assert String.contains?(rendered_text, "Net:")
+    assert String.contains?(rendered_text, "120.0 KB/s")
+    assert String.contains?(rendered_text, "45.0 KB/s")
   end
 end

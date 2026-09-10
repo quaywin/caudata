@@ -44,11 +44,12 @@ defmodule Caudata.UI.Components.Sidebar.ServerMetrics do
               status_color = ViewHelper.status_color(status)
               [Line.new([Span.new(msg, style: %Style{fg: status_color, modifiers: [:bold]})])]
 
-            {cpu, ram_pct, used_ram, total_ram, disk_pct, used_disk, total_disk} ->
+            {cpu, ram_pct, used_ram, total_ram, disk_pct, used_disk, total_disk, net_rx, net_tx} ->
               [
                 draw_cpu_bar(cpu),
                 draw_ram_bar(ram_pct, used_ram, total_ram),
-                draw_disk_bar(disk_pct, used_disk, total_disk)
+                draw_disk_bar(disk_pct, used_disk, total_disk),
+                draw_net_row(net_rx, net_tx)
               ]
           end
       end
@@ -109,4 +110,20 @@ defmodule Caudata.UI.Components.Sidebar.ServerMetrics do
       Span.new(val_str, style: %Style{fg: :yellow})
     ])
   end
+
+  # Draws Network row with download / upload rates
+  defp draw_net_row(rx_bytes, tx_bytes) do
+    rx_str = format_speed(rx_bytes)
+    tx_str = format_speed(tx_bytes)
+
+    Line.new([
+      Span.new(" Net:    ", style: %Style{fg: :dark_gray}),
+      Span.new("▼ ", style: %Style{fg: :green}),
+      Span.new(rx_str, style: %Style{fg: :yellow}),
+      Span.new("  ▲ ", style: %Style{fg: :cyan}),
+      Span.new(tx_str, style: %Style{fg: :yellow})
+    ])
+  end
+
+  defp format_speed(bytes), do: ViewHelper.format_speed(bytes)
 end

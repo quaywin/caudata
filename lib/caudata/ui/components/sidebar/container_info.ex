@@ -7,6 +7,7 @@ defmodule Caudata.UI.Components.Sidebar.ContainerInfo do
   alias ExRatatui.Text.Span
   alias ExRatatui.Widgets.Block
   alias ExRatatui.Widgets.Paragraph
+  alias Caudata.UI.ViewHelper
 
   def render(state, box_area) do
     selected_profile = Enum.find(state.profiles, &(&1.id == state.selected_profile_id))
@@ -40,60 +41,46 @@ defmodule Caudata.UI.Components.Sidebar.ContainerInfo do
         container ->
           is_running = Map.get(container, :state) == "running"
 
-          image_text =
-            if String.length(container.image) > 26 do
-              String.slice(container.image, 0..23) <> "..."
-            else
-              container.image
-            end
-
           status_text = container.status || container.state || "unknown"
           status_color = if is_running, do: :green, else: :red
 
-          base_lines = [
-            Line.new([
-              Span.new(" Name:   ", style: %Style{fg: :dark_gray}),
-              Span.new(container.name, style: %Style{fg: :white, modifiers: [:bold]})
-            ]),
+          cpu_text = Map.get(container, :cpu_text) || "--"
+          ram_text = Map.get(container, :ram_text) || "--"
+
+          net_line =
+            if is_integer(container[:net_rx_speed]) and is_integer(container[:net_tx_speed]) do
+              rx_str = ViewHelper.format_speed(container.net_rx_speed)
+              tx_str = ViewHelper.format_speed(container.net_tx_speed)
+
+              Line.new([
+                Span.new(" Net:    ", style: %Style{fg: :dark_gray}),
+                Span.new("▼ ", style: %Style{fg: :green}),
+                Span.new(rx_str, style: %Style{fg: :yellow}),
+                Span.new("  ▲ ", style: %Style{fg: :cyan}),
+                Span.new(tx_str, style: %Style{fg: :yellow})
+              ])
+            else
+              Line.new([
+                Span.new(" Net:    ", style: %Style{fg: :dark_gray}),
+                Span.new("--", style: %Style{fg: :yellow})
+              ])
+            end
+
+          [
             Line.new([
               Span.new(" Status: ", style: %Style{fg: :dark_gray}),
               Span.new(status_text, style: %Style{fg: status_color})
             ]),
             Line.new([
-              Span.new(" Image:  ", style: %Style{fg: :dark_gray}),
-              Span.new(image_text, style: %Style{fg: :cyan})
-            ])
+              Span.new(" CPU:    ", style: %Style{fg: :dark_gray}),
+              Span.new(cpu_text, style: %Style{fg: :yellow})
+            ]),
+            Line.new([
+              Span.new(" RAM:    ", style: %Style{fg: :dark_gray}),
+              Span.new(ram_text, style: %Style{fg: :yellow})
+            ]),
+            net_line
           ]
-
-          cpu_lines =
-            case Map.get(container, :cpu_text) do
-              nil ->
-                []
-
-              cpu_text ->
-                [
-                  Line.new([
-                    Span.new(" CPU:    ", style: %Style{fg: :dark_gray}),
-                    Span.new(cpu_text, style: %Style{fg: :yellow})
-                  ])
-                ]
-            end
-
-          ram_lines =
-            case Map.get(container, :ram_text) do
-              nil ->
-                []
-
-              ram_text ->
-                [
-                  Line.new([
-                    Span.new(" RAM:    ", style: %Style{fg: :dark_gray}),
-                    Span.new(ram_text, style: %Style{fg: :yellow})
-                  ])
-                ]
-            end
-
-          base_lines ++ cpu_lines ++ ram_lines
       end
 
     widget = %Paragraph{

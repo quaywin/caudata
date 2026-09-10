@@ -473,11 +473,12 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
 
     {box1_area, box2_area} =
       if h >= 18 do
-        {h1, h3, h4} =
+        h1 =
           cond do
-            h >= 30 -> {10, 7, 5}
-            h >= 24 -> {8, 6, 5}
-            true -> {6, 5, 5}
+            h >= 32 -> 10
+            h >= 26 -> 8
+            h >= 22 -> 6
+            true -> max(3, h - 14)
           end
 
         box1 = %Rect{x: sidebar_area.x, y: sidebar_area.y, width: sidebar_area.width, height: h1}
@@ -486,7 +487,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
           x: sidebar_area.x,
           y: sidebar_area.y + h1,
           width: sidebar_area.width,
-          height: max(0, h - (h1 + h3 + h4))
+          height: max(0, h - (h1 + 12))
         }
 
         {box1, box2}

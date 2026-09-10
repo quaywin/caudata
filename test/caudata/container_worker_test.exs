@@ -72,13 +72,14 @@ defmodule Caudata.ContainerWorkerTest do
 
     # Test start_streaming
     assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+    stream_pid = ContainerWorker.get_stream_channel(pid)
 
     # Subscribe to LogStore updates
     Phoenix.PubSub.subscribe(Caudata.PubSub, "logs:my-server/container123")
 
     # Simulate receiving incoming data chunk split across packets
-    send(pid, {:ssh_cm, :dummy_conn, {:data, :dummy_channel, 0, "log line 1\nlog line"}})
-    send(pid, {:ssh_cm, :dummy_conn, {:data, :dummy_channel, 0, " 2\n"}})
+    send(stream_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_channel, 0, "log line 1\nlog line"}})
+    send(stream_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_channel, 0, " 2\n"}})
 
     # Expect log updates in LogStore
     assert_receive {:logs_updated, "my-server/container123", _}, 1000
@@ -123,12 +124,13 @@ defmodule Caudata.ContainerWorkerTest do
     {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
 
     assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+    stream_pid = ContainerWorker.get_stream_channel(pid)
 
     # Subscribe to container logs disconnect topic
     Phoenix.PubSub.subscribe(Caudata.PubSub, "container_logs:my-server/container123")
 
     # Simulate channel closure from remote end
-    send(pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_channel}})
+    send(stream_pid, {:ssh_cm, :dummy_conn, {:closed, :dummy_channel}})
 
     # Verify that container logs disconnect notification was broadcast
     assert_receive {:container_log_disconnected, "my-server", "container123", "Channel closed"},
@@ -165,6 +167,7 @@ defmodule Caudata.ContainerWorkerTest do
     {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
 
     assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+    stream_pid = ContainerWorker.get_stream_channel(pid)
 
     # Subscribe to LogStore updates
     Phoenix.PubSub.subscribe(Caudata.PubSub, "logs:my-server/container123")
@@ -174,13 +177,13 @@ defmodule Caudata.ContainerWorkerTest do
     # stdout is received SECOND, but its timestamp is EARLIER (T12:00:00)
     # The LogStore should sort them chronologically (stdout first, then stderr)!
     send(
-      pid,
+      stream_pid,
       {:ssh_cm, :dummy_conn,
        {:data, :dummy_channel, 1, "2026-06-08T12:00:01.000000000Z stderr line\n"}}
     )
 
     send(
-      pid,
+      stream_pid,
       {:ssh_cm, :dummy_conn,
        {:data, :dummy_channel, 0, "2026-06-08T12:00:00.000000000Z stdout line\n"}}
     )
@@ -233,7 +236,10 @@ defmodule Caudata.ContainerWorkerTest do
     {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
     assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
 
-    assert ContainerWorker.get_streaming_status(pid) == %{streaming?: true, opened_at: System.monotonic_time()} ||
+    assert ContainerWorker.get_streaming_status(pid) == %{
+             streaming?: true,
+             opened_at: System.monotonic_time()
+           } ||
              ContainerWorker.get_streaming_status(pid).streaming? == true
 
     exited_container = %{container | status: "Exited (0)", state: "exited"}
@@ -364,18 +370,25 @@ defmodule Caudata.ContainerWorkerTest do
     opts = [ssh_client: Mock]
     {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
     assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+    stream_pid = ContainerWorker.get_stream_channel(pid)
 
     # Send 1000 lines (reaches tail limit)
     Enum.each(1..1000, fn i ->
-      send(pid, {:ssh_cm, :dummy_conn, {:data, :dummy_channel, 0, "2026-08-04T15:00:00.000000000Z new log #{i}\n"}})
+      send(
+        stream_pid,
+        {:ssh_cm, :dummy_conn,
+         {:data, :dummy_channel, 0, "2026-08-04T15:00:00.000000000Z new log #{i}\n"}}
+      )
     end)
 
+    _ = :sys.get_state(stream_pid)
     send(pid, :flush_logs)
     Process.sleep(50)
 
     snapshot = LogStore.get_snapshot(source_id)
     # Verify old log was cleared because 1000 lines reached limit
     refute Enum.any?(snapshot, fn msg -> String.contains?(to_string(msg.message), "old log 1") end)
+
     assert length(snapshot) == 1000
 
     assert :ok = ContainerWorker.stop_streaming(pid)
@@ -402,18 +415,25 @@ defmodule Caudata.ContainerWorkerTest do
     opts = [ssh_client: Mock]
     {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
     assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+    stream_pid = ContainerWorker.get_stream_channel(pid)
 
     # Send 5 lines (under limit)
     Enum.each(1..5, fn i ->
-      send(pid, {:ssh_cm, :dummy_conn, {:data, :dummy_channel, 0, "2026-08-04T15:00:00.000000000Z new log #{i}\n"}})
+      send(
+        stream_pid,
+        {:ssh_cm, :dummy_conn,
+         {:data, :dummy_channel, 0, "2026-08-04T15:00:00.000000000Z new log #{i}\n"}}
+      )
     end)
 
+    _ = :sys.get_state(stream_pid)
     send(pid, :flush_logs)
     Process.sleep(50)
 
     snapshot = LogStore.get_snapshot(source_id)
     # Verify old log was preserved and merged with 5 new lines
     assert Enum.any?(snapshot, fn msg -> String.contains?(to_string(msg.message), "old log 1") end)
+
     assert length(snapshot) == 6
 
     assert :ok = ContainerWorker.stop_streaming(pid)
@@ -443,8 +463,9 @@ defmodule Caudata.ContainerWorkerTest do
     opts = [ssh_client: Mock]
     {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
     assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+    stream_pid = ContainerWorker.get_stream_channel(pid)
 
-    send(pid, {:ssh_cm, :dummy_conn, {:data, :dummy_channel, 0, "hello world\n"}})
+    send(stream_pid, {:ssh_cm, :dummy_conn, {:data, :dummy_channel, 0, "hello world\n"}})
     assert_receive {:adjusted_window, 12}, 1000
 
     assert :ok = ContainerWorker.stop_streaming(pid)
@@ -482,9 +503,10 @@ defmodule Caudata.ContainerWorkerTest do
     opts = [ssh_client: Mock]
     {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
     assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+    stream_pid = ContainerWorker.get_stream_channel(pid)
 
     # Simulate unexpected remote EOF
-    send(pid, {:ssh_cm, :dummy_conn, {:eof, :dummy_channel_1}})
+    send(stream_pid, {:ssh_cm, :dummy_conn, {:eof, :dummy_channel_1}})
 
     assert_receive :closed_channel_1, 1000
     # Wait for auto-reconnect timer (1000ms)
@@ -492,5 +514,71 @@ defmodule Caudata.ContainerWorkerTest do
 
     assert :ok = ContainerWorker.stop_streaming(pid)
     stop_supervised(ContainerWorker)
+  end
+
+  test "start_streaming is idempotent when using ConnectionPool" do
+    container = %{
+      id: "container123",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 3 hours",
+      state: "running"
+    }
+
+    test_pid = self()
+
+    # We expect only ONE open_channel and ONE exec call despite multiple start_streaming calls
+    Mock
+    |> expect(:open_channel, 1, fn :pool_data_conn ->
+      send(test_pid, :pool_channel_opened)
+      {:ok, :pool_chan_1}
+    end)
+    |> expect(:exec, 1, fn :pool_data_conn, :pool_chan_1, _cmd ->
+      send(test_pid, :pool_cmd_execed)
+      :ok
+    end)
+    |> expect(:close_channel, 1, fn :pool_data_conn, :pool_chan_1 ->
+      send(test_pid, :pool_channel_closed)
+      :ok
+    end)
+
+    profile =
+      Caudata.Profile.new(%{
+        host_pattern: "cw-pool-server",
+        host_name: "10.0.0.101",
+        user: "root",
+        port: 22
+      })
+
+    {:ok, pool} =
+      Caudata.SSH.ConnectionPool.start_link(
+        profile: profile,
+        ssh_client: Mock,
+        primary_conn: :pool_data_conn,
+        max_channels_per_conn: 5
+      )
+
+    opts = [ssh_client: Mock, pool: pool]
+    {:ok, pid} = start_supervised({ContainerWorker, {"cw-pool-server", container, opts}})
+
+    # First start_streaming call
+    assert :ok = ContainerWorker.start_streaming(pid, :server_control_conn)
+    assert_receive :pool_channel_opened, 1000
+    assert_receive :pool_cmd_execed, 1000
+
+    # Second start_streaming call with different conn_ref (control conn) - must be a no-op!
+    assert :ok = ContainerWorker.start_streaming(pid, :server_control_conn)
+    refute_receive :pool_channel_opened, 200
+
+    # Third start_streaming call with nil conn_ref - still a no-op!
+    assert :ok = ContainerWorker.start_streaming(pid, nil)
+    refute_receive :pool_channel_opened, 200
+
+    # Stopping releases channel cleanly
+    assert :ok = ContainerWorker.stop_streaming(pid)
+    assert_receive :pool_channel_closed, 1000
+
+    stop_supervised(ContainerWorker)
+    GenServer.stop(pool)
   end
 end

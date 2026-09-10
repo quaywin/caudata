@@ -56,7 +56,10 @@ defmodule Caudata.ServerWorker do
     log_debounce_delay: 100,
     stats_debounce_delay: 300,
     containers_dirty: false,
-    broadcast_timer: nil
+    broadcast_timer: nil,
+    pool: nil,
+    max_active_streams: nil,
+    container_net_samples: %{}
   ]
 
   # Client API
@@ -136,6 +139,29 @@ defmodule Caudata.ServerWorker do
       Keyword.get(opts, :stats_debounce_delay) ||
         Application.get_env(:caudata, :stats_debounce_delay, 300)
 
+    pool =
+      cond do
+        pid = Keyword.get(opts, :pool) ->
+          if is_pid(pid), do: pid, else: nil
+
+        Keyword.get(opts, :use_pool, Application.get_env(:caudata, :env) != :test) ->
+          {:ok, pool_pid} =
+            Caudata.SSH.ConnectionPool.start_link(
+              profile: profile,
+              ssh_client: ssh_client,
+              max_channels_per_conn: Keyword.get(opts, :max_channels_per_conn, 8)
+            )
+
+          pool_pid
+
+        true ->
+          nil
+      end
+
+    max_streams =
+      Keyword.get(opts, :max_active_streams) ||
+        if(pool, do: 100, else: @max_active_streams)
+
     state = %__MODULE__{
       profile: profile,
       status: :connecting,
@@ -144,6 +170,8 @@ defmodule Caudata.ServerWorker do
       reconnect_delay: @initial_reconnect_delay,
       reconnect_timer: nil,
       ssh_client: ssh_client,
+      pool: pool,
+      max_active_streams: max_streams,
       containers: [],
       container_pids: %{},
       list_channel_id: nil,
@@ -510,7 +538,6 @@ defmodule Caudata.ServerWorker do
     end
   end
 
-
   # Handle SSH incoming messages
   @impl true
   def handle_info(
@@ -554,7 +581,10 @@ defmodule Caudata.ServerWorker do
 
       conn_ref == state.conn_ref && channel_id == state.container_stats_channel_id ->
         chunk_str = to_string(chunk)
-        {lines, new_stats_buffer} = LogSanitizer.process_chunk(chunk_str, state.container_stats_buffer)
+
+        {lines, new_stats_buffer} =
+          LogSanitizer.process_chunk(chunk_str, state.container_stats_buffer)
+
         state = Enum.reduce(lines, state, &handle_metrics_line/2)
         {:noreply, %{state | container_stats_buffer: new_stats_buffer, last_activity_at: now}}
 
@@ -601,7 +631,8 @@ defmodule Caudata.ServerWorker do
         {val_entry, remaining_validations} = Map.pop(state.validation_channels, channel_id)
 
         case val_entry do
-          {from, action, buffer} when action in [:start, :stop, :restart, :kill, :remove, :inspect] ->
+          {from, action, buffer}
+          when action in [:start, :stop, :restart, :kill, :remove, :inspect] ->
             GenServer.reply(from, {:ok, String.trim(buffer)})
 
             if action != :inspect do
@@ -899,6 +930,10 @@ defmodule Caudata.ServerWorker do
       _ = state.ssh_client.close(state.conn_ref)
     end
 
+    if is_pid(state.pool) and Process.alive?(state.pool) do
+      Caudata.SSH.ConnectionPool.close_all(state.pool)
+    end
+
     broadcast_status(state.profile.id, :disconnected)
     :ok
   end
@@ -936,6 +971,10 @@ defmodule Caudata.ServerWorker do
     Enum.each(state.container_pids, fn {_id, pid} ->
       if Process.alive?(pid), do: Caudata.ContainerWorker.stop_streaming(pid)
     end)
+
+    if is_pid(state.pool) and Process.alive?(state.pool) do
+      Caudata.SSH.ConnectionPool.close_all(state.pool)
+    end
 
     broadcast_status(state.profile.id, :connecting)
 
@@ -1055,6 +1094,8 @@ defmodule Caudata.ServerWorker do
           metrics_cmd = """
           prev_total=0
           prev_idle=0
+          prev_rx=0
+          prev_tx=0
           disk_info="0 0 0"
           disk_counter=0
 
@@ -1066,10 +1107,12 @@ defmodule Caudata.ServerWorker do
           fi
 
           while true; do
+            curr_rx=0
+            curr_tx=0
 
             if [ "$is_darwin" -eq 1 ]; then
               # macOS CPU (lightweight ps calculation instead of heavy top -l 1)
-              cpu_pct=$(ps -A -o %cpu 2>/dev/null | awk -v n="$ncpu" '{s+=$1} END {v=s/n; printf "%.0f\n", (v > 100 ? 100 : v)}')
+              cpu_pct=$(ps -A -o %cpu 2>/dev/null | awk -v n="$ncpu" '{s+=$1} END {v=s/n; printf "%.0f\\n", (v > 100 ? 100 : v)}')
               cpu_pct=${cpu_pct:-0}
 
               # macOS RAM
@@ -1089,6 +1132,12 @@ defmodule Caudata.ServerWorker do
               else
                 ram_pct=0
               fi
+
+              # macOS Network
+              net_data=$(netstat -ibn 2>/dev/null | awk '$1 !~ /^lo/ && $3 ~ /^<Link/ { if (NF >= 11) {rx += $7; tx += $10} else {rx += $6; tx += $9} } END { printf "%.0f %.0f\\n", rx, tx }')
+              set -- $net_data
+              curr_rx=${1:-0}
+              curr_tx=${2:-0}
             else
               # Linux CPU
               if [ -f /proc/stat ]; then
@@ -1141,7 +1190,31 @@ defmodule Caudata.ServerWorker do
                   ram_pct=$((ram_used * 100 / ram_total))
                 fi
               fi
+
+              # Linux Network
+              if [ -f /proc/net/dev ]; then
+                net_data=$(awk '/:/ && $1 !~ /^(lo|docker|veth|br-)/ { sub(/.*:/, ""); rx += $1; tx += $9 } END { printf "%.0f %.0f\\n", rx, tx }' /proc/net/dev 2>/dev/null)
+                set -- $net_data
+                curr_rx=${1:-0}
+                curr_tx=${2:-0}
+              fi
             fi
+
+            curr_rx=${curr_rx:-0}
+            curr_tx=${curr_tx:-0}
+            if [ "${prev_rx:-0}" -gt 0 ] || [ "${prev_tx:-0}" -gt 0 ]; then
+              rx_diff=$((curr_rx - prev_rx))
+              tx_diff=$((curr_tx - prev_tx))
+              if [ "$rx_diff" -lt 0 ]; then rx_diff=0; fi
+              if [ "$tx_diff" -lt 0 ]; then tx_diff=0; fi
+              net_rx_b=$rx_diff
+              net_tx_b=$tx_diff
+            else
+              net_rx_b=0
+              net_tx_b=0
+            fi
+            prev_rx=$curr_rx
+            prev_tx=$curr_tx
 
             # Disk - check once every 60 seconds (when disk_counter == 0)
             if [ "$disk_counter" -eq 0 ]; then
@@ -1157,7 +1230,7 @@ defmodule Caudata.ServerWorker do
             fi
             disk_counter=$(( (disk_counter + 1) % 60 ))
 
-            echo "METRICS: $cpu_pct $ram_pct $ram_total $ram_used $disk_info"
+            echo "METRICS: $cpu_pct $ram_pct $ram_total $ram_used $disk_info $net_rx_b $net_tx_b"
 
             sleep 1
           done
@@ -1197,64 +1270,127 @@ defmodule Caudata.ServerWorker do
       |> String.replace("\r", "")
       |> String.trim()
 
-    case String.split(clean_line, " ", trim: true) do
-      ["METRICS:", cpu, ram, total_ram, used_ram, total_disk_kb, used_disk_kb, _disk_pct] ->
-        try do
-          cpu_val = String.to_integer(cpu)
-          ram_val = String.to_integer(ram)
+    cond do
+      String.starts_with?(clean_line, "METRICS:") ->
+        case String.split(clean_line, " ", trim: true) do
+          [
+            "METRICS:",
+            cpu,
+            ram,
+            total_ram,
+            used_ram,
+            total_disk_kb,
+            used_disk_kb,
+            _disk_pct | rest
+          ] ->
+            try do
+              cpu_val = String.to_integer(cpu)
+              ram_val = String.to_integer(ram)
 
-          total_ram_val = String.to_integer(total_ram)
-          used_ram_val = String.to_integer(used_ram)
+              total_ram_val = String.to_integer(total_ram)
+              used_ram_val = String.to_integer(used_ram)
 
-          total_disk_val = String.to_integer(total_disk_kb)
-          used_disk_val = String.to_integer(used_disk_kb)
+              total_disk_val = String.to_integer(total_disk_kb)
+              used_disk_val = String.to_integer(used_disk_kb)
 
-          disk_val =
-            if total_disk_val > 0 do
-              round(used_disk_val * 100 / total_disk_val)
-            else
-              0
+              disk_val =
+                if total_disk_val > 0 do
+                  round(used_disk_val * 100 / total_disk_val)
+                else
+                  0
+                end
+
+              # Convert KB to GB
+              total_ram_gb = Float.round(total_ram_val / (1024 * 1024), 1)
+              used_ram_gb = Float.round(used_ram_val / (1024 * 1024), 1)
+
+              total_disk_gb = round(total_disk_val / (1024 * 1024))
+              used_disk_gb = Float.round(used_disk_val / (1024 * 1024), 1)
+
+              {net_rx_kb, net_tx_kb} =
+                case rest do
+                  [rx_str, tx_str | _] ->
+                    {String.to_integer(rx_str), String.to_integer(tx_str)}
+
+                  _ ->
+                    {0, 0}
+                end
+
+              metrics =
+                {cpu_val, ram_val, used_ram_gb, total_ram_gb, disk_val, used_disk_gb,
+                 total_disk_gb, net_rx_kb, net_tx_kb}
+
+              # Update state
+              new_state = %{state | metrics: metrics}
+
+              # Broadcast metrics to UI
+              broadcast_metrics(state.profile.id, metrics)
+
+              new_state
+            rescue
+              _ -> state
             end
 
-          # Convert KB to GB
-          total_ram_gb = Float.round(total_ram_val / (1024 * 1024), 1)
-          used_ram_gb = Float.round(used_ram_val / (1024 * 1024), 1)
-
-          total_disk_gb = round(total_disk_val / (1024 * 1024))
-          used_disk_gb = Float.round(used_disk_val / (1024 * 1024), 1)
-
-          metrics =
-            {cpu_val, ram_val, used_ram_gb, total_ram_gb, disk_val, used_disk_gb, total_disk_gb}
-
-          # Update state
-          new_state = %{state | metrics: metrics}
-
-          # Broadcast metrics to UI
-          broadcast_metrics(state.profile.id, metrics)
-
-          new_state
-        rescue
-          _ -> state
+          _ ->
+            state
         end
 
-      ["CONTAINER_METRICS:", id, cpu_val | mem_parts] ->
-        mem_str = Enum.join(mem_parts, " ")
+      String.starts_with?(clean_line, "CONTAINER_METRICS:") ->
+        case String.split(clean_line, " | ") do
+          [prefix_id, cpu_val, mem_val, net_bytes_str | _] ->
+            id =
+              prefix_id
+              |> String.replace_prefix("CONTAINER_METRICS:", "")
+              |> String.trim()
 
-        case String.split(mem_str, "/", parts: 2) do
-          [used_val, limit_val] ->
-            used_val = String.trim(used_val)
-            limit_val = String.trim(limit_val)
+            cpu_val = String.trim(cpu_val)
+            mem_val = String.trim(mem_val)
+
+            {curr_rx, curr_tx} =
+              case String.split(String.trim(net_bytes_str), " ", trim: true) do
+                [rx_s, tx_s | _] ->
+                  case {Integer.parse(rx_s), Integer.parse(tx_s)} do
+                    {{rx, _}, {tx, _}} -> {rx, tx}
+                    _ -> {0, 0}
+                  end
+
+                _ ->
+                  {0, 0}
+              end
+
+            now_ms = System.monotonic_time(:millisecond)
+            samples = state.container_net_samples || %{}
+
+            {rx_speed, tx_speed, updated_samples} =
+              case Map.get(samples, id) do
+                {prev_rx, prev_tx, prev_ms} ->
+                  elapsed_ms = max(now_ms - prev_ms, 100)
+                  dt = elapsed_ms / 1000.0
+                  rx_diff = max(curr_rx - prev_rx, 0)
+                  tx_diff = max(curr_tx - prev_tx, 0)
+                  rx_spd = round(rx_diff / dt)
+                  tx_spd = round(tx_diff / dt)
+                  {rx_spd, tx_spd, Map.put(samples, id, {curr_rx, curr_tx, now_ms})}
+
+                _ ->
+                  {0, 0, Map.put(samples, id, {curr_rx, curr_tx, now_ms})}
+              end
 
             updated_containers =
               Enum.map(state.containers, fn container ->
-                if String.starts_with?(container.id, id) or String.starts_with?(id, container.id) do
+                if String.starts_with?(container.id, id) or
+                     String.starts_with?(id, container.id) do
                   container
                   |> Map.put(:cpu_text, cpu_val)
-                  |> Map.put(:ram_text, "#{used_val} / #{limit_val}")
+                  |> Map.put(:ram_text, mem_val)
+                  |> Map.put(:net_rx_speed, rx_speed)
+                  |> Map.put(:net_tx_speed, tx_speed)
                 else
                   container
                 end
               end)
+
+            state = %{state | container_net_samples: updated_samples}
 
             if updated_containers != state.containers do
               state = %{state | containers: updated_containers, containers_dirty: true}
@@ -1267,7 +1403,7 @@ defmodule Caudata.ServerWorker do
             state
         end
 
-      _ ->
+      true ->
         state
     end
   end
@@ -1544,8 +1680,6 @@ defmodule Caudata.ServerWorker do
     end
   end
 
-
-
   defp cancel_reconnect_timer(state) do
     if state.reconnect_timer do
       Process.cancel_timer(state.reconnect_timer)
@@ -1629,6 +1763,8 @@ defmodule Caudata.ServerWorker do
             new_c
             |> maybe_put(old_c, :cpu_text)
             |> maybe_put(old_c, :ram_text)
+            |> maybe_put(old_c, :net_rx_speed)
+            |> maybe_put(old_c, :net_tx_speed)
         end
       end)
 
@@ -1661,7 +1797,8 @@ defmodule Caudata.ServerWorker do
                   state.profile.id,
                   container,
                   ssh_client: state.ssh_client,
-                  password: Map.get(state.profile, :password)
+                  password: Map.get(state.profile, :password),
+                  pool: state.pool
                 )
 
               Map.put(acc, container.id, new_pid)
@@ -1673,7 +1810,8 @@ defmodule Caudata.ServerWorker do
                 state.profile.id,
                 container,
                 ssh_client: state.ssh_client,
-                password: Map.get(state.profile, :password)
+                password: Map.get(state.profile, :password),
+                pool: state.pool
               )
 
             Map.put(acc, container.id, new_pid)
@@ -1758,7 +1896,9 @@ defmodule Caudata.ServerWorker do
               end)
               |> Enum.reject(&is_nil/1)
 
-            if length(active_streams) >= @max_active_streams do
+            max_limit = state.max_active_streams || @max_active_streams
+
+            if length(active_streams) >= max_limit do
               case Enum.min_by(active_streams, fn {_id, _c_pid, opened_at} -> opened_at end, fn ->
                      nil
                    end) do
@@ -1767,7 +1907,7 @@ defmodule Caudata.ServerWorker do
 
                 {old_id, old_pid, _opened_at} ->
                   Logger.info(
-                    "Max active channels (#{@max_active_streams}) reached. Closing oldest channel for container #{old_id} to make room."
+                    "Max active channels (#{max_limit}) reached. Closing oldest channel for container #{old_id} to make room."
                   )
 
                   Caudata.ContainerWorker.stop_streaming(old_pid)
@@ -1849,7 +1989,7 @@ defmodule Caudata.ServerWorker do
           escaped_id = String.replace(state.active_container_id, "'", "'\\''")
 
           cmd =
-            "docker stats --format \"CONTAINER_METRICS: {{.ID}} {{.CPUPerc}} {{.MemUsage}}\" '#{escaped_id}'"
+            "cid=\"#{escaped_id}\"; cpid=$(docker inspect -f \"{{.State.Pid}}\" \"$cid\" 2>/dev/null); docker stats --format \"{{.ID}} | {{.CPUPerc}} | {{.MemUsage}}\" \"$cid\" | while IFS= read -r line; do if [ -z \"$cpid\" ] || [ ! -d \"/proc/$cpid\" ]; then cpid=$(docker inspect -f \"{{.State.Pid}}\" \"$cid\" 2>/dev/null); fi; rx_tx=\"0 0\"; if [ -n \"$cpid\" ] && [ -f \"/proc/$cpid/net/dev\" ]; then rx_tx=$(awk \"/:/ && \\$1 !~ /^lo/ { sub(/.*:/, \\\"\\\"); rx += \\$1; tx += \\$9 } END { printf \\\"%.0f %.0f\\\\n\\\", rx, tx }\" \"/proc/$cpid/net/dev\" 2>/dev/null); fi; echo \"CONTAINER_METRICS: $line | $rx_tx\"; done"
 
           wrapped_cmd = wrap_sudo(cmd, state.profile.password)
 

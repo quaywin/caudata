@@ -17,19 +17,20 @@ defmodule Caudata.UI.Components.Sidebar do
     h = sidebar_area.height
 
     if h >= 18 do
-      {h1, h3, h4} =
+      h1 =
         cond do
-          h >= 30 -> {10, 7, 5}
-          h >= 24 -> {8, 6, 5}
-          true -> {6, 5, 5}
+          h >= 32 -> 10
+          h >= 26 -> 8
+          h >= 22 -> 6
+          true -> max(3, h - 14)
         end
 
       [box1_area, box2_area, box3_area, box4_area] =
         Layout.split(sidebar_area, :vertical, [
           {:length, h1},
           {:min, 0},
-          {:length, h3},
-          {:length, h4}
+          {:length, 6},
+          {:length, 6}
         ])
 
       List.flatten([

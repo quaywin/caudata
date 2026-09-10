@@ -94,14 +94,16 @@ defmodule Caudata.ServerWorkerTest do
     {:ok, container_worker_pid} =
       Caudata.ServerSupervisor.lookup_container_worker("test-server", "container1")
 
+    stream_pid = Caudata.ContainerWorker.get_stream_channel(container_worker_pid)
+
     # Simulate receiving incoming data chunk split across packets on the ContainerWorker
     send(
-      container_worker_pid,
+      stream_pid,
       {:ssh_cm, :dummy_conn, {:data, :dummy_log_channel, 0, "line 1\npart"}}
     )
 
     send(
-      container_worker_pid,
+      stream_pid,
       {:ssh_cm, :dummy_conn, {:data, :dummy_log_channel, 0, " 2\nline 3\n"}}
     )
 
@@ -1047,6 +1049,7 @@ defmodule Caudata.ServerWorkerTest do
     [initial] = ServerWorker.get_containers(worker_pid)
     refute Map.has_key?(initial, :cpu_text)
     refute Map.has_key?(initial, :ram_text)
+    refute Map.has_key?(initial, :net_rx_speed)
 
     # A start event triggers a full refresh. Feed back the same container.
     start_event =
@@ -1060,7 +1063,7 @@ defmodule Caudata.ServerWorkerTest do
 
     Process.sleep(50)
 
-    # After the refresh, cpu_text/ram_text must NOT be injected as nil keys.
+    # After the refresh, cpu_text/ram_text/net_rx_speed must NOT be injected as nil keys.
     [refreshed] = ServerWorker.get_containers(worker_pid)
 
     refute Map.has_key?(refreshed, :cpu_text),
@@ -1068,6 +1071,9 @@ defmodule Caudata.ServerWorkerTest do
 
     refute Map.has_key?(refreshed, :ram_text),
            "refresh must not inject ram_text: nil (crashes the info pane)"
+
+    refute Map.has_key?(refreshed, :net_rx_speed),
+           "refresh must not inject net_rx_speed: nil (crashes the info pane)"
 
     stop_supervised(ServerWorker)
   end
@@ -1119,14 +1125,14 @@ defmodule Caudata.ServerWorkerTest do
 
     assert_receive :opened_metrics_channel, 1000
 
-    metrics_data = "METRICS: 15 50 8388608 4194304 104857600 20971520 20\n"
+    metrics_data = "METRICS: 15 50 8388608 4194304 104857600 20971520 20 120 45\n"
 
     send(
       worker_pid,
       {:ssh_cm, :dummy_conn, {:data, :dummy_metrics_channel, 0, metrics_data}}
     )
 
-    expected_metrics = {15, 50, 4.0, 8.0, 20, 20.0, 100}
+    expected_metrics = {15, 50, 4.0, 8.0, 20, 20.0, 100, 120, 45}
 
     assert_receive {:metrics_updated, "metrics-test-server", ^expected_metrics}, 1000
 
@@ -1301,8 +1307,8 @@ defmodule Caudata.ServerWorkerTest do
     worker_state = :sys.get_state(worker_pid)
     stats_channel = worker_state.container_stats_channel_id
 
-    # Send container stats data chunk via stats channel
-    stats_data = "CONTAINER_METRICS: container1 25.5% 512MiB / 4GiB\n"
+    # Send container stats data chunk via stats channel (4-field format: id | cpu | mem | rx tx)
+    stats_data = "CONTAINER_METRICS: container1 | 25.5% | 512MiB / 4GiB | 1000000 500000\n"
 
     send(
       worker_pid,
@@ -1314,6 +1320,22 @@ defmodule Caudata.ServerWorkerTest do
     c1 = Enum.find(updated_containers, &(&1.id == "container1"))
     assert c1.cpu_text == "25.5%"
     assert c1.ram_text == "512MiB / 4GiB"
+    assert c1.net_rx_speed == 0
+    assert c1.net_tx_speed == 0
+
+    # Send second data chunk with increased byte stats
+    Process.sleep(100)
+    stats_data_2 = "CONTAINER_METRICS: container1 | 26.0% | 512MiB / 4GiB | 2500000 1000000\n"
+
+    send(
+      worker_pid,
+      {:ssh_cm, :dummy_conn, {:data, stats_channel, 0, stats_data_2}}
+    )
+
+    assert_receive {:containers_updated, "container-stats-test-server", updated_containers_2}, 1000
+    c1_2 = Enum.find(updated_containers_2, &(&1.id == "container1"))
+    assert c1_2.net_rx_speed > 0
+    assert c1_2.net_tx_speed > 0
 
     stop_supervised(ServerWorker)
   end

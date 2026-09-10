@@ -714,4 +714,28 @@ defmodule Caudata.UI.ViewHelper do
         false
     end)
   end
+
+  @doc """
+  Formats network speed in bytes/sec into human readable format (B/s, KB/s, MB/s, GB/s).
+  """
+  def format_speed(nil), do: "0 B/s"
+
+  def format_speed(bytes) when is_integer(bytes) and bytes >= 1024 * 1024 * 1024 do
+    "#{Float.round(bytes / (1024 * 1024 * 1024), 1)} GB/s"
+  end
+
+  def format_speed(bytes) when is_integer(bytes) and bytes >= 1024 * 1024 do
+    "#{Float.round(bytes / (1024 * 1024), 1)} MB/s"
+  end
+
+  def format_speed(bytes) when is_integer(bytes) and bytes >= 1024 do
+    "#{Float.round(bytes / 1024, 1)} KB/s"
+  end
+
+  def format_speed(bytes) when is_integer(bytes) and bytes >= 0 do
+    "#{bytes} B/s"
+  end
+
+  def format_speed(_), do: "0 B/s"
 end
+

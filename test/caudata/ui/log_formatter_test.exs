@@ -262,5 +262,32 @@ defmodule Caudata.UI.LogFormatterTest do
       assert elem(LogFormatter.format_line_with_meta("Caused by: java.lang.NullPointerException"), 1) == true
       assert elem(LogFormatter.format_line_with_meta("stack backtrace:"), 1) == true
     end
+
+    test "accurately formats Nginx access log with status colors, bytes, duration, and user-agent" do
+      line = ~S"""
+      172.22.0.2 - - [08/Sep/2026:02:18:15 +0000] "GET /wp-json/unlock/v1/device-codes?email=diepnguyenkieu1988%40gmail.com HTTP/1.1" 200 580 74ms "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0"
+      """ |> String.trim()
+
+      {spans, is_error, level} = LogFormatter.format_line_with_meta(line)
+
+      assert is_error == false
+      assert level == 2
+
+      # Status 200 is green
+      span_200 = Enum.find(spans, &(&1.content == "200"))
+      assert span_200 != nil
+      assert span_200.style.fg == :green
+
+      # Bytes 580 is white, NOT red
+      span_580 = Enum.find(spans, &(String.trim(&1.content) == "580"))
+      assert span_580 != nil
+      assert span_580.style.fg == :white
+
+      # 537 is NOT treated as a status code (no red span with 537)
+      refute Enum.any?(spans, &(&1.style.fg == :red and String.contains?(&1.content, "537")))
+
+      # 151.0.0.0 in user agent is NOT treated as an IP (no magenta span with 151.0.0.0)
+      refute Enum.any?(spans, &(&1.style.fg == :magenta and String.contains?(&1.content, "151.0.0.0")))
+    end
   end
 end

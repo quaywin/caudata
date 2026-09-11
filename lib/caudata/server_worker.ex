@@ -160,7 +160,7 @@ defmodule Caudata.ServerWorker do
 
     max_streams =
       Keyword.get(opts, :max_active_streams) ||
-        if(pool, do: 100, else: @max_active_streams)
+        if(is_nil(pool), do: @max_active_streams)
 
     state = %__MODULE__{
       profile: profile,
@@ -371,6 +371,7 @@ defmodule Caudata.ServerWorker do
 
             {:error, reason} ->
               Logger.info("Failed to exec docker ps on refresh: #{inspect(reason)}")
+              state.ssh_client.close_channel(state.conn_ref, list_channel_id)
               {:noreply, state}
           end
 
@@ -925,6 +926,7 @@ defmodule Caudata.ServerWorker do
     # 2. Close parent worker's SSH channels and connection cleanly
     if state.conn_ref do
       _ = close_list_channel(state)
+      _ = close_events_channel(state)
       _ = close_metrics_channel(state)
       _ = close_container_stats_channel(state)
       _ = state.ssh_client.close(state.conn_ref)
@@ -1051,6 +1053,7 @@ defmodule Caudata.ServerWorker do
                 "Failed to exec docker events command on #{state.profile.id}: #{inspect(reason)}"
               )
 
+              state.ssh_client.close_channel(state.conn_ref, events_channel_id)
               state
           end
 
@@ -1248,6 +1251,7 @@ defmodule Caudata.ServerWorker do
                 "Failed to exec metrics command on #{state.profile.id}: #{inspect(reason)}"
               )
 
+              state.ssh_client.close_channel(state.conn_ref, metrics_channel_id)
               state
           end
 
@@ -1878,10 +1882,11 @@ defmodule Caudata.ServerWorker do
     else
       case Map.fetch(state.container_pids, state.active_container_id) do
         {:ok, pid} ->
-          # Check and close oldest stream if we are about to open a new channel
+          # Check and close oldest stream if we are about to open a new channel in legacy single-connection mode.
+          # When ConnectionPool is active, additional SSH connections are dynamically spawned instead of closing existing streams.
           target_status = Caudata.ContainerWorker.get_streaming_status(pid)
 
-          if not target_status.streaming? do
+          if is_nil(state.pool) and not target_status.streaming? do
             active_streams =
               state.container_pids
               |> Enum.filter(fn {_id, c_pid} -> Process.alive?(c_pid) end)
@@ -1999,6 +2004,7 @@ defmodule Caudata.ServerWorker do
 
             {:error, reason} ->
               Logger.warning("Failed to exec container stats command: #{inspect(reason)}")
+              state.ssh_client.close_channel(state.conn_ref, stats_channel_id)
               state
           end
 

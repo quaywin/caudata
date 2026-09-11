@@ -1340,6 +1340,99 @@ defmodule Caudata.ServerWorkerTest do
     stop_supervised(ServerWorker)
   end
 
+  test "container stats does not misattribute metrics to other containers with prefix collision or empty ID" do
+    profile = Profile.new(%{"id" => "stats-isolation-server", "host_name" => "10.0.0.41", "host_pattern" => "stats-isolation-server", "port" => 22, "user" => "root"})
+    test_pid = self()
+
+    dummy_list_channel = :chan_list
+    dummy_stats_channel = :chan_stats
+
+    Mock
+    |> expect(:connect, fn "10.0.0.41", 22, _opts -> {:ok, :dummy_conn} end)
+    |> expect(:open_channel, fn :dummy_conn -> {:ok, dummy_list_channel} end)
+    |> stub(:open_channel, fn :dummy_conn -> {:ok, dummy_stats_channel} end)
+    |> stub(:exec, fn :dummy_conn, _chan_id, cmd ->
+      cond do
+        String.contains?(cmd, "docker ps") ->
+          send(test_pid, :opened_list_channel)
+          :ok
+
+        String.contains?(cmd, "docker stats") ->
+          send(test_pid, :opened_stats_channel)
+          :ok
+
+        true ->
+          :ok
+      end
+    end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised(
+        {ServerWorker,
+         {profile,
+          ssh_client: Mock,
+          enable_metrics: true,
+          list_debounce_delay: 0,
+          log_debounce_delay: 0,
+          stats_debounce_delay: 0}}
+      )
+
+    assert_receive :opened_list_channel, 1000
+
+    # 3 containers: container1, container10 (shares prefix!), and a 64-char sha container
+    full_sha = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+    bootstrap_ps =
+      "{\"ID\":\"container1\",\"Names\":\"app1\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n" <>
+      "{\"ID\":\"container10\",\"Names\":\"app10\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n" <>
+      "{\"ID\":\"#{full_sha}\",\"Names\":\"sha_app\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n"
+
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, dummy_list_channel, 0, bootstrap_ps}})
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, dummy_list_channel}})
+
+    assert_receive {:containers_updated, "stats-isolation-server", _}, 1000
+
+    # Select container1
+    assert :ok = GenServer.call(worker_pid, {:stream_container_logs, "container1"})
+    assert_receive :opened_stats_channel, 1000
+
+    # Send container stats for container1
+    stats_data = "CONTAINER_METRICS: container1 | 15.0% | 100MiB / 1GiB | 50000 20000\n"
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, dummy_stats_channel, 0, stats_data}})
+
+    assert_receive {:containers_updated, "stats-isolation-server", updated}, 1000
+
+    c1 = Enum.find(updated, &(&1.id == "container1"))
+    c10 = Enum.find(updated, &(&1.id == "container10"))
+    c_sha = Enum.find(updated, &(&1.id == full_sha))
+
+    assert c1.cpu_text == "15.0%"
+    assert c1.ram_text == "100MiB / 1GiB"
+    # container10 must NOT have received container1's metrics!
+    refute Map.has_key?(c10, :cpu_text)
+    refute Map.has_key?(c10, :net_rx_speed)
+    refute Map.has_key?(c_sha, :cpu_text)
+
+    # Empty container ID must be ignored and not update any container
+    empty_stats = "CONTAINER_METRICS:  | 99.0% | 999MiB / 1GiB | 99999 99999\n"
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, dummy_stats_channel, 0, empty_stats}})
+    refute_receive {:containers_updated, "stats-isolation-server", _}, 200
+
+    # 12-char short ID matching 64-char full container ID
+    short_sha = String.slice(full_sha, 0, 12)
+    sha_stats = "CONTAINER_METRICS: #{short_sha} | 42.0% | 200MiB / 2GiB | 12345 67890\n"
+    send(worker_pid, {:ssh_cm, :dummy_conn, {:data, dummy_stats_channel, 0, sha_stats}})
+
+    assert_receive {:containers_updated, "stats-isolation-server", updated_2}, 1000
+    sha_container = Enum.find(updated_2, &(&1.id == full_sha))
+    assert sha_container.cpu_text == "42.0%"
+
+    stop_supervised(ServerWorker)
+  end
+
   test "exec_container_action executes docker command and returns result" do
     profile = Profile.new(%{"id" => "action-test-server", "host_name" => "10.0.0.99", "host_pattern" => "action-test-server", "port" => 22, "user" => "root"})
     test_pid = self()

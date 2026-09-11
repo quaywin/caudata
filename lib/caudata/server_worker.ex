@@ -1367,7 +1367,7 @@ defmodule Caudata.ServerWorker do
 
             {rx_speed, tx_speed, updated_samples} =
               case Map.get(samples, id) do
-                {prev_rx, prev_tx, prev_ms} ->
+                {prev_rx, prev_tx, prev_ms} when now_ms - prev_ms <= 10_000 ->
                   elapsed_ms = max(now_ms - prev_ms, 100)
                   dt = elapsed_ms / 1000.0
                   rx_diff = max(curr_rx - prev_rx, 0)
@@ -1381,18 +1381,21 @@ defmodule Caudata.ServerWorker do
               end
 
             updated_containers =
-              Enum.map(state.containers, fn container ->
-                if String.starts_with?(container.id, id) or
-                     String.starts_with?(id, container.id) do
-                  container
-                  |> Map.put(:cpu_text, cpu_val)
-                  |> Map.put(:ram_text, mem_val)
-                  |> Map.put(:net_rx_speed, rx_speed)
-                  |> Map.put(:net_tx_speed, tx_speed)
-                else
-                  container
-                end
-              end)
+              if id != "" do
+                Enum.map(state.containers, fn container ->
+                  if match_container_id?(container.id, id) do
+                    container
+                    |> Map.put(:cpu_text, cpu_val)
+                    |> Map.put(:ram_text, mem_val)
+                    |> Map.put(:net_rx_speed, rx_speed)
+                    |> Map.put(:net_tx_speed, tx_speed)
+                  else
+                    container
+                  end
+                end)
+              else
+                state.containers
+              end
 
             state = %{state | container_net_samples: updated_samples}
 
@@ -1975,6 +1978,24 @@ defmodule Caudata.ServerWorker do
     end
   end
 
+  defp match_container_id?(container_id, metric_id) do
+    cond do
+      metric_id == "" or is_nil(metric_id) or container_id == "" or is_nil(container_id) ->
+        false
+
+      to_string(container_id) == to_string(metric_id) ->
+        true
+
+      is_binary(container_id) and is_binary(metric_id) and
+        ((String.length(metric_id) >= 12 and String.starts_with?(container_id, metric_id)) or
+           (String.length(container_id) >= 12 and String.starts_with?(metric_id, container_id))) ->
+        true
+
+      true ->
+        false
+    end
+  end
+
   defp docker_container?(nil), do: false
 
   defp docker_container?(id) do
@@ -1994,7 +2015,7 @@ defmodule Caudata.ServerWorker do
           escaped_id = String.replace(state.active_container_id, "'", "'\\''")
 
           cmd =
-            "cid=\"#{escaped_id}\"; cpid=$(docker inspect -f \"{{.State.Pid}}\" \"$cid\" 2>/dev/null); docker stats --format \"{{.ID}} | {{.CPUPerc}} | {{.MemUsage}}\" \"$cid\" | while IFS= read -r line; do if [ -z \"$cpid\" ] || [ ! -d \"/proc/$cpid\" ]; then cpid=$(docker inspect -f \"{{.State.Pid}}\" \"$cid\" 2>/dev/null); fi; rx_tx=\"0 0\"; if [ -n \"$cpid\" ] && [ -f \"/proc/$cpid/net/dev\" ]; then rx_tx=$(awk \"/:/ && \\$1 !~ /^lo/ { sub(/.*:/, \\\"\\\"); rx += \\$1; tx += \\$9 } END { printf \\\"%.0f %.0f\\\\n\\\", rx, tx }\" \"/proc/$cpid/net/dev\" 2>/dev/null); fi; echo \"CONTAINER_METRICS: $line | $rx_tx\"; done"
+            "cid=\"#{escaped_id}\"; cpid=$(docker inspect -f \"{{.State.Pid}}\" \"$cid\" 2>/dev/null); host_net=$(docker inspect -f \"{{.HostConfig.NetworkMode}}\" \"$cid\" 2>/dev/null); docker stats --format \"{{.ID}} | {{.CPUPerc}} | {{.MemUsage}}\" \"$cid\" | while IFS= read -r line; do if [ -z \"$cpid\" ] || [ ! -d \"/proc/$cpid\" ]; then cpid=$(docker inspect -f \"{{.State.Pid}}\" \"$cid\" 2>/dev/null); host_net=$(docker inspect -f \"{{.HostConfig.NetworkMode}}\" \"$cid\" 2>/dev/null); fi; rx_tx=\"0 0\"; if [ \"$host_net\" != \"host\" ] && [ -n \"$cpid\" ] && [ \"$cpid\" -gt 0 ] 2>/dev/null && [ -f \"/proc/$cpid/net/dev\" ]; then c_ns=$(readlink /proc/$cpid/ns/net 2>/dev/null); h_ns=$(readlink /proc/1/ns/net 2>/dev/null || readlink /proc/$$/ns/net 2>/dev/null); if [ -z \"$c_ns\" ] || [ -z \"$h_ns\" ] || [ \"$c_ns\" != \"$h_ns\" ]; then rx_tx=$(awk \"/:/ && \\$1 !~ /^(lo|docker|veth|br-)/ { sub(/.*:/, \\\"\\\"); rx += \\$1; tx += \\$9 } END { printf \\\"%.0f %.0f\\\\n\\\", rx, tx }\" \"/proc/$cpid/net/dev\" 2>/dev/null); fi; fi; echo \"CONTAINER_METRICS: $line | $rx_tx\"; done"
 
           wrapped_cmd = wrap_sudo(cmd, state.profile.password)
 

@@ -6,20 +6,51 @@ defmodule Caudata.UI.ViewHelperTest do
   describe "container category helpers" do
     test "docker_container? correctly identifies docker containers" do
       assert ViewHelper.docker_container?(%{id: "abc", name: "nginx", image: "nginx:latest"})
-      refute ViewHelper.docker_container?(%{id: "file:/var/log/app.log", name: "app.log", image: "file"})
+
+      refute ViewHelper.docker_container?(%{
+               id: "file:/var/log/app.log",
+               name: "app.log",
+               image: "file"
+             })
+
       refute ViewHelper.docker_container?(%{id: "systemd:nginx", name: "nginx", image: "systemd"})
-      refute ViewHelper.docker_container?(%{id: "launchd:brew.mysql", name: "mysql", image: "launchd"})
+
+      refute ViewHelper.docker_container?(%{
+               id: "launchd:brew.mysql",
+               name: "mysql",
+               image: "launchd"
+             })
     end
 
     test "service_container? correctly identifies system services" do
-      assert ViewHelper.service_container?(%{id: "systemd:nginx", name: "nginx", image: "systemd"})
-      assert ViewHelper.service_container?(%{id: "launchd:brew.mysql", name: "mysql", image: "launchd"})
+      assert ViewHelper.service_container?(%{
+               id: "systemd:nginx",
+               name: "nginx",
+               image: "systemd"
+             })
+
+      assert ViewHelper.service_container?(%{
+               id: "launchd:brew.mysql",
+               name: "mysql",
+               image: "launchd"
+             })
+
       refute ViewHelper.service_container?(%{id: "abc", name: "nginx", image: "nginx:latest"})
-      refute ViewHelper.service_container?(%{id: "file:/var/log/app.log", name: "app.log", image: "file"})
+
+      refute ViewHelper.service_container?(%{
+               id: "file:/var/log/app.log",
+               name: "app.log",
+               image: "file"
+             })
     end
 
     test "file_container? correctly identifies file logs" do
-      assert ViewHelper.file_container?(%{id: "file:/var/log/app.log", name: "app.log", image: "file"})
+      assert ViewHelper.file_container?(%{
+               id: "file:/var/log/app.log",
+               name: "app.log",
+               image: "file"
+             })
+
       assert ViewHelper.file_container?(%{id: "file:/etc/hosts", name: "hosts", image: "custom"})
       refute ViewHelper.file_container?(%{id: "abc", name: "nginx", image: "nginx:latest"})
       refute ViewHelper.file_container?(%{id: "systemd:nginx", name: "nginx", image: "systemd"})
@@ -120,8 +151,22 @@ defmodule Caudata.UI.ViewHelperTest do
     end
 
     test "handle_text_input handles paste, backspace, and chars" do
-      assert {:ok, "hello world"} = ViewHelper.handle_text_input(:paste, %{content: " world"}, "hello")
+      assert {:ok, "hello world"} =
+               ViewHelper.handle_text_input(:paste, %{content: " world"}, "hello")
+
       assert {:ok, "hell"} = ViewHelper.handle_text_input(:backspace, %{}, "hello")
+      assert {:ok, "hell"} = ViewHelper.handle_text_input(:delete, %{}, "hello")
+
+      assert {:ok, ""} =
+               ViewHelper.handle_text_input(:char, %{char: "u", modifiers: ["ctrl"]}, "hello")
+
+      assert {:ok, "hello "} =
+               ViewHelper.handle_text_input(
+                 :char,
+                 %{char: "w", modifiers: ["ctrl"]},
+                 "hello world"
+               )
+
       assert {:ok, "hello!"} = ViewHelper.handle_text_input(:char, %{char: "!"}, "hello")
       assert {:ok, "hello?"} = ViewHelper.handle_text_input("?", %{}, "hello")
       assert :ignore = ViewHelper.handle_text_input(:up, %{}, "hello")
@@ -134,6 +179,30 @@ defmodule Caudata.UI.ViewHelperTest do
       assert {:ok, 2} = ViewHelper.cycle_focus_index(0, :up, false, 3)
       assert {:ok, 0} = ViewHelper.cycle_focus_index(1, :tab, true, 3)
       assert :ignore = ViewHelper.cycle_focus_index(1, :enter, false, 3)
+    end
+  end
+
+  describe "line wrapping helpers" do
+    test "visual_line_count returns 1 for short lines and scales with width" do
+      assert ViewHelper.visual_line_count("short", 10) == 1
+      assert ViewHelper.visual_line_count("exactly10!", 10) == 1
+      assert ViewHelper.visual_line_count("eleven chars", 10) == 2
+      assert ViewHelper.visual_line_count("twenty-one characters!", 10) == 3
+      assert ViewHelper.visual_line_count(%{message: "short"}, 10) == 1
+      assert ViewHelper.visual_line_count(%{message: "eleven chars"}, 10) == 2
+      assert ViewHelper.visual_line_count(nil, 10) == 1
+    end
+
+    test "count_wrapped_lines aggregates line counts correctly" do
+      lines = [
+        %{message: "first line"},
+        %{message: "second line that is quite long"},
+        %{message: "third"}
+      ]
+
+      assert ViewHelper.count_wrapped_lines(lines, 50) == 3
+      assert ViewHelper.count_wrapped_lines(lines, 10) == 1 + 3 + 1
+      assert ViewHelper.count_wrapped_lines([], 10) == 0
     end
   end
 end

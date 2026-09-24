@@ -85,27 +85,42 @@ defmodule Caudata.Application do
       Caudata.ServerSupervisor
     ]
 
-    # Define children based on environment and TUI startup decision
+    # Define children based on environment and TUI/Web startup decision
     children =
-      cond do
-        match?({:web, _}, mode) ->
-          children ++ [Caudata.Web.Endpoint]
-
-        @env != :prod and start_tui?(mode) ->
-          children ++ [Caudata.Web.Endpoint, {Caudata.UI.App, [terminal: true, mouse_capture: true]}]
-
-        @env != :prod ->
-          children ++ [Caudata.Web.Endpoint]
-
-        start_tui?(mode) ->
-          children ++ [{Caudata.UI.App, [terminal: true, mouse_capture: true]}]
-
-        true ->
-          children
-      end
+      children
+      |> then(fn list ->
+        if start_web?(mode), do: list ++ [Caudata.Web.Endpoint], else: list
+      end)
+      |> then(fn list ->
+        if start_tui?(mode),
+          do: list ++ [{Caudata.UI.App, [terminal: true, mouse_capture: true]}],
+          else: list
+      end)
 
     opts = [strategy: :one_for_one, name: Caudata.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp start_web?(mode) do
+    cond do
+      match?({:web, _}, mode) ->
+        true
+
+      System.get_env("CAUDATA_WEB") == "true" or System.get_env("PHX_SERVER") in ["true", "1"] ->
+        true
+
+      @env == :test ->
+        true
+
+      start_tui?(mode) ->
+        false
+
+      @env != :prod ->
+        true
+
+      true ->
+        false
+    end
   end
 
   defp start_tui?(mode) do

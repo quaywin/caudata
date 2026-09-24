@@ -81,13 +81,10 @@ defmodule Caudata.MixProject do
         include_executables_for: [:unix],
         strip_beams: true,
         exclude_apps: [:wx, :observer, :debugger, :et, :reltool, :megaco, :eunit, :sasl, :mnesia],
-        steps: [:assemble, &Burrito.wrap/1],
+        steps: [:assemble, &ExRatatui.Burrito.verify_linux_nif/1, &Burrito.wrap/1],
         burrito: [
           targets: targets,
-          plugin: "rel/burrito_plugin.zig",
-          extra_steps: [
-            patch: [post: [Caudata.BurritoPatch]]
-          ]
+          plugin: "rel/burrito_plugin.zig"
         ]
       ]
     ]
@@ -157,8 +154,8 @@ defmodule Caudata.MixProject do
   defp deps do
     [
       {:burrito, "~> 1.0"},
-      {:ex_ratatui, "~> 0.11"},
-      {:phoenix_ex_ratatui, "~> 0.1"},
+      {:ex_ratatui, "~> 0.16"},
+      {:phoenix_ex_ratatui, "~> 0.3"},
       {:phoenix, "~> 1.7"},
       {:phoenix_live_view, "~> 0.20 or ~> 1.0"},
       {:phoenix_pubsub, "~> 2.1"},
@@ -172,8 +169,7 @@ defmodule Caudata.MixProject do
       {:floki, ">= 0.30.0", only: :test},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:benchee, "~> 1.3", only: [:dev, :test]},
-      {:ex_log_formatter,
-       git: "https://github.com/quaywin/ex_log_formatter.git", branch: "main"}
+      {:ex_log_formatter, git: "https://github.com/quaywin/ex_log_formatter.git", branch: "main"}
     ]
   end
 end

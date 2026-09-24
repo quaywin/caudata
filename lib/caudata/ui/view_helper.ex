@@ -79,7 +79,8 @@ defmodule Caudata.UI.ViewHelper do
   @doc """
   Calculates the starting row index for windowed list scrolling.
   """
-  def scroll_start_row(selected_idx, display_limit) when is_integer(selected_idx) and is_integer(display_limit) do
+  def scroll_start_row(selected_idx, display_limit)
+      when is_integer(selected_idx) and is_integer(display_limit) do
     if selected_idx >= display_limit, do: selected_idx - display_limit + 1, else: 0
   end
 
@@ -181,7 +182,12 @@ defmodule Caudata.UI.ViewHelper do
   @doc """
   Renders save and cancel action buttons with focus styling.
   """
-  def render_action_buttons(save_active, cancel_active, save_label \\ "Save Connection", cancel_label \\ "Cancel") do
+  def render_action_buttons(
+        save_active,
+        cancel_active,
+        save_label \\ "Save Connection",
+        cancel_label \\ "Cancel"
+      ) do
     ExRatatui.Text.Line.new([
       ExRatatui.Text.Span.new(
         if(save_active, do: "> [ #{save_label} ]   ", else: "  [ #{save_label} ]   "),
@@ -195,33 +201,49 @@ defmodule Caudata.UI.ViewHelper do
   end
 
   @doc """
-  Applies standard keyboard text editing (:paste, :backspace, :char, single character) to a string.
+  Applies standard keyboard text editing (:paste, :backspace, :delete, Ctrl+U, Ctrl+W, :char, single character) to a string.
   Returns `{:ok, new_string}` if text changed, or `:ignore` otherwise.
   """
   def handle_text_input(key, key_data, current_val) do
     val = current_val || ""
+    modifiers = Map.get(key_data || %{}, :modifiers, []) || []
 
-    case key do
-      :paste ->
+    cond do
+      # Ctrl+U: clear entire line
+      "ctrl" in modifiers and (key == "u" or (key == :char and Map.get(key_data, :char) == "u")) ->
+        {:ok, ""}
+
+      # Ctrl+W: delete previous word
+      "ctrl" in modifiers and (key == "w" or (key == :char and Map.get(key_data, :char) == "w")) ->
+        trimmed = String.trim_trailing(val)
+
+        case String.split(trimmed, ~r/\s+/) do
+          [] -> {:ok, ""}
+          [_single] -> {:ok, ""}
+          words -> {:ok, Enum.join(Enum.slice(words, 0..-2//1), " ") <> " "}
+        end
+
+      key == :paste ->
         text = Map.get(key_data, :content, "")
         {:ok, val <> text}
 
-      :backspace ->
+      key in [:backspace, :delete] ->
         {:ok, String.slice(val, 0..-2//1)}
 
-      :char ->
+      key == :char ->
         char = Map.get(key_data, :char, "")
 
-        if is_binary(char) and char != "" do
+        if is_binary(char) and char != "" and "ctrl" not in modifiers and "alt" not in modifiers do
           {:ok, val <> char}
         else
           :ignore
         end
 
-      ch when is_binary(ch) and byte_size(ch) == 1 ->
-        {:ok, val <> ch}
+      is_binary(key) and byte_size(key) == 1 and "ctrl" not in modifiers and
+          "alt" not in modifiers ->
+        {:ok, val <> key}
 
-      _ ->
+      true ->
         :ignore
     end
   end
@@ -260,7 +282,9 @@ defmodule Caudata.UI.ViewHelper do
         _ -> nil
       end
 
-    cache_key = {model.filter_regex, Map.get(model, :log_level_filter, :all), model.selected_container_id, logs_len, hd_log}
+    cache_key =
+      {model.filter_regex, Map.get(model, :log_level_filter, :all), model.selected_container_id,
+       logs_len, hd_log}
 
     Cache.fetch_latest(:cached_displayed_logs, cache_key, fn ->
       do_get_displayed_logs(model)
@@ -291,7 +315,21 @@ defmodule Caudata.UI.ViewHelper do
         if query == "" do
           level_filtered_logs
         else
-          if String.contains?(query, ["\\", "^", "$", "*", "+", "?", "(", ")", "[", "]", "{", "}", "|"]) do
+          if String.contains?(query, [
+               "\\",
+               "^",
+               "$",
+               "*",
+               "+",
+               "?",
+               "(",
+               ")",
+               "[",
+               "]",
+               "{",
+               "}",
+               "|"
+             ]) do
             re =
               Map.get(model, :compiled_filter_regex) ||
                 case Regex.compile(query) do
@@ -313,10 +351,14 @@ defmodule Caudata.UI.ViewHelper do
           else
             Enum.filter(level_filtered_logs, fn
               %{message: msg} ->
-                if is_negative, do: not String.contains?(msg, query), else: String.contains?(msg, query)
+                if is_negative,
+                  do: not String.contains?(msg, query),
+                  else: String.contains?(msg, query)
 
               line when is_binary(line) ->
-                if is_negative, do: not String.contains?(line, query), else: String.contains?(line, query)
+                if is_negative,
+                  do: not String.contains?(line, query),
+                  else: String.contains?(line, query)
             end)
           end
         end
@@ -410,13 +452,16 @@ defmodule Caudata.UI.ViewHelper do
 
   def visual_line_count(line, width) when is_binary(line) do
     w = max(1, width)
-    len = String.length(line)
-    max(1, ceil(len / w))
+
+    if byte_size(line) <= w do
+      1
+    else
+      len = String.length(line)
+      max(1, ceil(len / w))
+    end
   end
 
   def visual_line_count(_other, _width), do: 1
-
-
 
   @doc """
   Pre-wraps a list of structured spans into multiple lines of spans of a given maximum width.
@@ -738,4 +783,3 @@ defmodule Caudata.UI.ViewHelper do
 
   def format_speed(_), do: "0 B/s"
 end
-

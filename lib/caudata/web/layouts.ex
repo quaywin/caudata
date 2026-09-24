@@ -28,8 +28,8 @@ defmodule Caudata.Web.Layouts do
             -webkit-tap-highlight-color: transparent !important;
           }
         </style>
-        <script src="https://cdn.jsdelivr.net/npm/phoenix@1.8.7/priv/static/phoenix.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/phoenix_live_view@1.1.31/priv/static/phoenix_live_view.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/phoenix@1.8.14/priv/static/phoenix.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/phoenix_live_view@1.2.12/priv/static/phoenix_live_view.min.js"></script>
         <script>
           // Color tables
           const NAMED_COLORS = {
@@ -93,8 +93,32 @@ defmodule Caudata.Web.Layouts do
             tag.id = STYLE_TAG_ID;
             tag.textContent =
               ".pxr-row{display:flex;line-height:1}" +
-              ".pxr-cell{display:inline-block;width:var(--pxr-cw);height:var(--pxr-ch);text-align:center}";
+              ".pxr-cell{display:inline-block;width:var(--pxr-cw);height:var(--pxr-ch);text-align:center}" +
+              ".pxr-regions{position:absolute;left:0;top:0;pointer-events:none}" +
+              ".pxr-region{position:absolute;display:block}";
             document.head.appendChild(tag);
+          }
+
+          function cellPixelSize(w, h, dpr) {
+            const s = dpr > 0 ? dpr : 1;
+            return {
+              cell_width: Math.max(1, Math.round(w * s)),
+              cell_height: Math.max(1, Math.round(h * s)),
+            };
+          }
+
+          function regionStyle(x, y, w, h) {
+            return `left:calc(${x} * var(--pxr-cw));top:calc(${y} * var(--pxr-ch));width:calc(${w} * var(--pxr-cw));height:calc(${h} * var(--pxr-ch))`;
+          }
+
+          function latestOnly() {
+            let gen = 0;
+            return (promise, callback) => {
+              const cur = ++gen;
+              return promise.then((res) => {
+                if (cur === gen) callback(res);
+              });
+            };
           }
 
           function buildStyle(fg, bg, modifiers) {
@@ -170,6 +194,9 @@ defmodule Caudata.Web.Layouts do
               this.cells = [];
               this.charWidth = 0;
               this.charHeight = 0;
+              this.swapRegions = latestOnly();
+              this.regionLayer = document.createElement("div");
+              this.regionLayer.className = "pxr-regions";
 
               if (this.el.tabIndex < 0) this.el.tabIndex = 0;
 
@@ -179,6 +206,7 @@ defmodule Caudata.Web.Layouts do
               if (!this.el.style.whiteSpace) this.el.style.whiteSpace = "pre";
               if (!this.el.style.lineHeight) this.el.style.lineHeight = "1";
               if (!this.el.style.overflow) this.el.style.overflow = "hidden";
+              if (!this.el.style.position) this.el.style.position = "relative";
 
               ensureBaseStyle();
 
@@ -234,11 +262,12 @@ defmodule Caudata.Web.Layouts do
                 this.lastCols = cols;
                 this.lastRows = rows;
 
-                this.pushEventTo(this.el, "phx_ex_ratatui:resize", { cols, rows });
+                const pixelSize = cellPixelSize(this.charWidth, this.charHeight, window.devicePixelRatio);
+                this.pushEventTo(this.el, "phx_ex_ratatui:resize", { cols, rows, ...pixelSize });
               }, 100);
             },
 
-            applyDiff({ width, height, ops }) {
+            applyDiff({ width, height, ops, regions }) {
               const dimsChanged =
                 this.cells.length !== height ||
                 (this.cells[0] && this.cells[0].length !== width);
@@ -249,6 +278,24 @@ defmodule Caudata.Web.Layouts do
                 const [row, col, sym, fg, bg, mods, skip] = ops[i];
                 this.setCell(row, col, sym, fg, bg, mods, skip);
               }
+
+              if (regions !== undefined) {
+                this.applyRegions(regions);
+              }
+            },
+
+            applyRegions(regions) {
+              const imgs = regions.map(([x, y, w, h, src]) => {
+                const img = document.createElement("img");
+                img.className = "pxr-region";
+                img.style.cssText = regionStyle(x, y, w, h);
+                img.alt = "";
+                img.draggable = false;
+                img.src = src;
+                return img;
+              });
+              const loaded = Promise.all(imgs.map((img) => img.decode().catch(() => {})));
+              this.swapRegions(loaded, () => this.regionLayer.replaceChildren(...imgs));
             },
 
             buildGrid(width, height) {
@@ -275,6 +322,7 @@ defmodule Caudata.Web.Layouts do
                 this.cells.push(rowCells);
                 this.el.appendChild(row);
               }
+              this.el.appendChild(this.regionLayer);
             },
 
             setCell(row, col, sym, fg, bg, modifiers, skip) {

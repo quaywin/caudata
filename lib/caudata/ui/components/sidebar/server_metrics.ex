@@ -68,47 +68,62 @@ defmodule Caudata.UI.Components.Sidebar.ServerMetrics do
 
   # Draws CPU progress bar
   defp draw_cpu_bar(pct) do
-    filled = div(pct * 10, 100)
-    empty = 10 - filled
-
-    bar_str = "[" <> String.duplicate("|", filled) <> String.duplicate(" ", empty) <> "]"
+    gauge_spans = draw_gauge_spans(pct, 10)
     pct_str = String.pad_leading("#{pct}%", 4)
 
-    Line.new([
-      Span.new(" CPU:    ", style: %Style{fg: :dark_gray}),
-      Span.new(bar_str, style: %Style{fg: :cyan}),
-      Span.new(" " <> pct_str, style: %Style{fg: :yellow})
-    ])
+    Line.new(
+      [Span.new(" CPU:    ", style: %Style{fg: :dark_gray})] ++
+        gauge_spans ++
+        [Span.new(" " <> pct_str, style: %Style{fg: :yellow})]
+    )
   end
 
   # Draws RAM progress bar with used/total
   defp draw_ram_bar(pct, used, total) do
-    filled = div(pct * 10, 100)
-    empty = 10 - filled
-
-    bar_str = "[" <> String.duplicate("|", filled) <> String.duplicate(" ", empty) <> "]"
+    gauge_spans = draw_gauge_spans(pct, 10)
     val_str = " #{used}G / #{total}G"
 
-    Line.new([
-      Span.new(" RAM:    ", style: %Style{fg: :dark_gray}),
-      Span.new(bar_str, style: %Style{fg: :cyan}),
-      Span.new(val_str, style: %Style{fg: :yellow})
-    ])
+    Line.new(
+      [Span.new(" RAM:    ", style: %Style{fg: :dark_gray})] ++
+        gauge_spans ++
+        [Span.new(val_str, style: %Style{fg: :yellow})]
+    )
   end
 
   # Draws Disk progress bar with used/total
   defp draw_disk_bar(pct, used, total) do
-    filled = div(pct * 10, 100)
-    empty = 10 - filled
-
-    bar_str = "[" <> String.duplicate("|", filled) <> String.duplicate(" ", empty) <> "]"
+    gauge_spans = draw_gauge_spans(pct, 10)
     val_str = " #{used}G / #{total}G"
 
-    Line.new([
-      Span.new(" Disk:   ", style: %Style{fg: :dark_gray}),
-      Span.new(bar_str, style: %Style{fg: :cyan}),
-      Span.new(val_str, style: %Style{fg: :yellow})
-    ])
+    Line.new(
+      [Span.new(" Disk:   ", style: %Style{fg: :dark_gray})] ++
+        gauge_spans ++
+        [Span.new(val_str, style: %Style{fg: :yellow})]
+    )
+  end
+
+  # Draws modern progress bar with filled/unfilled styles and dynamic threshold colors
+  defp draw_gauge_spans(pct, width) do
+    pct_val = round(max(0, min(100, pct || 0)))
+    filled_count = div(pct_val * width, 100)
+    empty_count = width - filled_count
+
+    color =
+      cond do
+        pct_val >= 85 -> :red
+        pct_val >= 70 -> :yellow
+        true -> :green
+      end
+
+    filled_part = String.duplicate("■", filled_count)
+    empty_part = String.duplicate("□", empty_count)
+
+    [
+      Span.new("[", style: %Style{fg: :dark_gray}),
+      Span.new(filled_part, style: %Style{fg: color, modifiers: [:bold]}),
+      Span.new(empty_part, style: %Style{fg: :dark_gray}),
+      Span.new("]", style: %Style{fg: :dark_gray})
+    ]
   end
 
   # Draws Network row with download / upload rates

@@ -18,10 +18,12 @@ jobs:
         include:
           - target: linux_x86_64
             os: ubuntu-latest
-            rust_target: x86_64-unknown-linux-gnu
+            rust_target: x86_64-unknown-linux-musl
+            target_abi: musl
           - target: macos_aarch64
             os: macos-15
             rust_target: aarch64-apple-darwin
+            target_abi: ""
 
     steps:
       - name: Checkout code
@@ -69,7 +71,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils p7zip-full
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils p7zip-full musl-tools
 
       - name: Install system dependencies (macOS)
         if: startsWith(matrix.os, 'macos-')
@@ -91,6 +93,7 @@ jobs:
         env:
           MIX_ENV: prod
           BURRITO_TARGET: ${{ matrix.target }}
+          TARGET_ABI: ${{ matrix.target_abi }}
         run: |
           mix release
 

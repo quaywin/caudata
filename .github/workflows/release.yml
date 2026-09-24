@@ -23,7 +23,6 @@ jobs:
           - target: macos_aarch64
             os: macos-15
             rust_target: aarch64-apple-darwin
-            target_abi: ""
 
     steps:
       - name: Checkout code
@@ -93,8 +92,10 @@ jobs:
         env:
           MIX_ENV: prod
           BURRITO_TARGET: ${{ matrix.target }}
-          TARGET_ABI: ${{ matrix.target_abi }}
         run: |
+          if [ -n "${{ matrix.target_abi }}" ]; then
+            export TARGET_ABI="${{ matrix.target_abi }}"
+          fi
           mix release
 
       - name: List outputs

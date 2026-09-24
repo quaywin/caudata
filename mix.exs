@@ -1,3 +1,7 @@
+if System.get_env("TARGET_ABI") == "" do
+  System.delete_env("TARGET_ABI")
+end
+
 defmodule Caudata.MixProject do
   use Mix.Project
 
@@ -71,8 +75,8 @@ defmodule Caudata.MixProject do
 
     targets =
       case System.get_env("BURRITO_TARGET") do
-        "macos_aarch64" -> Keyword.take(targets, [:macos_aarch64])
-        "linux_x86_64" -> Keyword.take(targets, [:linux_x86_64])
+        target when target in ["macos_aarch64", "macos"] -> Keyword.take(targets, [:macos_aarch64])
+        target when target in ["linux_x86_64", "linux"] -> Keyword.take(targets, [:linux_x86_64])
         _ -> targets
       end
 
@@ -81,13 +85,28 @@ defmodule Caudata.MixProject do
         include_executables_for: [:unix],
         strip_beams: true,
         exclude_apps: [:wx, :observer, :debugger, :et, :reltool, :megaco, :eunit, :sasl, :mnesia],
-        steps: [:assemble, &ExRatatui.Burrito.verify_linux_nif/1, &Burrito.wrap/1],
+        steps: [:assemble, &verify_burrito_nif/1, &Burrito.wrap/1],
         burrito: [
           targets: targets,
           plugin: "rel/burrito_plugin.zig"
         ]
       ]
     ]
+  end
+
+  defp verify_burrito_nif(release) do
+    if System.get_env("BURRITO_TARGET") in ["linux", "linux_x86_64"] do
+      prev = System.get_env("BURRITO_TARGET")
+      System.put_env("BURRITO_TARGET", "linux")
+
+      try do
+        ExRatatui.Burrito.verify_linux_nif(release)
+      after
+        if prev, do: System.put_env("BURRITO_TARGET", prev), else: System.delete_env("BURRITO_TARGET")
+      end
+    else
+      ExRatatui.Burrito.verify_linux_nif(release)
+    end
   end
 
   defp current_version do

@@ -9,17 +9,22 @@ defmodule Caudata.UI.Components.Sidebar.ContainerInfo do
   alias ExRatatui.Widgets.Paragraph
   alias Caudata.UI.ViewHelper
 
-  def render(state, box_area) do
+  def render(state, box_area, precomputed_containers \\ nil) do
     selected_profile = Enum.find(state.profiles, &(&1.id == state.selected_profile_id))
 
     enabled_containers =
-      if selected_profile do
-        Caudata.UI.ViewHelper.get_enabled_containers(
-          selected_profile,
-          Map.get(state.containers, selected_profile.id, [])
-        )
-      else
-        []
+      cond do
+        precomputed_containers != nil ->
+          precomputed_containers
+
+        selected_profile ->
+          Caudata.UI.ViewHelper.get_enabled_containers(
+            selected_profile,
+            Map.get(state.containers, selected_profile.id, [])
+          )
+
+        true ->
+          []
       end
 
     selected_container =

@@ -9,6 +9,7 @@ defmodule Caudata.UI.Components.ContainerInspectModal do
   alias ExRatatui.Widgets.Block
   alias ExRatatui.Widgets.Paragraph
   alias ExRatatui.Widgets.Popup
+  alias Caudata.UI.Cache
 
   def render(state) do
     container_name = Map.get(state, :selected_container_name, "Container")
@@ -16,20 +17,10 @@ defmodule Caudata.UI.Components.ContainerInspectModal do
     scroll_y = Map.get(state, :container_inspect_scroll_y, 0)
     mode = Map.get(state, :container_inspect_mode, :summary)
 
-    parsed_json =
-      case Jason.decode(inspect_raw) do
-        {:ok, p} -> p
-        _ -> nil
-      end
-
     selected_profile = Enum.find(Map.get(state, :profiles, []), &(&1.id == Map.get(state, :selected_profile_id)))
     server_host = (selected_profile && selected_profile.host_name) || ""
 
-    summary = if parsed_json, do: extract_summary(parsed_json, server_host), else: nil
-    is_running = (summary && summary.running) || false
-
-    formatted_lines = format_inspect_data(inspect_raw, mode, summary)
-    total_lines = length(formatted_lines)
+    {formatted_lines, total_lines, is_running} = get_inspect_info(inspect_raw, mode, server_host)
     visible_lines = Enum.drop(formatted_lines, scroll_y)
 
     badge_status =
@@ -85,17 +76,10 @@ defmodule Caudata.UI.Components.ContainerInspectModal do
     mode = Map.get(model, :container_inspect_mode, :summary)
     inspect_raw = Map.get(model, :container_inspect_data, "")
 
-    parsed_json =
-      case Jason.decode(inspect_raw) do
-        {:ok, p} -> p
-        _ -> nil
-      end
-
     selected_profile = Enum.find(Map.get(model, :profiles, []), &(&1.id == Map.get(model, :selected_profile_id)))
     server_host = (selected_profile && selected_profile.host_name) || ""
 
-    summary = if parsed_json, do: extract_summary(parsed_json, server_host), else: nil
-    total_lines = length(format_inspect_data(inspect_raw, mode, summary))
+    {_lines, total_lines, _is_running} = get_inspect_info(inspect_raw, mode, server_host)
     inner_height = max(1, div(Map.get(model, :height, 24) * 80, 100) - 4)
     max_scroll = max(0, total_lines - inner_height)
 
@@ -494,4 +478,21 @@ defmodule Caudata.UI.Components.ContainerInspectModal do
   end
 
   defp format_time(_), do: ""
+
+  defp get_inspect_info(inspect_raw, mode, server_host) do
+    Cache.fetch_latest(:container_inspect_cache, {inspect_raw, mode, server_host}, fn ->
+      parsed_json =
+        case Jason.decode(inspect_raw) do
+          {:ok, p} -> p
+          _ -> nil
+        end
+
+      summary = if parsed_json, do: extract_summary(parsed_json, server_host), else: nil
+      is_running = (summary && summary.running) || false
+      formatted_lines = format_inspect_data(inspect_raw, mode, summary)
+      total_lines = length(formatted_lines)
+
+      {formatted_lines, total_lines, is_running}
+    end)
+  end
 end

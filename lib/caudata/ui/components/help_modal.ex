@@ -117,12 +117,11 @@ defmodule Caudata.UI.Components.HelpModal do
     [popup_widget]
   end
 
-  def total_lines do
-    section_lines_count =
-      Enum.reduce(@sections, 0, fn {_h, list}, acc -> acc + 1 + length(list) + 1 end)
+  @total_lines 3 +
+                 Enum.reduce(@sections, 0, fn {_h, list}, acc -> acc + 1 + length(list) + 1 end) +
+                 1
 
-    3 + section_lines_count + 1
-  end
+  def total_lines, do: @total_lines
 
   @doc """
   Handles key events when the help modal is active.

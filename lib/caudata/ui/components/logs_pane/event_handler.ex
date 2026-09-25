@@ -185,17 +185,15 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
 
     case norm_key do
       k when k in ["j", :down] ->
-        displayed_logs = ViewHelper.get_displayed_logs(model)
-        max_scroll = get_max_scroll(model, displayed_logs)
+        if model.logs_scroll_y == :bottom do
+          {model, []}
+        else
+          displayed_logs = ViewHelper.get_displayed_logs(model)
+          max_scroll = get_max_scroll(model, displayed_logs)
 
-        case model.logs_scroll_y do
-          :bottom ->
-            {model, []}
-
-          val when is_integer(val) ->
-            new_scroll = val + scroll_step
-            new_scroll = if new_scroll >= max_scroll, do: :bottom, else: new_scroll
-            {%{model | logs_scroll_y: new_scroll}, []}
+          new_scroll = model.logs_scroll_y + scroll_step
+          new_scroll = if new_scroll >= max_scroll, do: :bottom, else: new_scroll
+          {%{model | logs_scroll_y: new_scroll}, []}
         end
 
       k when k in ["k", :up] ->
@@ -253,18 +251,16 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
         end
 
       k when k in [:page_down, :pagedown] ->
-        displayed_logs = ViewHelper.get_displayed_logs(model)
-        logs_height = ViewHelper.get_logs_pane_height(model)
-        max_scroll = get_max_scroll(model, displayed_logs)
+        if model.logs_scroll_y == :bottom do
+          {model, []}
+        else
+          displayed_logs = ViewHelper.get_displayed_logs(model)
+          logs_height = ViewHelper.get_logs_pane_height(model)
+          max_scroll = get_max_scroll(model, displayed_logs)
 
-        case model.logs_scroll_y do
-          :bottom ->
-            {model, []}
-
-          val when is_integer(val) ->
-            new_scroll = val + logs_height
-            new_scroll = if new_scroll >= max_scroll, do: :bottom, else: new_scroll
-            {%{model | logs_scroll_y: new_scroll}, []}
+          new_scroll = model.logs_scroll_y + logs_height
+          new_scroll = if new_scroll >= max_scroll, do: :bottom, else: new_scroll
+          {%{model | logs_scroll_y: new_scroll}, []}
         end
 
       "/" ->

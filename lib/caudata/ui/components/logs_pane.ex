@@ -137,7 +137,7 @@ defmodule Caudata.UI.Components.LogsPane do
     wrap_width = max(1, inner_width - prefix_width)
     show_timestamps = Map.get(state, :show_timestamps, false)
 
-    total_wrapped_lines = ViewHelper.count_wrapped_lines(displayed_logs, wrap_width)
+    total_wrapped_lines = ViewHelper.count_wrapped_lines(displayed_logs, wrap_width, total_count)
 
     # Calculate Virtual Windowing slice parameters using exact wrapped line mapping
     visible_buffer = 10

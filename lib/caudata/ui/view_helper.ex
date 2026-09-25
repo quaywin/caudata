@@ -424,9 +424,12 @@ defmodule Caudata.UI.ViewHelper do
   @doc """
   Counts the total number of lines when wrapping lines of a given width.
   """
-  def count_wrapped_lines(lines, width) do
+  def count_wrapped_lines(lines, width, lines_len \\ nil)
+  def count_wrapped_lines([], _width, _lines_len), do: 0
+
+  def count_wrapped_lines(lines, width, lines_len) do
     w = max(1, width)
-    lines_len = if is_list(lines), do: length(lines), else: 0
+    len = lines_len || (if is_list(lines), do: length(lines), else: 0)
 
     hd_line =
       case lines do
@@ -436,7 +439,7 @@ defmodule Caudata.UI.ViewHelper do
         _ -> nil
       end
 
-    cache_key = {:cached_wrapped_lines_count, lines_len, hd_line, w}
+    cache_key = {:cached_wrapped_lines_count, len, hd_line, w}
 
     Cache.fetch_latest(:cached_wrapped_lines_count, cache_key, fn ->
       Enum.reduce(lines, 0, fn line, acc ->
@@ -716,17 +719,18 @@ defmodule Caudata.UI.ViewHelper do
     if is_nil(profile) or is_nil(containers) do
       []
     else
-      disabled_containers = Enum.map(profile.disabled_containers || [], &to_string/1)
-      enabled_services = Map.get(profile, :enabled_services) || []
+      disabled_set = MapSet.new(profile.disabled_containers || [], &to_string/1)
+      enabled_services_set = MapSet.new(Map.get(profile, :enabled_services) || [], &to_string/1)
 
       Enum.filter(containers, fn c ->
         id_str = to_string(c.id)
+        name_str = to_string(c.name)
 
         if service_container?(c) do
-          id_str in enabled_services or to_string(c.name) in enabled_services
+          MapSet.member?(enabled_services_set, id_str) or MapSet.member?(enabled_services_set, name_str)
         else
-          id_str not in disabled_containers and
-            to_string(c.name) not in disabled_containers
+          not MapSet.member?(disabled_set, id_str) and
+            not MapSet.member?(disabled_set, name_str)
         end
       end)
     end

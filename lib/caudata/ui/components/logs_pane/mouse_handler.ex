@@ -117,6 +117,10 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
     end
   end
 
+  defp handle_scroll("scroll_down", %{logs_scroll_y: :bottom} = state) do
+    {state, []}
+  end
+
   defp handle_scroll("scroll_down", state) do
     displayed_logs = ViewHelper.get_displayed_logs(state)
     max_scroll = get_max_scroll(state, displayed_logs)

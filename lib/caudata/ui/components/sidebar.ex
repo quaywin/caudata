@@ -16,6 +16,18 @@ defmodule Caudata.UI.Components.Sidebar do
     # Determine the vertical heights based on overall height
     h = sidebar_area.height
 
+    selected_profile = Enum.find(state.profiles, &(&1.id == state.selected_profile_id))
+
+    enabled_containers =
+      if selected_profile do
+        ViewHelper.get_enabled_containers(
+          selected_profile,
+          Map.get(state.containers, selected_profile.id, [])
+        )
+      else
+        []
+      end
+
     if h >= 18 do
       h1 =
         cond do
@@ -35,8 +47,8 @@ defmodule Caudata.UI.Components.Sidebar do
 
       List.flatten([
         ServerList.render(state, box1_area),
-        ContainerList.render(state, box2_area),
-        ContainerInfo.render(state, box3_area),
+        ContainerList.render(state, box2_area, enabled_containers),
+        ContainerInfo.render(state, box3_area, enabled_containers),
         ServerMetrics.render(state, box4_area)
       ])
     else
@@ -50,7 +62,7 @@ defmodule Caudata.UI.Components.Sidebar do
 
       List.flatten([
         ServerList.render(state, box1_area),
-        ContainerList.render(state, box2_area)
+        ContainerList.render(state, box2_area, enabled_containers)
       ])
     end
   end

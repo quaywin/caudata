@@ -46,4 +46,53 @@ defmodule Caudata.SSHClient.KeyCallbackTest do
     assert {:error, "No identity file specified"} =
              KeyCallback.user_key(:"ssh-rsa", key_cb_private: [key_cb_private: 123])
   end
+
+  test "sign/3 signs data with decoded RSA private key", %{temp_path: temp_path} do
+    {_, 0} = System.cmd("ssh-keygen", ["-t", "rsa", "-m", "PEM", "-N", "", "-f", temp_path])
+    options = [key_cb_private: [identity_file: temp_path]]
+    assert {:ok, private_key} = KeyCallback.user_key(:"ssh-rsa", options)
+
+    signature = KeyCallback.sign(private_key, "sample_payload_data", options)
+    assert is_binary(signature)
+    assert byte_size(signature) > 0
+  end
+
+  test "sign/3 signs data with decoded ed25519 private key", %{temp_path: temp_path} do
+    {_, 0} = System.cmd("ssh-keygen", ["-t", "ed25519", "-N", "", "-f", temp_path])
+    options = [key_cb_private: [identity_file: temp_path]]
+    assert {:ok, private_key} = KeyCallback.user_key(:"ssh-ed25519", options)
+
+    signature = KeyCallback.sign(private_key, "sample_payload_data", options)
+    assert is_binary(signature)
+    assert byte_size(signature) > 0
+  end
+
+  test "sign/3 gracefully handles pubkey blob and tuple for agent, returning <<>> on failure" do
+    dead_opts = [key_cb_private: [agent_socket: "/tmp/nonexistent_dead.sock"]]
+
+    # Pubkey tuple format
+    assert KeyCallback.sign({:ssh2_pubkey, <<1, 2, 3, 4>>}, "payload", dead_opts) == <<>>
+
+    # Raw binary pubkey format (from Erlang OTP ssh_client_key_api)
+    assert KeyCallback.sign(<<1, 2, 3, 4>>, "payload", dead_opts) == <<>>
+
+    # Malformed key format
+    assert KeyCallback.sign({:invalid_key_struct}, "payload", dead_opts) == <<>>
+  end
+
+  test "user_key/2 falls back to agent socket when identity file fails" do
+    options = [
+      key_cb_private: [
+        identity_file: "/nonexistent/key.pem",
+        agent_socket: "/tmp/nonexistent_agent.sock"
+      ]
+    ]
+
+    assert {:error, :enoent} = KeyCallback.user_key(:"ssh-rsa", options)
+  end
+
+  test "host key callbacks" do
+    assert KeyCallback.is_host_key(nil, nil, nil, nil, nil) == true
+    assert KeyCallback.add_host_key(nil, nil, nil, nil) == :ok
+  end
 end

@@ -336,7 +336,9 @@ defmodule Caudata.ServerWorker do
         old_profile.port != updated_profile.port or
         old_profile.user != updated_profile.user or
         old_profile.identity_file != updated_profile.identity_file or
-        Map.get(old_profile, :password) != Map.get(updated_profile, :password)
+        Map.get(old_profile, :password) != Map.get(updated_profile, :password) or
+        Map.get(old_profile, :auth_method) != Map.get(updated_profile, :auth_method) or
+        Map.get(old_profile, :ssh_agent_socket) != Map.get(updated_profile, :ssh_agent_socket)
 
     if needs_refresh and state.conn_ref do
       GenServer.cast(self(), :refresh_containers)
@@ -395,12 +397,7 @@ defmodule Caudata.ServerWorker do
     )
 
     parent = self()
-
-    connect_opts = [
-      user: state.profile.user,
-      identity_file: state.profile.identity_file,
-      password: Map.get(state.profile, :password)
-    ]
+    connect_opts = Caudata.Profile.to_connect_opts(state.profile)
 
     ssh_client = state.ssh_client
     host = state.profile.host_name
@@ -1987,8 +1984,8 @@ defmodule Caudata.ServerWorker do
         true
 
       is_binary(container_id) and is_binary(metric_id) and
-        ((String.length(metric_id) >= 12 and String.starts_with?(container_id, metric_id)) or
-           (String.length(container_id) >= 12 and String.starts_with?(metric_id, container_id))) ->
+          ((String.length(metric_id) >= 12 and String.starts_with?(container_id, metric_id)) or
+             (String.length(container_id) >= 12 and String.starts_with?(metric_id, container_id))) ->
         true
 
       true ->

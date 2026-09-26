@@ -63,33 +63,82 @@ defmodule Caudata.SSHClient do
         ]
       ]
 
-      # Add password if specified
+      # Check for SSH agent socket
+      custom_agent_sock =
+        case Keyword.get(opts, :ssh_agent_socket) do
+          nil -> nil
+          val -> to_string(val)
+        end
+
+      auth_method =
+        case Keyword.get(opts, :auth_method, :auto) do
+          m when m in [:auto, :key, :agent, :password] -> m
+          m when m in ["auto", "key", "agent", "password"] -> String.to_existing_atom(m)
+          _ -> :auto
+        end
+
+      has_password = not is_nil(password) and password != ""
+      has_valid_identity_file = not is_nil(identity_file) and File.exists?(identity_file)
+      user_dir = Path.expand("~/.ssh")
+
+      # Probe for live SSH agent socket
+      agent_sock_res =
+        if auth_method in [:auto, :agent] do
+          Caudata.SSH.Agent.get_live_socket(custom_agent_sock)
+        else
+          :none
+        end
+
+      # Add password if specified and auth_method allows
       ssh_opts =
-        if password && password != "" do
+        if has_password and auth_method != :agent do
           Keyword.put(ssh_opts, :password, to_charlist(password))
         else
           ssh_opts
         end
 
-      # Add user directory if ~/.ssh is available AND we are not using password auth
-      has_password = not is_nil(password) and password != ""
-      has_valid_identity_file = not is_nil(identity_file) and File.exists?(identity_file)
-      user_dir = Path.expand("~/.ssh")
-
+      # Add user directory if ~/.ssh is available and auth_method allows
       ssh_opts =
-        if File.dir?(user_dir) && (not has_password || has_valid_identity_file) do
+        if File.dir?(user_dir) and auth_method != :password and
+             (not has_password or has_valid_identity_file or match?({:ok, _}, agent_sock_res) or
+                auth_method in [:key, :agent]) do
           Keyword.put(ssh_opts, :user_dir, to_charlist(user_dir))
         else
           ssh_opts
         end
 
-      # Add identity file callback options if identity_file is specified
+      # Configure key callback (identity file, live agent socket, or both)
+      key_cb_opts =
+        if auth_method == :password do
+          nil
+        else
+          agent_sock =
+            case agent_sock_res do
+              {:ok, sock} -> sock
+              _ -> nil
+            end
+
+          cond do
+            has_valid_identity_file and agent_sock ->
+              [identity_file: identity_file, agent_socket: agent_sock]
+
+            has_valid_identity_file ->
+              [identity_file: identity_file]
+
+            agent_sock ->
+              [agent_socket: agent_sock]
+
+            true ->
+              nil
+          end
+        end
+
       ssh_opts =
-        if has_valid_identity_file do
+        if key_cb_opts do
           Keyword.put(
             ssh_opts,
             :key_cb,
-            {Caudata.SSHClient.KeyCallback, [key_cb_private: identity_file]}
+            {Caudata.SSHClient.KeyCallback, key_cb_opts}
           )
         else
           ssh_opts
@@ -211,38 +260,159 @@ defmodule Caudata.SSHClient.KeyCallback do
 
   # Required by :ssh_client_key_api on OTP 28+.
   @impl true
-  def sign(key, data, _options) do
-    algorithm = sign_algorithm(key)
-    :public_key.sign(data, algorithm, key)
+  def sign(key, data, options) do
+    case extract_pubkey_blob(key) do
+      {:ok, pubkey_blob} ->
+        sign_with_agent(pubkey_blob, data, options)
+
+      :error ->
+        sign_with_private_key(key, data)
+    end
+  end
+
+  defp extract_pubkey_blob({:ssh2_pubkey, blob}) when is_binary(blob), do: {:ok, blob}
+  defp extract_pubkey_blob(blob) when is_binary(blob), do: {:ok, blob}
+  defp extract_pubkey_blob(_), do: :error
+
+  defp sign_with_agent(pubkey_blob, data, options) do
+    socket_path = get_agent_socket(options)
+
+    agent_opts =
+      if socket_path do
+        [key_cb_private: [socket_path: to_charlist(socket_path), timeout: 5000]]
+      else
+        options
+      end
+
+    try do
+      case :ssh_agent.sign(pubkey_blob, data, agent_opts) do
+        signature when is_binary(signature) ->
+          signature
+
+        other ->
+          Logger.error("SSH KeyCallback: SSH Agent sign returned unexpected: #{inspect(other)}")
+          <<>>
+      end
+    catch
+      kind, reason ->
+        Logger.error("SSH KeyCallback: SSH Agent sign failed: #{inspect({kind, reason})}")
+        <<>>
+    end
+  end
+
+  defp sign_with_private_key(key, data) do
+    try do
+      algorithm = sign_algorithm(key)
+
+      case :public_key.sign(data, algorithm, key) do
+        signature when is_binary(signature) ->
+          signature
+
+        other ->
+          Logger.error("SSH KeyCallback: Private key sign returned unexpected: #{inspect(other)}")
+          <<>>
+      end
+    rescue
+      e ->
+        Logger.error("SSH KeyCallback: Private key sign failed: #{inspect(e)}")
+        <<>>
+    end
   end
 
   @impl true
   def user_key(algorithm, options) do
-    Logger.info(
+    Logger.debug(
       "SSH KeyCallback: user_key requested for algorithm #{inspect(algorithm)} with options: #{inspect(options)}"
     )
 
-    # Erlang SSH wraps :key_cb options in an extra layer, so we unwrap twice:
-    #   options[:key_cb_private][:key_cb_private] -> identity_file path
     case get_identity_file(options) do
-      identity_file when is_binary(identity_file) or is_list(identity_file) ->
-        decode_private_key(to_string(identity_file))
+      identity_file when is_binary(identity_file) and identity_file != "" ->
+        case decode_private_key(identity_file) do
+          {:ok, key} ->
+            {:ok, key}
+
+          {:error, _reason} = err ->
+            case get_agent_socket(options) do
+              sock when is_binary(sock) and sock != "" ->
+                query_ssh_agent(algorithm, sock, options)
+
+              _ ->
+                err
+            end
+        end
+
+      identity_file when is_list(identity_file) and identity_file != ~c"" ->
+        case decode_private_key(to_string(identity_file)) do
+          {:ok, key} ->
+            {:ok, key}
+
+          {:error, _reason} = err ->
+            case get_agent_socket(options) do
+              sock when is_binary(sock) and sock != "" ->
+                query_ssh_agent(algorithm, sock, options)
+
+              _ ->
+                err
+            end
+        end
 
       _ ->
-        Logger.info("SSH KeyCallback: No identity file specified in options")
-        {:error, "No identity file specified"}
+        case get_agent_socket(options) do
+          sock when is_binary(sock) and sock != "" ->
+            query_ssh_agent(algorithm, sock, options)
+
+          _ ->
+            Logger.info("SSH KeyCallback: No identity file specified in options")
+            {:error, "No identity file specified"}
+        end
     end
   end
 
   # -- Private helpers --
 
+  defp query_ssh_agent(algorithm, socket_path, _options) do
+    try do
+      agent_opts = [key_cb_private: [socket_path: to_charlist(socket_path), timeout: 2000]]
+
+      case :ssh_agent.user_key(algorithm, agent_opts) do
+        {:ok, {:ssh2_pubkey, _blob}} = res ->
+          Logger.info(
+            "SSH KeyCallback: found matching key in SSH Agent for #{inspect(algorithm)}"
+          )
+
+          res
+
+        other ->
+          other
+      end
+    catch
+      kind, reason ->
+        Logger.debug("SSH KeyCallback: query to SSH Agent failed: #{inspect({kind, reason})}")
+        {:error, :enoent}
+    end
+  end
+
   defp get_identity_file(options) do
-    options
-    |> Keyword.get(:key_cb_private, [])
-    |> then(fn
-      nested when is_list(nested) -> Keyword.get(nested, :key_cb_private)
-      _ -> nil
-    end)
+    case Keyword.get(options, :key_cb_private) do
+      nested when is_list(nested) ->
+        Keyword.get(nested, :identity_file) || Keyword.get(nested, :key_cb_private)
+
+      path when is_binary(path) or is_list(path) ->
+        path
+
+      _ ->
+        nil
+    end
+  end
+
+  defp get_agent_socket(options) do
+    case Keyword.get(options, :key_cb_private) do
+      nested when is_list(nested) ->
+        Keyword.get(nested, :agent_socket)
+
+      _ ->
+        nil
+    end
   end
 
   def invalidate_key_cache(identity_file) do

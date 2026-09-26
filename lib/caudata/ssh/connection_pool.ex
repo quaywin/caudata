@@ -355,11 +355,7 @@ defmodule Caudata.SSH.ConnectionPool do
   end
 
   defp connect_new(state) do
-    connect_opts = [
-      user: state.profile.user,
-      identity_file: state.profile.identity_file,
-      password: Map.get(state.profile, :password)
-    ]
+    connect_opts = Caudata.Profile.to_connect_opts(state.profile)
 
     case state.ssh_client.connect(state.profile.host_name, state.profile.port, connect_opts) do
       {:ok, conn_ref} ->

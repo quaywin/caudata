@@ -467,4 +467,84 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandlerTest do
     assert state_up.mouse_drag_auto_scroll == nil
     assert state_up.notification != nil
   end
+
+  test "mouse scroll over servers list selects prev/next server with bounded clamping", %{
+    state: state
+  } do
+    # Box 1 is at y=0..7 (inner y=1..6)
+    # 1. scroll_down on Box 1 moves from server-1 to server-2
+    scroll_down_event = %Mouse{kind: "scroll_down", x: 10, y: 3}
+    {state_after_down, []} = MouseHandler.handle_mouse(scroll_down_event, state)
+    assert state_after_down.active_panel == :sidebar
+    assert state_after_down.sidebar_focus == :servers
+    assert state_after_down.selected_profile_id == "server-2"
+
+    # 2. scroll_down again at the end of servers list stays on server-2 (does not wrap around)
+    {state_still_at_end, []} = MouseHandler.handle_mouse(scroll_down_event, state_after_down)
+    assert state_still_at_end.selected_profile_id == "server-2"
+
+    # 3. scroll_up moves back to server-1
+    scroll_up_event = %Mouse{kind: "scroll_up", x: 10, y: 3}
+    {state_after_up, []} = MouseHandler.handle_mouse(scroll_up_event, state_after_down)
+    assert state_after_up.selected_profile_id == "server-1"
+
+    # 4. scroll_up at the top of servers list stays on server-1 (does not wrap around)
+    {state_still_at_top, []} = MouseHandler.handle_mouse(scroll_up_event, state_after_up)
+    assert state_still_at_top.selected_profile_id == "server-1"
+  end
+
+  test "mouse scroll over containers list selects prev/next container with bounded clamping", %{
+    state: state
+  } do
+    # Box 2 is at y=8..15 (inner y=9..14). "container-1" is initially selected.
+    # 1. scroll_down moves to "container-2"
+    scroll_down_event = %Mouse{kind: "scroll_down", x: 10, y: 10}
+    {state_after_down, []} = MouseHandler.handle_mouse(scroll_down_event, state)
+    assert state_after_down.active_panel == :sidebar
+    assert state_after_down.sidebar_focus == :containers
+    assert state_after_down.selected_container_id == "container-2"
+    assert state_after_down.selected_container_name == "db"
+
+    # 2. scroll_down at end of containers stays on "container-2" (does not wrap around)
+    {state_still_at_end, []} = MouseHandler.handle_mouse(scroll_down_event, state_after_down)
+    assert state_still_at_end.selected_container_id == "container-2"
+
+    # 3. scroll_up moves back to "container-1"
+    scroll_up_event = %Mouse{kind: "scroll_up", x: 10, y: 10}
+    {state_after_up, []} = MouseHandler.handle_mouse(scroll_up_event, state_after_down)
+    assert state_after_up.selected_container_id == "container-1"
+    assert state_after_up.selected_container_name == "app"
+
+    # 4. scroll_up at top stays on "container-1"
+    {state_still_at_top, []} = MouseHandler.handle_mouse(scroll_up_event, state_after_up)
+    assert state_still_at_top.selected_container_id == "container-1"
+  end
+
+  test "mouse click in scrolled container list accounts for scroll_y", %{state: state} do
+    # Create 15 containers
+    containers =
+      for i <- 1..15 do
+        %{id: "c-#{i}", name: "container-#{i}", image: "img", state: "running"}
+      end
+
+    multi_container_state = %{
+      state
+      | containers: %{"server-1" => containers},
+        selected_container_id: "c-12",
+        selected_container_name: "container-12"
+    }
+
+    # Box 2 height is 8 (inner height is 6).
+    # With selected c-12 (index 11 of 15), scroll_y = centered_scroll_y(11, 15, 6)
+    # 11 - 3 = 8, min(8, 15 - 6 = 9) => scroll_y = 8.
+    # Visible rows inside Box 2 (inner y starts at 9):
+    # row 0 (y=9) -> index 8 (c-9)
+    # row 1 (y=10) -> index 9 (c-10)
+    # Click at y=10 (row 1): should select container index 8 + 1 = 9 ("c-10")
+    click_event = %Mouse{kind: "down", button: "left", x: 10, y: 10}
+    {new_state, []} = MouseHandler.handle_mouse(click_event, multi_container_state)
+
+    assert new_state.selected_container_id == "c-10"
+    assert new_state.selected_container_name == "container-10"
+  end
 end

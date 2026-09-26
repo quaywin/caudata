@@ -13,20 +13,30 @@ defmodule Caudata.UI.Components.Sidebar do
   Returns a list of `{widget, area}` tuples.
   """
   def render(state, sidebar_area) do
-    # Determine the vertical heights based on overall height
+    enabled_containers = get_enabled_containers_for_profile(state, state.selected_profile_id)
+
+    case layout_boxes(sidebar_area) do
+      [box1_area, box2_area, box3_area, box4_area] ->
+        List.flatten([
+          ServerList.render(state, box1_area),
+          ContainerList.render(state, box2_area, enabled_containers),
+          ContainerInfo.render(state, box3_area, enabled_containers),
+          ServerMetrics.render(state, box4_area)
+        ])
+
+      [box1_area, box2_area] ->
+        List.flatten([
+          ServerList.render(state, box1_area),
+          ContainerList.render(state, box2_area, enabled_containers)
+        ])
+    end
+  end
+
+  @doc """
+  Computes the layout Rects for the sidebar boxes based on sidebar_area.
+  """
+  def layout_boxes(sidebar_area) do
     h = sidebar_area.height
-
-    selected_profile = Enum.find(state.profiles, &(&1.id == state.selected_profile_id))
-
-    enabled_containers =
-      if selected_profile do
-        ViewHelper.get_enabled_containers(
-          selected_profile,
-          Map.get(state.containers, selected_profile.id, [])
-        )
-      else
-        []
-      end
 
     if h >= 18 do
       h1 =
@@ -37,32 +47,18 @@ defmodule Caudata.UI.Components.Sidebar do
           true -> max(3, h - 14)
         end
 
-      [box1_area, box2_area, box3_area, box4_area] =
-        Layout.split(sidebar_area, :vertical, [
-          {:length, h1},
-          {:min, 0},
-          {:length, 6},
-          {:length, 6}
-        ])
-
-      List.flatten([
-        ServerList.render(state, box1_area),
-        ContainerList.render(state, box2_area, enabled_containers),
-        ContainerInfo.render(state, box3_area, enabled_containers),
-        ServerMetrics.render(state, box4_area)
+      Layout.split(sidebar_area, :vertical, [
+        {:length, h1},
+        {:min, 0},
+        {:length, 6},
+        {:length, 6}
       ])
     else
       servers_h = if h >= 10, do: 6, else: max(3, div(h, 2))
 
-      [box1_area, box2_area] =
-        Layout.split(sidebar_area, :vertical, [
-          {:length, servers_h},
-          {:min, 0}
-        ])
-
-      List.flatten([
-        ServerList.render(state, box1_area),
-        ContainerList.render(state, box2_area, enabled_containers)
+      Layout.split(sidebar_area, :vertical, [
+        {:length, servers_h},
+        {:min, 0}
       ])
     end
   end
@@ -384,7 +380,10 @@ defmodule Caudata.UI.Components.Sidebar do
 
   # Helper functions
 
-  defp get_enabled_containers_for_profile(model, profile_id) do
+  @doc """
+  Retrieves enabled containers for the given profile ID.
+  """
+  def get_enabled_containers_for_profile(model, profile_id) do
     case Enum.find(model.profiles, &(&1.id == profile_id)) do
       nil ->
         []

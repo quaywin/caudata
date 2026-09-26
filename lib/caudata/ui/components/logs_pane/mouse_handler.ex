@@ -58,6 +58,10 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
       mouse.kind in ["scroll_up", "scroll_down"] and inside_area?(mouse, logs_area) ->
         handle_scroll(mouse.kind, state)
 
+      # Handle mouse scroll up / down over sidebar area
+      mouse.kind in ["scroll_up", "scroll_down"] and inside_area?(mouse, sidebar_area) ->
+        handle_sidebar_scroll(mouse, state, sidebar_area)
+
       # Left click down inside Logs Pane: Switch focus to :logs panel, start drag selection
       mouse.kind == "down" and mouse.button == "left" and inside_area?(mouse, logs_area) ->
         handle_mouse_down(mouse, state, logs_area)
@@ -459,7 +463,117 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
     end
   end
 
-  # ── Sidebar Mouse Selection ──────────────────────────────────────────
+  # ── Sidebar Mouse Selection & Scrolling ───────────────────────────────
+
+  defp handle_sidebar_scroll(mouse, state, sidebar_area) do
+    state =
+      %{
+        state
+        | active_panel: :sidebar,
+          mode: :browsing,
+          visual_anchor: nil,
+          visual_cursor: nil
+      }
+      |> Map.put(:mouse_dragging, false)
+      |> Map.put(:mouse_drag_auto_scroll, nil)
+
+    boxes = Caudata.UI.Components.Sidebar.layout_boxes(sidebar_area)
+    box1_area = Enum.at(boxes, 0)
+    box2_area = Enum.at(boxes, 1)
+
+    cond do
+      box1_area && inside_area?(mouse, box1_area) ->
+        scroll_servers(mouse.kind, state)
+
+      box2_area && inside_area?(mouse, box2_area) ->
+        scroll_containers(mouse.kind, state)
+
+      true ->
+        case Map.get(state, :sidebar_focus, :servers) do
+          :servers -> scroll_servers(mouse.kind, state)
+          _ -> scroll_containers(mouse.kind, state)
+        end
+    end
+  end
+
+  defp scroll_servers(kind, state) do
+    profiles = state.profiles || []
+    total = length(profiles)
+
+    if total == 0 do
+      {Map.put(state, :sidebar_focus, :servers), []}
+    else
+      current_idx = Enum.find_index(profiles, &(&1.id == state.selected_profile_id))
+
+      new_idx =
+        cond do
+          is_nil(current_idx) ->
+            0
+
+          kind == "scroll_up" ->
+            max(0, current_idx - 1)
+
+          kind == "scroll_down" ->
+            min(total - 1, current_idx + 1)
+        end
+
+      if not is_nil(current_idx) and new_idx == current_idx do
+        {Map.put(state, :sidebar_focus, :servers), []}
+      else
+        new_profile = Enum.at(profiles, new_idx)
+        {new_state, cmds} = Caudata.UI.Components.Sidebar.select_server(new_profile.id, state)
+        {Map.put(new_state, :sidebar_focus, :servers), cmds}
+      end
+    end
+  end
+
+  defp scroll_containers(kind, state) do
+    containers =
+      Caudata.UI.Components.Sidebar.get_enabled_containers_for_profile(
+        state,
+        state.selected_profile_id
+      )
+
+    total = length(containers)
+
+    if total == 0 do
+      {Map.put(state, :sidebar_focus, :containers), []}
+    else
+      current_idx =
+        Enum.find_index(
+          containers,
+          &(to_string(&1.id) == to_string(state.selected_container_id))
+        )
+
+      new_idx =
+        cond do
+          is_nil(current_idx) ->
+            0
+
+          kind == "scroll_up" ->
+            max(0, current_idx - 1)
+
+          kind == "scroll_down" ->
+            min(total - 1, current_idx + 1)
+        end
+
+      if not is_nil(current_idx) and new_idx == current_idx do
+        {Map.put(state, :sidebar_focus, :containers), []}
+      else
+        new_container = Enum.at(containers, new_idx)
+
+        {new_state, cmds} =
+          Caudata.UI.Components.Sidebar.select_container(
+            state.selected_profile_id,
+            new_container.id,
+            new_container.name,
+            state
+          )
+
+        {Map.put(new_state, :sidebar_focus, :containers), cmds}
+      end
+    end
+  end
 
   defp handle_sidebar_click(mouse, state, sidebar_area) do
     state =
@@ -473,83 +587,53 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
       |> Map.put(:mouse_dragging, false)
       |> Map.put(:mouse_drag_auto_scroll, nil)
 
-    h = sidebar_area.height
-
-    {box1_area, box2_area} =
-      if h >= 18 do
-        h1 =
-          cond do
-            h >= 32 -> 10
-            h >= 26 -> 8
-            h >= 22 -> 6
-            true -> max(3, h - 14)
-          end
-
-        box1 = %Rect{x: sidebar_area.x, y: sidebar_area.y, width: sidebar_area.width, height: h1}
-
-        box2 = %Rect{
-          x: sidebar_area.x,
-          y: sidebar_area.y + h1,
-          width: sidebar_area.width,
-          height: max(0, h - (h1 + 12))
-        }
-
-        {box1, box2}
-      else
-        servers_h = if h >= 10, do: 6, else: max(3, div(h, 2))
-
-        box1 = %Rect{
-          x: sidebar_area.x,
-          y: sidebar_area.y,
-          width: sidebar_area.width,
-          height: servers_h
-        }
-
-        box2 = %Rect{
-          x: sidebar_area.x,
-          y: sidebar_area.y + servers_h,
-          width: sidebar_area.width,
-          height: max(0, h - servers_h)
-        }
-
-        {box1, box2}
-      end
+    boxes = Caudata.UI.Components.Sidebar.layout_boxes(sidebar_area)
+    box1_area = Enum.at(boxes, 0)
+    box2_area = Enum.at(boxes, 1)
 
     cond do
-      inside_area?(mouse, ViewHelper.inner_rect(box1_area)) ->
+      box1_area && inside_area?(mouse, ViewHelper.inner_rect(box1_area)) ->
         inner = ViewHelper.inner_rect(box1_area)
         row = mouse.y - inner.y
 
-        if row >= 0 and row < length(state.profiles) do
-          profile = Enum.at(state.profiles, row)
+        profiles = state.profiles || []
+        selected_idx = Enum.find_index(profiles, &(&1.id == state.selected_profile_id))
+        scroll_y = ViewHelper.centered_scroll_y(selected_idx, length(profiles), inner.height)
+        actual_idx = scroll_y + row
+
+        if actual_idx >= 0 and actual_idx < length(profiles) do
+          profile = Enum.at(profiles, actual_idx)
           {new_state, cmds} = Caudata.UI.Components.Sidebar.select_server(profile.id, state)
           {Map.put(new_state, :sidebar_focus, :servers), cmds}
         else
           {Map.put(state, :sidebar_focus, :servers), []}
         end
 
-      inside_area?(mouse, ViewHelper.inner_rect(box2_area)) ->
+      box2_area && inside_area?(mouse, ViewHelper.inner_rect(box2_area)) ->
         inner = ViewHelper.inner_rect(box2_area)
         row = mouse.y - inner.y
 
-        selected_profile = Enum.find(state.profiles, &(&1.id == state.selected_profile_id))
+        containers =
+          Caudata.UI.Components.Sidebar.get_enabled_containers_for_profile(
+            state,
+            state.selected_profile_id
+          )
 
-        enabled_containers =
-          if selected_profile do
-            ViewHelper.get_enabled_containers(
-              selected_profile,
-              Map.get(state.containers, selected_profile.id, [])
-            )
-          else
-            []
-          end
+        selected_idx =
+          Enum.find_index(
+            containers,
+            &(to_string(&1.id) == to_string(state.selected_container_id))
+          )
 
-        if row >= 0 and row < length(enabled_containers) do
-          container = Enum.at(enabled_containers, row)
+        scroll_y = ViewHelper.centered_scroll_y(selected_idx, length(containers), inner.height)
+        actual_idx = scroll_y + row
+
+        if actual_idx >= 0 and actual_idx < length(containers) do
+          container = Enum.at(containers, actual_idx)
 
           {new_state, cmds} =
             Caudata.UI.Components.Sidebar.select_container(
-              selected_profile.id,
+              state.selected_profile_id,
               container.id,
               container.name,
               state

@@ -26,14 +26,25 @@ defmodule Caudata.LogStore do
   """
   def get_snapshot(server \\ __MODULE__, source_id, limit \\ @default_capacity) do
     tab = get_table_name(server)
-    key = if limit <= 500, do: {:snapshot_tail, source_id}, else: {:snapshot, source_id}
 
-    case try_ets_lookup(tab, key) do
-      {:ok, lines} ->
-        Enum.take(lines, -limit)
+    cond do
+      limit <= 500 ->
+        case try_ets_lookup(tab, {:snapshot_tail, source_id}) do
+          {:ok, lines} -> Enum.take(lines, -limit)
+          :error -> GenServer.call(server, {:get_snapshot, source_id, limit})
+        end
 
-      :error ->
-        GenServer.call(server, {:get_snapshot, source_id, limit})
+      limit <= 1500 ->
+        case try_ets_lookup(tab, {:snapshot_medium, source_id}) do
+          {:ok, lines} -> Enum.take(lines, -limit)
+          :error -> GenServer.call(server, {:get_snapshot, source_id, limit})
+        end
+
+      true ->
+        case try_ets_lookup(tab, {:snapshot, source_id}) do
+          {:ok, lines} -> Enum.take(lines, -limit)
+          :error -> GenServer.call(server, {:get_snapshot, source_id, limit})
+        end
     end
   end
 
@@ -220,10 +231,12 @@ defmodule Caudata.LogStore do
       end
 
     tail_lines = Enum.take(snapshot_lines, -500)
+    medium_lines = Enum.take(snapshot_lines, -1500)
 
     if Map.has_key?(state, :table) do
       :ets.insert(state.table, [
         {{:snapshot, source_id}, snapshot_lines},
+        {{:snapshot_medium, source_id}, medium_lines},
         {{:snapshot_tail, source_id}, tail_lines}
       ])
     end
@@ -299,6 +312,7 @@ defmodule Caudata.LogStore do
 
     if Map.has_key?(state, :table) do
       :ets.delete(state.table, {:snapshot, source_id})
+      :ets.delete(state.table, {:snapshot_medium, source_id})
       :ets.delete(state.table, {:snapshot_tail, source_id})
     end
 

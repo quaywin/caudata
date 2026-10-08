@@ -500,7 +500,15 @@ defmodule Caudata.SSHClient.KeyCallback do
     {:ok, private_key}
   end
 
-  defp sign_algorithm({:ECPrivateKey, _, _, _, _}), do: :ecdsa
+  # ECDSA keys: map curve parameters to appropriate digest type for :public_key.sign/3
+  # Secp256r1/NIST-P256 -> sha256, Secp384r1/NIST-P384 -> sha384, Secp521r1/NIST-P521 -> sha512
+  defp sign_algorithm({:ECPrivateKey, _, _, {1, 3, 132, 0, 34}, _}), do: :sha384
+  defp sign_algorithm({:ECPrivateKey, _, _, {:namedCurve, {1, 3, 132, 0, 34}}, _}), do: :sha384
+  defp sign_algorithm({:ECPrivateKey, _, _, {:namedCurve, :secp384r1}, _}), do: :sha384
+  defp sign_algorithm({:ECPrivateKey, _, _, {1, 3, 132, 0, 35}, _}), do: :sha512
+  defp sign_algorithm({:ECPrivateKey, _, _, {:namedCurve, {1, 3, 132, 0, 35}}, _}), do: :sha512
+  defp sign_algorithm({:ECPrivateKey, _, _, {:namedCurve, :secp521r1}, _}), do: :sha512
+  defp sign_algorithm({:ECPrivateKey, _, _, _, _}), do: :sha256
   defp sign_algorithm({:ed_pri, :ed25519, _, _}), do: :eddsa
   defp sign_algorithm({:ed_pri, :ed448, _, _}), do: :eddsa
   defp sign_algorithm(_rsa_or_dsa), do: :sha256

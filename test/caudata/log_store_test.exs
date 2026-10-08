@@ -108,4 +108,29 @@ defmodule Caudata.LogStoreTest do
              %{timestamp: "2026-08-04T10:00:01Z", stream: :stdout, message: "line 2"}
            ]
   end
+
+  test "retrieves snapshots accurately across limits (tail, medium, and full)" do
+    logs = Enum.map(1..1200, fn i -> "line #{i}" end)
+    store_name = :"MultiLimitStore_#{System.unique_integer([:positive])}"
+    start_supervised!({LogStore, name: store_name, capacity: 2000}, id: store_name)
+
+    LogStore.append_logs(store_name, "multi_limit", logs)
+    _ = LogStore.get_stats(store_name, "multi_limit")
+
+    # Limit <= 500 uses :snapshot_tail
+    tail = LogStore.get_snapshot(store_name, "multi_limit", 300)
+    assert length(tail) == 300
+    assert List.last(tail).message == "line 1200"
+
+    # Limit <= 1500 uses :snapshot_medium
+    medium = LogStore.get_snapshot(store_name, "multi_limit", 1000)
+    assert length(medium) == 1000
+    assert List.last(medium).message == "line 1200"
+
+    # Limit > 1500 uses :snapshot
+    full = LogStore.get_snapshot(store_name, "multi_limit", 1600)
+    assert length(full) == 1200
+    assert List.first(full).message == "line 1"
+    assert List.last(full).message == "line 1200"
+  end
 end

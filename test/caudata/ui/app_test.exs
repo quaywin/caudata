@@ -156,11 +156,18 @@ defmodule Caudata.UI.AppTest do
       assert state_next_container.selected_profile_id == p1.id
       assert state_next_container.selected_container_id == "c2"
 
-      # Pressing 'tab' again switches back to :servers
-      assert {:noreply, state_refocused_servers} =
+      # Pressing 'tab' again cycles from panel 2 (:containers) -> panel 3 (:logs)
+      assert {:noreply, state_focused_logs} =
                App.handle_event(event_tab, state_next_container)
 
+      assert state_focused_logs.active_panel == :logs
+
+      # Pressing 'tab' again cycles from panel 3 (:logs) -> panel 1 (:servers)
+      assert {:noreply, state_refocused_servers} =
+               App.handle_event(event_tab, state_focused_logs)
+
       assert state_refocused_servers.sidebar_focus == :servers
+      assert state_refocused_servers.active_panel == :sidebar
 
       # ArrowDown when in :servers focus changes the active server (and selects its first container)
       assert {:noreply, state_next_server} = App.handle_event(event_down, state_refocused_servers)
@@ -548,7 +555,7 @@ defmodule Caudata.UI.AppTest do
 
     # Simulate receiving logs_updated PubSub event
     msg = {:logs_updated, profile_id, %{size: 10, drop_count: 3}}
-    assert {:noreply, updated_state} = App.handle_info(msg, state)
+    assert {:noreply, updated_state, _opts} = App.handle_info(msg, state)
 
     # At this point (before tick), logs_scroll_y is still 5
     assert updated_state.logs_scroll_y == 5
@@ -611,7 +618,7 @@ defmodule Caudata.UI.AppTest do
 
     # PubSub message
     msg = {:logs_updated, source_id, %{size: 15, drop_count: 5}}
-    assert {:noreply, state_msg} = App.handle_info(msg, state_scrolled)
+    assert {:noreply, state_msg, _opts} = App.handle_info(msg, state_scrolled)
     # remains 6 before tick
     assert state_msg.logs_scroll_y == 6
     assert state_msg.freeze == true
@@ -1276,7 +1283,7 @@ defmodule Caudata.UI.AppTest do
 
     # Simulate receiving logs_updated PubSub event for the container source
     msg = {:logs_updated, source_id, %{size: 250, drop_count: 5}}
-    assert {:noreply, updated_state} = App.handle_info(msg, state)
+    assert {:noreply, updated_state, _opts} = App.handle_info(msg, state)
 
     # Scroll remains 10 before tick
     assert updated_state.logs_scroll_y == 10
@@ -1398,7 +1405,7 @@ defmodule Caudata.UI.AppTest do
 
       # Simulate receiving logs_updated PubSub event
       msg = {:logs_updated, source_id, %{size: 10, drop_count: 2}}
-      assert {:noreply, updated_state} = App.handle_info(msg, visual_state)
+      assert {:noreply, updated_state, _opts} = App.handle_info(msg, visual_state)
 
       # Tick
       assert {:noreply, ticked_state} = App.handle_info(:tick, updated_state)

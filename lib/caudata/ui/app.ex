@@ -536,7 +536,7 @@ defmodule Caudata.UI.App do
          }}
 
       {:metrics_updated, server_id, metrics} ->
-        {:noreply, %{state | metrics: Map.put(state.metrics, server_id, metrics)}}
+        {:noreply, %{state | metrics: Map.put(state.metrics, server_id, metrics)}, render?: false}
 
       {:containers_updated, server_id, containers} ->
         new_state = %{state | containers: Map.put(state.containers, server_id, containers)}
@@ -616,7 +616,7 @@ defmodule Caudata.UI.App do
             tick_scheduled: tick_scheduled
         }
 
-        {:noreply, new_state}
+        {:noreply, new_state, render?: false}
 
       {:logs_cleared, source_id} ->
         new_state =

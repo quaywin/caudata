@@ -1630,4 +1630,40 @@ defmodule Caudata.UI.AppTest do
     assert length(neg_re_logs) == 1
     assert hd(neg_re_logs).message =~ "ERROR"
   end
+
+  test "handle_event/2 pressing 'g' loads full history up to 10000 lines and scrolls to top" do
+    profile_id = "test-g-server-#{System.unique_integer([:positive])}"
+    container_id = "container-1"
+    source_id = "#{profile_id}/#{container_id}"
+    Caudata.LogStore.clear_logs(source_id)
+
+    # Put 50 logs into LogStore
+    logs_history = Enum.map(1..50, &"log line #{&1}")
+    Caudata.LogStore.append_logs(source_id, logs_history)
+    Process.sleep(50)
+
+    {:ok, state} = App.mount([])
+
+    # Initially loaded with 15 logs, at :bottom, fetch_limit: 1000
+    initial_logs = Enum.take(logs_history, -15)
+
+    state = %{
+      state
+      | selected_profile_id: profile_id,
+        selected_container_id: container_id,
+        logs: initial_logs,
+        logs_fetch_limit: 1000,
+        logs_scroll_y: :bottom,
+        height: 24,
+        active_panel: :logs
+    }
+
+    event_g = %ExRatatui.Event.Key{code: "g", modifiers: []}
+    assert {:noreply, state_g} = App.handle_event(event_g, state)
+
+    assert state_g.logs_scroll_y == 0
+    assert state_g.logs_fetch_limit == 10000
+    assert length(state_g.logs) == 50
+    assert state_g.loading_history == false
+  end
 end

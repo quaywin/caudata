@@ -133,4 +133,95 @@ defmodule Caudata.LogStoreTest do
     assert List.first(full).message == "line 1"
     assert List.last(full).message == "line 1200"
   end
+
+  test "prepend_logs prepends historical lines maintaining chronological order" do
+    LogStore.append_logs(TestLogStore, "source_prepend", [
+      "2026-08-04T10:00:02Z line 3",
+      "2026-08-04T10:00:03Z line 4"
+    ])
+
+    LogStore.prepend_logs(TestLogStore, "source_prepend", [
+      "2026-08-04T10:00:00Z line 1",
+      "2026-08-04T10:00:01Z line 2"
+    ])
+
+    _ = LogStore.get_stats(TestLogStore, "source_prepend")
+    snapshot = LogStore.get_snapshot(TestLogStore, "source_prepend")
+
+    assert snapshot == [
+             %{timestamp: "2026-08-04T10:00:00Z", stream: :stdout, message: "line 1"},
+             %{timestamp: "2026-08-04T10:00:01Z", stream: :stdout, message: "line 2"},
+             %{timestamp: "2026-08-04T10:00:02Z", stream: :stdout, message: "line 3"},
+             %{timestamp: "2026-08-04T10:00:03Z", stream: :stdout, message: "line 4"}
+           ]
+
+    stats = LogStore.get_stats(TestLogStore, "source_prepend")
+    assert stats.size == 4
+    assert stats.drop_count == 0
+    assert stats.first_ts == "2026-08-04T10:00:00Z"
+    assert stats.last_ts == "2026-08-04T10:00:03Z"
+  end
+
+  test "prepend_logs deduplicates boundary overlap with existing queue head" do
+    LogStore.append_logs(TestLogStore, "source_overlap", [
+      "2026-08-04T10:00:02Z line 2",
+      "2026-08-04T10:00:03Z line 3"
+    ])
+
+    # Backfill returns line 1 and line 2 (line 2 is boundary duplicate from --until)
+    LogStore.prepend_logs(TestLogStore, "source_overlap", [
+      "2026-08-04T10:00:01Z line 1",
+      "2026-08-04T10:00:02Z line 2"
+    ])
+
+    _ = LogStore.get_stats(TestLogStore, "source_overlap")
+    snapshot = LogStore.get_snapshot(TestLogStore, "source_overlap")
+
+    assert snapshot == [
+             %{timestamp: "2026-08-04T10:00:01Z", stream: :stdout, message: "line 1"},
+             %{timestamp: "2026-08-04T10:00:02Z", stream: :stdout, message: "line 2"},
+             %{timestamp: "2026-08-04T10:00:03Z", stream: :stdout, message: "line 3"}
+           ]
+
+    stats = LogStore.get_stats(TestLogStore, "source_overlap")
+    assert stats.size == 3
+  end
+
+  test "prepend_logs respects capacity and increments drop count for oldest backfill overflow" do
+    # Capacity is 5
+    LogStore.append_logs(TestLogStore, "source_cap", ["3", "4", "5"])
+
+    # Attempt to prepend 4 historical lines (total would be 7, exceeds capacity 5)
+    LogStore.prepend_logs(TestLogStore, "source_cap", ["-1", "0", "1", "2"])
+
+    _ = LogStore.get_stats(TestLogStore, "source_cap")
+    snapshot = LogStore.get_snapshot(TestLogStore, "source_cap")
+
+    assert snapshot == [
+             %{timestamp: nil, stream: :stdout, message: "1"},
+             %{timestamp: nil, stream: :stdout, message: "2"},
+             %{timestamp: nil, stream: :stdout, message: "3"},
+             %{timestamp: nil, stream: :stdout, message: "4"},
+             %{timestamp: nil, stream: :stdout, message: "5"}
+           ]
+
+    stats = LogStore.get_stats(TestLogStore, "source_cap")
+    assert stats.size == 5
+    assert stats.drop_count == 2
+  end
+
+  test "prepend_logs updates ETS snapshots and broadcasts PubSub message" do
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "logs:source_ets")
+
+    LogStore.append_logs(TestLogStore, "source_ets", ["line 2"])
+    assert_receive {:logs_updated, "source_ets", %{size: 1, drop_count: 0}}, 500
+
+    LogStore.prepend_logs(TestLogStore, "source_ets", ["line 1"])
+    assert_receive {:logs_updated, "source_ets", %{size: 2, drop_count: 0}}, 500
+
+    snapshot = LogStore.get_snapshot(TestLogStore, "source_ets")
+    assert length(snapshot) == 2
+    assert List.first(snapshot).message == "line 1"
+    assert List.last(snapshot).message == "line 2"
+  end
 end

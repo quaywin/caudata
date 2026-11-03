@@ -163,7 +163,7 @@ defmodule Caudata.ContainerWorkerTest do
       :ok
     end)
 
-    opts = [ssh_client: Mock]
+    opts = [ssh_client: Mock, target_capacity: 1000]
     {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
 
     assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
@@ -580,5 +580,269 @@ defmodule Caudata.ContainerWorkerTest do
 
     stop_supervised(ContainerWorker)
     GenServer.stop(pool)
+  end
+
+  test "initiates two-phase backfill stream after first log batch and prepends historical logs" do
+    container = %{
+      id: "container123",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 3 hours",
+      state: "running"
+    }
+
+    source_id = "my-server/container123"
+    LogStore.clear_logs(source_id)
+
+    test_pid = self()
+
+    # Channel 1: primary follow stream
+    Mock
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :follow_channel_opened)
+      {:ok, :follow_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :follow_channel, cmd ->
+      assert String.contains?(cmd, "--follow")
+      assert String.contains?(cmd, "--tail 1000")
+      send(test_pid, :follow_exec_done)
+      :ok
+    end)
+    # Channel 2: Phase 2 backfill stream
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :backfill_channel_opened)
+      {:ok, :backfill_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :backfill_channel, cmd ->
+      assert String.contains?(cmd, "--tail 9000")
+      assert String.contains?(cmd, "--until")
+      assert String.contains?(cmd, "2026-06-08T12:00:10.000000000Z")
+      send(test_pid, :backfill_exec_done)
+      :ok
+    end)
+    |> expect(:close_channel, fn :dummy_conn, :backfill_channel ->
+      send(test_pid, :backfill_closed)
+      :ok
+    end)
+    |> expect(:close_channel, fn :dummy_conn, :follow_channel ->
+      send(test_pid, :follow_closed)
+      :ok
+    end)
+
+    opts = [
+      ssh_client: Mock,
+      initial_tail_limit: 1000,
+      target_capacity: 10000
+    ]
+
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+
+    assert_receive :follow_channel_opened, 1000
+    assert_receive :follow_exec_done, 1000
+    follow_stream_pid = ContainerWorker.get_stream_channel(pid)
+
+    # Send initial live follow log
+    send(
+      follow_stream_pid,
+      {:ssh_cm, :dummy_conn,
+       {:data, :follow_channel, 0, "2026-06-08T12:00:10.000000000Z follow line 1\n"}}
+    )
+
+    # Verify Phase 2 backfill was triggered automatically
+    assert_receive :backfill_channel_opened, 1500
+    assert_receive :backfill_exec_done, 1500
+
+    # Locate the backfill stream channel PID from worker state
+    worker_state = :sys.get_state(pid)
+    backfill_pid = worker_state.backfill_channel
+    assert is_pid(backfill_pid)
+
+    # Backfill channel sends older historical logs and closes
+    send(
+      backfill_pid,
+      {:ssh_cm, :dummy_conn,
+       {:data, :backfill_channel, 0, "2026-06-08T12:00:00.000000000Z older line 0\n"}}
+    )
+
+    send(backfill_pid, {:ssh_cm, :dummy_conn, {:closed, :backfill_channel}})
+    assert_receive :backfill_closed, 1500
+
+    Process.sleep(100)
+    snapshot = LogStore.get_snapshot(source_id)
+
+    # Verify both older line 0 and follow line 1 are present in chronological order!
+    assert snapshot == [
+             %{
+               timestamp: "2026-06-08T12:00:00.000000000Z",
+               stream: :stdout,
+               message: "older line 0"
+             },
+             %{
+               timestamp: "2026-06-08T12:00:10.000000000Z",
+               stream: :stdout,
+               message: "follow line 1"
+             }
+           ]
+
+    assert :ok = ContainerWorker.stop_streaming(pid)
+    assert_receive :follow_closed, 1000
+    stop_supervised(ContainerWorker)
+  end
+
+  test "skips backfill if container logs have no timestamps" do
+    container = %{
+      id: "container123",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 3 hours",
+      state: "running"
+    }
+
+    source_id = "my-server/container123"
+    LogStore.clear_logs(source_id)
+
+    Mock
+    |> expect(:open_channel, 1, fn :dummy_conn -> {:ok, :follow_channel} end)
+    |> expect(:exec, 1, fn :dummy_conn, :follow_channel, _cmd -> :ok end)
+    |> expect(:close_channel, 1, fn :dummy_conn, :follow_channel -> :ok end)
+
+    opts = [
+      ssh_client: Mock,
+      initial_tail_limit: 1000,
+      target_capacity: 10000
+    ]
+
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+    follow_stream_pid = ContainerWorker.get_stream_channel(pid)
+
+    # Send lines without timestamp
+    send(
+      follow_stream_pid,
+      {:ssh_cm, :dummy_conn,
+       {:data, :follow_channel, 0, "log line without any timestamp\n"}}
+    )
+
+    # Allow worker to flush logs
+    Process.sleep(100)
+
+    # Check worker state: backfill_status should be :done without opening second channel
+    worker_state = :sys.get_state(pid)
+    assert worker_state.backfill_status == :done
+    assert is_nil(worker_state.backfill_channel)
+
+    assert :ok = ContainerWorker.stop_streaming(pid)
+    stop_supervised(ContainerWorker)
+  end
+
+  test "stale or unknown channel closed event does not disconnect primary stream" do
+    container = %{
+      id: "container-stale",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 3 hours",
+      state: "running"
+    }
+
+    Mock
+    |> expect(:open_channel, 1, fn :dummy_conn -> {:ok, :follow_channel} end)
+    |> expect(:exec, 1, fn :dummy_conn, :follow_channel, _cmd -> :ok end)
+    |> expect(:close_channel, 1, fn :dummy_conn, :follow_channel -> :ok end)
+
+    opts = [ssh_client: Mock, target_capacity: 1000]
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+
+    # Send a stream_closed event from an unknown / stale pid
+    fake_pid = spawn(fn -> :ok end)
+    send(pid, {:stream_closed, fake_pid})
+
+    Process.sleep(50)
+    status = ContainerWorker.get_streaming_status(pid)
+    assert status.streaming? == true
+
+    assert :ok = ContainerWorker.stop_streaming(pid)
+    stop_supervised(ContainerWorker)
+  end
+
+  test "backfill command with non-zero exit status discards backfill logs and sets status to failed" do
+    container = %{
+      id: "container-fail-backfill",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 3 hours",
+      state: "running"
+    }
+
+    source_id = "my-server/container-fail-backfill"
+    LogStore.clear_logs(source_id)
+
+    test_pid = self()
+
+    Mock
+    |> expect(:open_channel, fn :dummy_conn -> {:ok, :follow_channel} end)
+    |> expect(:exec, fn :dummy_conn, :follow_channel, _cmd -> :ok end)
+    |> expect(:open_channel, fn :dummy_conn ->
+      send(test_pid, :backfill_channel_opened)
+      {:ok, :backfill_channel}
+    end)
+    |> expect(:exec, fn :dummy_conn, :backfill_channel, _cmd ->
+      send(test_pid, :backfill_exec_done)
+      :ok
+    end)
+    |> expect(:close_channel, fn :dummy_conn, :backfill_channel ->
+      send(test_pid, :backfill_closed)
+      :ok
+    end)
+    |> expect(:close_channel, fn :dummy_conn, :follow_channel -> :ok end)
+
+    opts = [
+      ssh_client: Mock,
+      initial_tail_limit: 1000,
+      target_capacity: 10000
+    ]
+
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, opts}})
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+
+    follow_stream_pid = ContainerWorker.get_stream_channel(pid)
+
+    send(
+      follow_stream_pid,
+      {:ssh_cm, :dummy_conn,
+       {:data, :follow_channel, 0, "2026-06-08T12:00:10.000000000Z live line\n"}}
+    )
+
+    assert_receive :backfill_channel_opened, 1500
+    assert_receive :backfill_exec_done, 1500
+
+    worker_state = :sys.get_state(pid)
+    backfill_pid = worker_state.backfill_channel
+    assert is_pid(backfill_pid)
+
+    # Send an error output and non-zero exit status
+    send(
+      backfill_pid,
+      {:ssh_cm, :dummy_conn,
+       {:data, :backfill_channel, 1, "unknown flag: --until\n"}}
+    )
+
+    send(backfill_pid, {:ssh_cm, :dummy_conn, {:exit_status, :backfill_channel, 1}})
+    send(backfill_pid, {:ssh_cm, :dummy_conn, {:closed, :backfill_channel}})
+
+    assert_receive :backfill_closed, 1500
+    Process.sleep(100)
+
+    # Verify backfill status is :failed and error message was NOT prepended
+    status = ContainerWorker.get_streaming_status(pid)
+    assert status.backfill_status == :failed
+
+    snapshot = LogStore.get_snapshot(source_id)
+    assert length(snapshot) == 1
+    assert hd(snapshot).message == "live line"
+
+    assert :ok = ContainerWorker.stop_streaming(pid)
+    stop_supervised(ContainerWorker)
   end
 end

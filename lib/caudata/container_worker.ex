@@ -23,7 +23,13 @@ defmodule Caudata.ContainerWorker do
     :should_stream,
     :reconnect_timer,
     :stream_channel,
-    :pool
+    :pool,
+    :target_capacity,
+    :backfill_channel,
+    :backfill_status,
+    :backfill_logs,
+    :backfill_timer,
+    :first_ts
   ]
 
   # Client API
@@ -83,7 +89,7 @@ defmodule Caudata.ContainerWorker do
       conn_ref: nil,
       channel_id: nil,
       ssh_client: ssh_client,
-      tail_limit: 1000,
+      tail_limit: Keyword.get(opts, :initial_tail_limit, Keyword.get(opts, :initial_tail, 1000)),
       channel_opened_at: nil,
       pending_logs: [],
       flush_timer: nil,
@@ -92,7 +98,13 @@ defmodule Caudata.ContainerWorker do
       should_stream: false,
       reconnect_timer: nil,
       stream_channel: nil,
-      pool: Keyword.get(opts, :pool)
+      pool: Keyword.get(opts, :pool),
+      target_capacity: Keyword.get(opts, :target_capacity, 10000),
+      backfill_channel: nil,
+      backfill_status: if(Keyword.get(opts, :backfill, true), do: :idle, else: :done),
+      backfill_logs: [],
+      backfill_timer: nil,
+      first_ts: nil
     }
 
     {:ok, state}
@@ -121,7 +133,8 @@ defmodule Caudata.ContainerWorker do
     info = %{
       streaming?: not is_nil(state.channel_id),
       opened_at: state.channel_opened_at,
-      stream_channel: state.stream_channel
+      stream_channel: state.stream_channel,
+      backfill_status: state.backfill_status
     }
 
     {:reply, info, state}
@@ -210,7 +223,8 @@ defmodule Caudata.ContainerWorker do
 
     # Cancel timer and discard pending logs to ensure a clean restart
     state = cancel_flush_timer(state)
-    state = %{state | pending_logs: []}
+    state = cancel_backfill(state)
+    state = %{state | pending_logs: [], backfill_status: :idle}
 
     conn_ref = state.conn_ref
 
@@ -231,37 +245,89 @@ defmodule Caudata.ContainerWorker do
 
   # Handle StreamChannel high-level events
   @impl true
-  def handle_info({:stream_lines, _pid, stream, lines}, state) do
-    streamed_lines = Enum.map(lines, fn line -> {stream, line} end)
-    new_pending_logs = Enum.reverse(streamed_lines) ++ state.pending_logs
+  def handle_info({:stream_lines, pid, stream, lines}, state) do
+    cond do
+      pid == state.backfill_channel ->
+        streamed_lines = Enum.map(lines, fn line -> {stream, line} end)
+        new_backfill_logs = Enum.reverse(streamed_lines) ++ state.backfill_logs
+        {:noreply, %{state | backfill_logs: new_backfill_logs}}
 
-    state =
-      if is_nil(state.flush_timer) do
-        timer_ref = Process.send_after(self(), :flush_logs, 100)
-        %{state | pending_logs: new_pending_logs, flush_timer: timer_ref}
-      else
-        %{state | pending_logs: new_pending_logs}
-      end
+      pid == state.stream_channel ->
+        streamed_lines = Enum.map(lines, fn line -> {stream, line} end)
+        new_pending_logs = Enum.reverse(streamed_lines) ++ state.pending_logs
 
+        state =
+          if is_nil(state.flush_timer) do
+            timer_ref = Process.send_after(self(), :flush_logs, 100)
+            %{state | pending_logs: new_pending_logs, flush_timer: timer_ref}
+          else
+            %{state | pending_logs: new_pending_logs}
+          end
+
+        {:noreply, state}
+
+      true ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:stream_eof, pid}, state) do
+    cond do
+      pid == state.backfill_channel ->
+        {:noreply, state}
+
+      pid == state.stream_channel ->
+        Logger.info("Received EOF from log stream for container #{state.container_id}")
+        {:noreply, handle_disconnect(state, "EOF received")}
+
+      true ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:stream_exit_status, pid, status}, state) do
+    cond do
+      pid == state.backfill_channel ->
+        if status != 0 do
+          Logger.info("Backfill command for #{state.container_id} exited with status #{status}")
+          # Command failed, discard accumulated backfill error/logs
+          {:noreply, %{state | backfill_logs: [], backfill_status: :failed}}
+        else
+          {:noreply, state}
+        end
+
+      pid == state.stream_channel ->
+        Logger.info("Remote command for #{state.container_id} exited with status #{status}")
+        {:noreply, handle_disconnect(state, "Command exited with status #{status}")}
+
+      true ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:stream_closed, pid}, state) do
+    cond do
+      pid == state.backfill_channel ->
+        state = finish_backfill(state)
+        {:noreply, state}
+
+      pid == state.stream_channel ->
+        Logger.info("SSH Channel closed for container #{state.container_id}")
+        {:noreply, handle_disconnect(state, "Channel closed")}
+
+      true ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info(:backfill_timeout, state) do
+    Logger.info("Backfill command for #{state.container_id} timed out")
+    state = finish_backfill(state)
     {:noreply, state}
-  end
-
-  @impl true
-  def handle_info({:stream_eof, _pid}, state) do
-    Logger.info("Received EOF from log stream for container #{state.container_id}")
-    {:noreply, handle_disconnect(state, "EOF received")}
-  end
-
-  @impl true
-  def handle_info({:stream_exit_status, _pid, status}, state) do
-    Logger.info("Remote command for #{state.container_id} exited with status #{status}")
-    {:noreply, handle_disconnect(state, "Command exited with status #{status}")}
-  end
-
-  @impl true
-  def handle_info({:stream_closed, _pid}, state) do
-    Logger.info("SSH Channel closed for container #{state.container_id}")
-    {:noreply, handle_disconnect(state, "Channel closed")}
   end
 
   @impl true
@@ -305,18 +371,30 @@ defmodule Caudata.ContainerWorker do
   end
 
   @impl true
-  def handle_info({:EXIT, _from, :normal}, state) do
-    {:noreply, state}
+  def handle_info({:EXIT, from, :normal}, state) do
+    if from == state.backfill_channel do
+      state = finish_backfill(state)
+      {:noreply, state}
+    else
+      {:noreply, state}
+    end
   end
 
   @impl true
-  def handle_info({:EXIT, _from, reason}, state) do
-    {:stop, reason, state}
+  def handle_info({:EXIT, from, reason}, state) do
+    if from == state.backfill_channel do
+      Logger.warning("Backfill channel process exited: #{inspect(reason)}")
+      state = cancel_backfill(state)
+      {:noreply, state}
+    else
+      {:stop, reason, state}
+    end
   end
 
   @impl true
   def terminate(_reason, state) do
     state = cancel_reconnect_timer(state)
+    state = cancel_backfill(state)
     state = %{state | should_stream: false}
 
     # Force flush any pending logs on termination
@@ -378,7 +456,14 @@ defmodule Caudata.ContainerWorker do
       end
 
     log_cmd = build_log_command_for_container(state, stats)
-    is_reconnect = stats.size > 0 && stats.last_ts && stats.last_ts != ""
+    is_reconnect = stats.size > 0 and not is_nil(stats.last_ts) and stats.last_ts != ""
+
+    state =
+      if is_reconnect or stats.size > 0 do
+        %{state | backfill_status: :done}
+      else
+        state
+      end
 
     stream_opts = [
       cmd: log_cmd,
@@ -483,6 +568,7 @@ defmodule Caudata.ContainerWorker do
     state = cancel_reconnect_timer(state)
     state = cancel_flush_timer(state)
     state = flush_pending_logs(state)
+    state = cancel_backfill(state)
 
     if state.stream_channel do
       Caudata.SSH.StreamChannel.stop(state.stream_channel)
@@ -495,7 +581,8 @@ defmodule Caudata.ContainerWorker do
         conn_ref: nil,
         channel_opened_at: nil,
         reconnecting_stream: false,
-        reconnect_timer: nil
+        reconnect_timer: nil,
+        backfill_status: :idle
     }
   end
 
@@ -539,9 +626,151 @@ defmodule Caudata.ContainerWorker do
         end
 
       LogStore.append_logs(state.source_id, logs_to_send)
-      %{state | pending_logs: []}
+      state = %{state | pending_logs: []}
+
+      maybe_trigger_backfill(state, logs_to_send)
     else
       state
+    end
+  end
+
+  defp maybe_trigger_backfill(state, logs) do
+    backfill_limit = max(0, state.target_capacity - (state.tail_limit || 1000))
+
+    if state.backfill_status == :idle and state.should_stream and backfill_limit > 0 do
+      case find_first_timestamp(logs) do
+        nil ->
+          %{state | backfill_status: :done}
+
+        first_ts ->
+          case build_backfill_command_for_container(state, first_ts, backfill_limit) do
+            nil ->
+              %{state | backfill_status: :done, first_ts: first_ts}
+
+            backfill_cmd ->
+              start_backfill_stream(state, backfill_cmd, first_ts)
+          end
+      end
+    else
+      state
+    end
+  end
+
+  defp start_backfill_stream(state, backfill_cmd, first_ts) do
+    backfill_opts = [
+      cmd: backfill_cmd,
+      notify_to: self(),
+      ssh_client: state.ssh_client
+    ]
+
+    backfill_opts =
+      if is_pid(state.pool) and Process.alive?(state.pool) do
+        Keyword.put(backfill_opts, :pool, state.pool)
+      else
+        Keyword.put(backfill_opts, :conn_ref, state.conn_ref)
+      end
+
+    case Caudata.SSH.StreamChannel.start_link(backfill_opts) do
+      {:ok, pid} ->
+        timer = Process.send_after(self(), :backfill_timeout, 15_000)
+
+        %{
+          state
+          | backfill_channel: pid,
+            backfill_status: :running,
+            backfill_timer: timer,
+            backfill_logs: [],
+            first_ts: first_ts
+        }
+
+      {:error, reason} ->
+        Logger.warning("Backfill stream failed to start for #{state.container_id}: #{inspect(reason)}")
+        %{state | backfill_status: :failed, first_ts: first_ts}
+    end
+  end
+
+  defp finish_backfill(state) do
+    state = cancel_backfill_timer(state)
+
+    if state.backfill_channel do
+      Caudata.SSH.StreamChannel.stop(state.backfill_channel)
+    end
+
+    if state.backfill_status != :failed and state.backfill_logs != [] do
+      ordered_logs = Enum.reverse(state.backfill_logs)
+      Caudata.LogStore.prepend_logs(state.source_id, ordered_logs)
+    end
+
+    final_status = if state.backfill_status == :failed, do: :failed, else: :done
+    %{state | backfill_channel: nil, backfill_logs: [], backfill_status: final_status}
+  end
+
+  defp cancel_backfill(state) do
+    state = cancel_backfill_timer(state)
+
+    if state.backfill_channel do
+      Caudata.SSH.StreamChannel.stop(state.backfill_channel)
+    end
+
+    %{state | backfill_channel: nil, backfill_logs: [], backfill_status: :failed}
+  end
+
+  defp cancel_backfill_timer(state) do
+    if state.backfill_timer do
+      Process.cancel_timer(state.backfill_timer)
+
+      receive do
+        :backfill_timeout -> :ok
+      after
+        0 -> :ok
+      end
+
+      %{state | backfill_timer: nil}
+    else
+      state
+    end
+  end
+
+  defp find_first_timestamp(logs) do
+    Enum.find_value(logs, fn
+      {_stream, line} when is_binary(line) ->
+        case Caudata.Native.parse_docker_log(line) do
+          {ts, _msg} when is_binary(ts) and ts != "" -> ts
+          _ -> nil
+        end
+
+      %{timestamp: ts} when is_binary(ts) and ts != "" ->
+        ts
+
+      line when is_binary(line) ->
+        case Caudata.Native.parse_docker_log(line) do
+          {ts, _msg} when is_binary(ts) and ts != "" -> ts
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp build_backfill_command_for_container(state, first_ts, limit) do
+    cond do
+      String.starts_with?(state.container_id, "file:") ->
+        nil
+
+      String.starts_with?(state.container_id, "systemd:") ->
+        "systemd:" <> service_name = state.container_id
+        escaped_service = String.replace(service_name, "'", "'\\''")
+        cmd = "journalctl -u \"#{escaped_service}\" -n #{limit} --until \"#{first_ts}\""
+        build_log_cmd(cmd, state.password)
+
+      String.starts_with?(state.container_id, "launchd:") ->
+        nil
+
+      true ->
+        escaped_container_id = String.replace(state.container_id, "'", "'\\''")
+        cmd = "docker logs -t --tail #{limit} --until \"#{first_ts}\" #{escaped_container_id}"
+        build_log_cmd(cmd, state.password)
     end
   end
 

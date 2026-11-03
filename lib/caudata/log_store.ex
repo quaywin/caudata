@@ -21,6 +21,14 @@ defmodule Caudata.LogStore do
   end
 
   @doc """
+  Prepends a list of historical raw log lines to a source's buffer.
+  Used for Phase 2 background log backfill. Each line is sanitized before insertion.
+  """
+  def prepend_logs(server \\ __MODULE__, source_id, lines) when is_list(lines) do
+    GenServer.cast(server, {:prepend_logs, source_id, lines})
+  end
+
+  @doc """
   Gets a list of all lines for a source in chronological order.
   Reads directly from ETS table for zero-latency non-blocking access.
   """
@@ -147,7 +155,8 @@ defmodule Caudata.LogStore do
         size: 0,
         drop_count: 0,
         next_seq: 0,
-        last_ts: nil
+        last_ts: nil,
+        first_ts: nil
       })
 
     # Drop leading duplicate line if it matches the tail of the existing queue
@@ -208,11 +217,18 @@ defmodule Caudata.LogStore do
         end
       )
 
+    final_first_ts =
+      case :queue.peek(new_queue) do
+        {:value, %{timestamp: ts}} when is_binary(ts) and ts != "" -> ts
+        _ -> Map.get(source_state, :first_ts, nil)
+      end
+
     new_source_state = %{
       queue: new_queue,
       size: new_size,
       drop_count: new_drops,
-      last_ts: final_last_ts
+      last_ts: final_last_ts,
+      first_ts: final_first_ts
     }
 
     new_sources = Map.put(state.sources, source_id, new_source_state)
@@ -252,6 +268,96 @@ defmodule Caudata.LogStore do
   end
 
   @impl true
+  def handle_cast({:prepend_logs, source_id, lines}, state) do
+    sanitized_lines =
+      Enum.map(lines, fn
+        %{timestamp: ts, stream: stream, message: msg} ->
+          %{timestamp: ts, stream: stream, message: LogSanitizer.sanitize(msg)}
+
+        {stream, line} ->
+          {ts, msg} = parse_docker_log(line)
+          %{timestamp: ts, stream: stream, message: LogSanitizer.sanitize(msg)}
+
+        line when is_binary(line) ->
+          {ts, msg} = parse_docker_log(line)
+          %{timestamp: ts, stream: :stdout, message: LogSanitizer.sanitize(msg)}
+      end)
+
+    source_state =
+      Map.get(state.sources, source_id, %{
+        queue: :queue.new(),
+        size: 0,
+        drop_count: 0,
+        next_seq: 0,
+        last_ts: nil,
+        first_ts: nil
+      })
+
+    existing_head_sample =
+      source_state.queue
+      |> :queue.to_list()
+      |> Enum.take(min(source_state.size, 100))
+
+    deduped_backfill = strip_boundary_overlap(sanitized_lines, existing_head_sample)
+
+    available = max(0, state.capacity - source_state.size)
+    backfill_count = length(deduped_backfill)
+
+    {kept_backfill, new_drop_count} =
+      cond do
+        available == 0 ->
+          {[], source_state.drop_count + backfill_count}
+
+        backfill_count > available ->
+          {Enum.take(deduped_backfill, -available),
+           source_state.drop_count + (backfill_count - available)}
+
+        true ->
+          {deduped_backfill, source_state.drop_count}
+      end
+
+    combined_lines = kept_backfill ++ :queue.to_list(source_state.queue)
+    new_queue = :queue.from_list(combined_lines)
+    new_size = length(combined_lines)
+
+    new_first_ts =
+      case :queue.peek(new_queue) do
+        {:value, %{timestamp: ts}} when is_binary(ts) and ts != "" -> ts
+        _ -> Map.get(source_state, :first_ts, nil)
+      end
+
+    new_source_state = %{
+      queue: new_queue,
+      size: new_size,
+      drop_count: new_drop_count,
+      last_ts: Map.get(source_state, :last_ts, nil),
+      first_ts: new_first_ts
+    }
+
+    new_sources = Map.put(state.sources, source_id, new_source_state)
+
+    snapshot_lines = combined_lines
+    tail_lines = Enum.take(snapshot_lines, -500)
+    medium_lines = Enum.take(snapshot_lines, -1500)
+
+    if Map.has_key?(state, :table) do
+      :ets.insert(state.table, [
+        {{:snapshot, source_id}, snapshot_lines},
+        {{:snapshot_medium, source_id}, medium_lines},
+        {{:snapshot_tail, source_id}, tail_lines}
+      ])
+    end
+
+    Phoenix.PubSub.broadcast(
+      Caudata.PubSub,
+      "logs:#{source_id}",
+      {:logs_updated, source_id, %{size: new_size, drop_count: new_drop_count}}
+    )
+
+    {:noreply, %{state | sources: new_sources}}
+  end
+
+  @impl true
   def handle_cast({:delete_stream, source_id}, state) do
     new_state = do_delete_stream(state, source_id)
     {:noreply, new_state}
@@ -283,13 +389,14 @@ defmodule Caudata.LogStore do
     stats =
       case Map.get(state.sources, source_id) do
         nil ->
-          %{size: 0, drop_count: 0, last_ts: nil}
+          %{size: 0, drop_count: 0, last_ts: nil, first_ts: nil}
 
         source_state ->
           %{
             size: source_state.size,
             drop_count: source_state.drop_count,
-            last_ts: source_state.last_ts
+            last_ts: source_state.last_ts,
+            first_ts: Map.get(source_state, :first_ts, nil)
           }
       end
 
@@ -328,4 +435,37 @@ defmodule Caudata.LogStore do
   defp parse_docker_log(line) do
     Caudata.Native.parse_docker_log(line)
   end
+
+  defp strip_boundary_overlap([], _existing), do: []
+  defp strip_boundary_overlap(backfill, []), do: backfill
+
+  defp strip_boundary_overlap(backfill, existing_head) do
+    # Optimization: existing_head is at most 100 items. Slicing backfill once
+    # prevents repeatedly scanning large backfill lists (up to 9,000 items) on every k step.
+    sample_size = min(100, length(existing_head))
+    backfill_tail_sample = Enum.take(backfill, -sample_size)
+    max_k = min(length(backfill_tail_sample), length(existing_head))
+
+    matching_k =
+      Enum.find(max_k..1//-1, 0, fn k ->
+        backfill_suffix = Enum.take(backfill_tail_sample, -k)
+        existing_prefix = Enum.take(existing_head, k)
+        lines_match?(backfill_suffix, existing_prefix)
+      end)
+
+    if matching_k > 0 do
+      Enum.drop(backfill, -matching_k)
+    else
+      backfill
+    end
+  end
+
+  defp lines_match?(list1, list2) when length(list1) == length(list2) do
+    Enum.zip(list1, list2)
+    |> Enum.all?(fn {l1, l2} ->
+      l1.timestamp == l2.timestamp and l1.stream == l2.stream and l1.message == l2.message
+    end)
+  end
+
+  defp lines_match?(_, _), do: false
 end

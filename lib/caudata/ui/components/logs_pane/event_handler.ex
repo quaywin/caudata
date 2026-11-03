@@ -229,25 +229,50 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
 
       "g" ->
         # Go to top of logs
-        {%{model | logs_scroll_y: 0}, []}
+        fetch_limit = Map.get(model, :logs_fetch_limit, 1000)
+        loading? = Map.get(model, :loading_history, false)
+
+        if not is_nil(model.selected_profile_id) and fetch_limit < 10000 and not loading? do
+          load_model =
+            model
+            |> Map.put(:logs_scroll_y, 0)
+            |> Map.put(:logs_fetch_limit, 10000)
+            |> Map.put(:loading_history, true)
+            |> Map.put(:logs_len_before_history_load, length(Map.get(model, :logs, [])))
+
+          {load_model, [{:command, {:load_history, 10000, 0}}]}
+        else
+          {%{model | logs_scroll_y: 0}, []}
+        end
 
       "G" ->
         # Go to bottom of logs
         {%{model | logs_scroll_y: :bottom}, []}
 
       k when k in [:page_up, :pageup] ->
-        displayed_logs = ViewHelper.get_displayed_logs(model)
-        logs_height = ViewHelper.get_logs_pane_height(model)
-        max_scroll = get_max_scroll(model, displayed_logs)
+        if model.selected_profile_id do
+          displayed_logs = ViewHelper.get_displayed_logs(model)
+          logs_height = ViewHelper.get_logs_pane_height(model)
+          max_scroll = get_max_scroll(model, displayed_logs)
 
-        case model.logs_scroll_y do
-          :bottom ->
-            new_scroll = max(0, max_scroll - logs_height)
-            {%{model | logs_scroll_y: new_scroll}, []}
+          effective_scroll =
+            case model.logs_scroll_y do
+              :bottom -> max_scroll
+              val when is_integer(val) -> min(val, max_scroll)
+            end
 
-          val when is_integer(val) ->
-            new_scroll = max(0, val - logs_height)
-            {%{model | logs_scroll_y: new_scroll}, []}
+          maybe_trigger_history_fetch(
+            model,
+            %{model | logs_scroll_y: effective_scroll},
+            effective_scroll,
+            max_scroll,
+            fn ->
+              new_scroll = max(0, effective_scroll - logs_height)
+              {%{model | logs_scroll_y: new_scroll}, []}
+            end
+          )
+        else
+          {model, []}
         end
 
       k when k in [:page_down, :pagedown] ->
@@ -397,16 +422,17 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
   end
 
   defp maybe_trigger_history_fetch(model, return_model, current_scroll, max_scroll, fallback_fn) do
-    if current_scroll == 0 and max_scroll > 0 and model.logs_fetch_limit < 10000 and
-         not model.loading_history do
-      new_limit = min(model.logs_fetch_limit + 1000, 10000)
+    fetch_limit = Map.get(model, :logs_fetch_limit, 1000)
+    loading? = Map.get(model, :loading_history, false)
 
-      load_model = %{
+    if current_scroll == 0 and max_scroll > 0 and fetch_limit < 10000 and not loading? do
+      new_limit = min(fetch_limit + 1000, 10000)
+
+      load_model =
         return_model
-        | logs_fetch_limit: new_limit,
-          loading_history: true,
-          logs_len_before_history_load: length(model.logs)
-      }
+        |> Map.put(:logs_fetch_limit, new_limit)
+        |> Map.put(:loading_history, true)
+        |> Map.put(:logs_len_before_history_load, length(Map.get(model, :logs, [])))
 
       {load_model, [{:command, {:load_history, new_limit}}]}
     else

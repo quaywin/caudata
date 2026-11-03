@@ -213,7 +213,10 @@ defmodule Caudata.UI.App do
         state_after_action = dispatch_docker_action(action, new_state)
         noreply(state, state_after_action)
 
-      {new_state, [{:command, {:load_history, new_limit}}]} ->
+      {new_state, [{:command, command}]}
+      when is_tuple(command) and elem(command, 0) == :load_history ->
+        new_limit = elem(command, 1)
+        target_scroll = if tuple_size(command) >= 3, do: elem(command, 2), else: nil
         source_id = current_source_id(new_state)
 
         {logs, scroll_y, visual_cursor, visual_anchor} =
@@ -237,9 +240,15 @@ defmodule Caudata.UI.App do
               new_max_scroll = max(0, wrapped_after_count - logs_height)
 
               new_scroll =
-                case new_state.logs_scroll_y do
-                  :bottom -> :bottom
-                  val -> min(new_max_scroll, max(0, val + prepended_wrapped - 1))
+                cond do
+                  not is_nil(target_scroll) ->
+                    target_scroll
+
+                  new_state.logs_scroll_y == :bottom ->
+                    :bottom
+
+                  true ->
+                    min(new_max_scroll, max(0, new_state.logs_scroll_y + prepended_wrapped - 1))
                 end
 
               vc =
@@ -254,11 +263,17 @@ defmodule Caudata.UI.App do
 
               {new_logs, new_scroll, vc, va}
             else
-              {new_state.logs, new_state.logs_scroll_y, new_state.visual_cursor,
+              default_scroll =
+                if not is_nil(target_scroll), do: target_scroll, else: new_state.logs_scroll_y
+
+              {new_state.logs, default_scroll, new_state.visual_cursor,
                new_state.visual_anchor}
             end
           else
-            {new_state.logs, new_state.logs_scroll_y, new_state.visual_cursor,
+            default_scroll =
+              if not is_nil(target_scroll), do: target_scroll, else: new_state.logs_scroll_y
+
+            {new_state.logs, default_scroll, new_state.visual_cursor,
              new_state.visual_anchor}
           end
 

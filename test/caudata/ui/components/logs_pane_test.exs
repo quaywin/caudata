@@ -21,6 +21,8 @@ defmodule Caudata.UI.Components.LogsPaneTest do
       mode: :browsing,
       logs: [],
       logs_scroll_y: :bottom,
+      logs_fetch_limit: 1000,
+      loading_history: false,
       containers: %{},
       show_timestamps: false,
       filter_regex: "",
@@ -133,6 +135,55 @@ defmodule Caudata.UI.Components.LogsPaneTest do
       assert is_tuple(small_widget.scroll)
       assert is_tuple(large_widget.scroll)
       assert is_tuple(fs_widget.scroll)
+    end
+  end
+
+  describe "handle_key navigation with history backfill" do
+    test "pressing 'g' dispatches load_history 10000 and scrolls to top", %{state: state} do
+      logs = Enum.map(1..50, fn i -> %{timestamp: nil, stream: :stdout, message: "Log #{i}"} end)
+
+      initial_state = %{
+        state
+        | active_panel: :logs,
+          logs: logs,
+          logs_scroll_y: :bottom,
+          logs_fetch_limit: 1000,
+          loading_history: false,
+          selected_profile_id: "test-server",
+          selected_container_id: "c1"
+      }
+
+      {new_model, commands} =
+        LogsPane.handle_key(:char, %{key: :char, char: "g"}, initial_state)
+
+      assert new_model.logs_scroll_y == 0
+      assert new_model.logs_fetch_limit == 10000
+      assert new_model.loading_history == true
+      assert commands == [{:command, {:load_history, 10000, 0}}]
+    end
+
+    test "pressing page_up at top triggers history fetch when logs_fetch_limit < 10000", %{state: state} do
+      logs = Enum.map(1..100, fn i -> %{timestamp: nil, stream: :stdout, message: "Log line #{i}"} end)
+
+      initial_state = %{
+        state
+        | active_panel: :logs,
+          logs: logs,
+          logs_scroll_y: 0,
+          logs_fetch_limit: 1000,
+          loading_history: false,
+          selected_profile_id: "test-server",
+          selected_container_id: "c1",
+          width: 80,
+          height: 24
+      }
+
+      {new_model, commands} =
+        LogsPane.handle_key(:page_up, %{key: :page_up}, initial_state)
+
+      assert new_model.logs_fetch_limit == 2000
+      assert new_model.loading_history == true
+      assert commands == [{:command, {:load_history, 2000}}]
     end
   end
 end

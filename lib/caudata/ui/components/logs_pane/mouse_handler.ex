@@ -146,8 +146,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
           active_panel: :logs,
           mode: :browsing,
           visual_anchor: nil,
-          visual_cursor: nil,
-          freeze: final_scroll != :bottom
+          visual_cursor: nil
       }
       |> Map.put(:mouse_dragging, false)
       |> Map.put(:mouse_drag_auto_scroll, nil),
@@ -181,8 +180,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
           | mode: :selecting,
             visual_anchor: log_index,
             visual_cursor: log_index,
-            logs_scroll_y: current_scroll,
-            freeze: true
+            logs_scroll_y: current_scroll
         }
         |> Map.put(:mouse_dragging, false)
         |> Map.put(:mouse_drag_auto_scroll, nil)

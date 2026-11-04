@@ -111,7 +111,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandlerTest do
     assert new_state.mode == :selecting
     assert new_state.visual_anchor != nil
     assert new_state.visual_cursor != nil
-    assert new_state.freeze == true
+    assert new_state.freeze == false
   end
 
   test "mouse drag updates visual_cursor during selection and auto-copies on release", %{

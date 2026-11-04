@@ -473,7 +473,14 @@ defmodule Caudata.UI.App do
                 scroll =
                   case logs_scroll_y do
                     :bottom ->
-                      :bottom
+                      if state.mode == :selecting do
+                        inner_width = ViewHelper.get_logs_inner_width(state)
+                        logs_height = ViewHelper.get_logs_pane_height(state)
+                        wrapped_count = ViewHelper.count_wrapped_lines(state.logs, inner_width)
+                        max(0, wrapped_count - logs_height)
+                      else
+                        :bottom
+                      end
 
                     val when is_integer(val) ->
                       shift =
@@ -803,8 +810,8 @@ defmodule Caudata.UI.App do
           state
         end
 
-      val when is_integer(val) ->
-        %{state | freeze: true}
+      _val ->
+        state
     end
   end
 

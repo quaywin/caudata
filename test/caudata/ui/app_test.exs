@@ -605,7 +605,7 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, state_scrolled} = App.handle_event(event_k, state1)
     # max_scroll is 15 - 6 = 9. Scrolling up by 3 steps should set it to 9 - 3 = 6.
     assert state_scrolled.logs_scroll_y == 6
-    assert state_scrolled.freeze == true
+    assert state_scrolled.freeze == false
 
     # 3. Now 5 new logs are appended to LogStore (total 20 logs).
     # Since logs_fetch_limit is 15, the new snapshot will be lines 6 to 20.
@@ -621,24 +621,19 @@ defmodule Caudata.UI.AppTest do
     assert {:noreply, state_msg, _opts} = App.handle_info(msg, state_scrolled)
     # remains 6 before tick
     assert state_msg.logs_scroll_y == 6
-    assert state_msg.freeze == true
+    assert state_msg.freeze == false
 
-    # 4. Handle tick (should not fetch new logs since we are frozen)
+    # 4. Handle tick (fetches new logs and shifts scroll position so viewport stays stable)
     assert {:noreply, state_ticked} = App.handle_info(:tick, state_msg)
-    assert state_ticked.logs == initial_logs
-    assert state_ticked.logs_scroll_y == 6
+    assert state_ticked.logs == new_store_logs
+    assert state_ticked.logs_scroll_y == 1
+    assert state_ticked.freeze == false
 
-    # 5. Scroll down by 3 lines (simulating pressing 'j')
-    # 6 + 3 = 9. Since max_scroll is 9, it should set scroll_y to :bottom and unfreeze.
-    event_j = %ExRatatui.Event.Key{code: "j", modifiers: []}
-    assert {:noreply, state_bottom} = App.handle_event(event_j, state_ticked)
+    # 5. Jump to bottom with 'G' to re-enable auto-scroll
+    event_g = %ExRatatui.Event.Key{code: "G", modifiers: []}
+    assert {:noreply, state_bottom} = App.handle_event(event_g, state_ticked)
     assert state_bottom.logs_scroll_y == :bottom
     assert state_bottom.freeze == false
-
-    # 6. Now handle tick (should fetch new logs because we are unfrozen)
-    assert {:noreply, state_final} = App.handle_info(:tick, state_bottom)
-    assert state_final.logs == new_store_logs
-    assert state_final.logs_scroll_y == :bottom
   end
 
   test "handle_event/2 handles loading older logs when scrolling up with k" do
@@ -1367,7 +1362,7 @@ defmodule Caudata.UI.AppTest do
       assert visual_state.visual_cursor == 2
     end
 
-    test "entering visual select mode when scroll is at bottom keeps logs_scroll_y as integer, freezes logs, and does not auto-scroll on new logs tick" do
+    test "entering visual select mode when scroll is at bottom keeps logs_scroll_y as integer, loads new logs without auto-scrolling on tick" do
       u_id = System.unique_integer([:positive])
       profile_id = "test-server-#{u_id}"
       container_id = "container-1"
@@ -1395,7 +1390,7 @@ defmodule Caudata.UI.AppTest do
       assert visual_state.mode == :selecting
       assert is_integer(visual_state.logs_scroll_y)
       assert visual_state.logs_scroll_y == 4
-      assert visual_state.freeze == true
+      assert visual_state.freeze == false
 
       # Now, new logs are appended to LogStore (total 12 logs, first 2 are dropped in 10-limit snapshot)
       new_store_logs = Enum.map(3..12, &%{timestamp: nil, stream: :stdout, message: "log #{&1}"})
@@ -1409,9 +1404,10 @@ defmodule Caudata.UI.AppTest do
 
       # Tick
       assert {:noreply, ticked_state} = App.handle_info(:tick, updated_state)
-      assert ticked_state.logs_scroll_y == 4
-      assert ticked_state.logs == initial_logs
-      assert ticked_state.freeze == true
+      assert ticked_state.logs == new_store_logs
+      assert ticked_state.logs_scroll_y == 2
+      assert ticked_state.visual_cursor == 7
+      assert ticked_state.freeze == false
       assert ticked_state.mode == :selecting
     end
 

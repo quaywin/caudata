@@ -82,7 +82,7 @@ defmodule Caudata.SSH.StreamChannel do
                   {:ok, conn_ref, channel_id, lease_ref}
 
                 {:error, reason} ->
-                  Caudata.SSH.ConnectionPool.release_connection(pool, conn_ref, lease_ref)
+                  Caudata.SSH.ConnectionPool.release_connection(pool, conn_ref, lease_ref, :error)
                   {:error, reason}
               end
 

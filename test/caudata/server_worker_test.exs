@@ -1663,4 +1663,295 @@ defmodule Caudata.ServerWorkerTest do
     result = Caudata.SSHClient.Native.open_channel(dead_pid)
     assert match?({:error, _}, result)
   end
+
+  test "discovery timeout triggers reconnect if container discovery hangs" do
+    profile =
+      Profile.new(%{
+        host_pattern: "discovery-hang-server",
+        host_name: "10.0.0.77",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, fn "10.0.0.77", 22, _ ->
+      send(test_pid, :first_connected)
+      {:ok, :dummy_conn_hang}
+    end)
+    |> expect(:open_channel, fn :dummy_conn_hang ->
+      send(test_pid, :opened_hang_list_chan)
+      {:ok, :hang_list_chan}
+    end)
+    |> expect(:exec, fn :dummy_conn_hang, :hang_list_chan, _cmd ->
+      :ok
+    end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+    # Reconnect expectation after discovery timeout
+    |> expect(:connect, fn "10.0.0.77", 22, _ ->
+      send(test_pid, :reconnected_after_discovery_timeout)
+      {:ok, :dummy_conn_ok}
+    end)
+    |> stub(:open_channel, fn _conn -> {:ok, :chan_ok} end)
+    |> stub(:exec, fn _conn, _chan, _cmd -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: false}})
+
+    assert_receive :first_connected, 1000
+    assert_receive :opened_hang_list_chan, 1000
+
+    # Simulate discovery timeout message firing
+    send(worker_pid, :discovery_timeout)
+
+    assert_receive {:status_updated, "discovery-hang-server", :connecting}, 1000
+    assert_receive :reconnected_after_discovery_timeout, 2500
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "refresh_containers triggers reconnect when open_channel fails on broken connection" do
+    profile =
+      Profile.new(%{
+        host_pattern: "refresh-fail-server",
+        host_name: "10.0.0.78",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, fn "10.0.0.78", 22, _ ->
+      {:ok, :dummy_conn1}
+    end)
+    |> expect(:open_channel, fn :dummy_conn1 ->
+      send(test_pid, :opened_list_chan1)
+      {:ok, :list_chan1}
+    end)
+    |> expect(:exec, fn :dummy_conn1, :list_chan1, _cmd ->
+      :ok
+    end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+    # On refresh, open_channel fails with {:error, :closed}
+    |> expect(:open_channel, fn :dummy_conn1 ->
+      {:error, :closed}
+    end)
+    # Reconnect expectation
+    |> expect(:connect, fn "10.0.0.78", 22, _ ->
+      send(test_pid, :reconnected_after_refresh_fail)
+      {:ok, :dummy_conn2}
+    end)
+    |> stub(:open_channel, fn _conn -> {:ok, :chan2} end)
+    |> stub(:exec, fn _conn, _chan, _cmd -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: false}})
+
+    assert_receive :opened_list_chan1, 1000
+
+    # Finish initial discovery to transition to :connected
+    send(worker_pid, {:ssh_cm, :dummy_conn1, {:closed, :list_chan1}})
+    assert_receive {:status_updated, "refresh-fail-server", :connected}, 1000
+
+    # User or UI triggers refresh_containers
+    GenServer.cast(worker_pid, :refresh_containers)
+
+    assert_receive {:status_updated, "refresh-fail-server", :connecting}, 1000
+    assert_receive :reconnected_after_refresh_fail, 2500
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "reconnection resumes streaming when container was rebuilt with new ID during disconnect" do
+    profile =
+      Profile.new(%{
+        host_pattern: "rebuild-reconnect-server",
+        host_name: "10.0.0.79",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, fn "10.0.0.79", 22, _ ->
+      {:ok, :dummy_conn1}
+    end)
+    |> expect(:open_channel, fn :dummy_conn1 ->
+      send(test_pid, :opened_list_chan1)
+      {:ok, :list_chan1}
+    end)
+    |> expect(:exec, fn :dummy_conn1, :list_chan1, _cmd ->
+      :ok
+    end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+    # Streaming channel for old container
+    |> expect(:open_channel, fn :dummy_conn1 ->
+      {:ok, :log_chan1}
+    end)
+    |> expect(:exec, fn :dummy_conn1, :log_chan1, _cmd ->
+      :ok
+    end)
+    # Reconnect connection
+    |> expect(:connect, fn "10.0.0.79", 22, _ ->
+      {:ok, :dummy_conn2}
+    end)
+    |> expect(:open_channel, fn :dummy_conn2 ->
+      send(test_pid, :opened_list_chan2)
+      {:ok, :list_chan2}
+    end)
+    |> expect(:exec, fn :dummy_conn2, :list_chan2, _cmd ->
+      :ok
+    end)
+    # Streaming channel for new container ID!
+    |> expect(:open_channel, fn :dummy_conn2 ->
+      send(test_pid, :stream_started_for_rebuilt_container)
+      {:ok, :log_chan2}
+    end)
+    |> expect(:exec, fn :dummy_conn2, :log_chan2, _cmd ->
+      :ok
+    end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised(
+        {ServerWorker,
+         {profile, ssh_client: Mock, enable_events: false, log_debounce_delay: 0}}
+      )
+
+    assert_receive :opened_list_chan1, 1000
+
+    # Initial discovery with old container ID: "c_old_111", name: "my-app"
+    docker_output_1 =
+      "===DOCKER===\n{\"ID\":\"c_old_111\",\"Names\":\"my-app\",\"Image\":\"app:v1\",\"Status\":\"Up 2 hours\",\"State\":\"running\"}\n===OS===\nLinux\n"
+
+    send(worker_pid, {:ssh_cm, :dummy_conn1, {:data, :list_chan1, 0, docker_output_1}})
+    send(worker_pid, {:ssh_cm, :dummy_conn1, {:closed, :list_chan1}})
+
+    assert_receive {:status_updated, "rebuild-reconnect-server", :connected}, 1000
+
+    # Start streaming logs for "c_old_111"
+    :ok = GenServer.call(worker_pid, {:stream_container_logs, "c_old_111"})
+
+    # Disconnect SSH connection
+    send(worker_pid, {:ssh_cm, :dummy_conn1, {:closed, :dummy_conn1}})
+    assert_receive {:status_updated, "rebuild-reconnect-server", :connecting}, 1000
+
+    assert_receive :opened_list_chan2, 1500
+
+    # Reconnect occurs with new container ID: "c_new_222", but same name: "my-app"
+    docker_output_2 =
+      "===DOCKER===\n{\"ID\":\"c_new_222\",\"Names\":\"my-app\",\"Image\":\"app:v2\",\"Status\":\"Up 5 seconds\",\"State\":\"running\"}\n===OS===\nLinux\n"
+
+    send(worker_pid, {:ssh_cm, :dummy_conn2, {:data, :list_chan2, 0, docker_output_2}})
+    send(worker_pid, {:ssh_cm, :dummy_conn2, {:closed, :list_chan2}})
+
+    # Should broadcast container_rebuilt to PubSub
+    assert_receive {:container_rebuilt, "rebuild-reconnect-server", "my-app", "c_old_111", "c_new_222"}, 1000
+    # And should start streaming on the new container
+    assert_receive :stream_started_for_rebuilt_container, 1000
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "stale ssh_connect_failed does not disconnect current connection" do
+    profile =
+      Profile.new(%{
+        host_pattern: "stale-connect-server",
+        host_name: "10.0.0.80",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, fn "10.0.0.80", 22, _ ->
+      {:ok, :dummy_conn1}
+    end)
+    |> expect(:open_channel, fn :dummy_conn1 ->
+      send(test_pid, :opened_list_chan1)
+      {:ok, :list_chan1}
+    end)
+    |> expect(:exec, fn :dummy_conn1, :list_chan1, _cmd ->
+      :ok
+    end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: false}})
+
+    assert_receive {:status_updated, "stale-connect-server", :connecting}, 1000
+    assert_receive :opened_list_chan1, 1000
+
+    send(worker_pid, {:ssh_cm, :dummy_conn1, {:closed, :list_chan1}})
+    assert_receive {:status_updated, "stale-connect-server", :connected}, 1000
+
+    # A stale connect failed message from a previous attempt arrives with an old task ref
+    old_task_ref = make_ref()
+    send(worker_pid, {:ssh_connect_failed, old_task_ref, :timeout})
+
+    # Ensure worker did NOT disconnect
+    refute_receive {:status_updated, "stale-connect-server", :connecting}, 200
+    assert ServerWorker.get_status(worker_pid) == :connected
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "update_profile reconnects immediately when credentials change" do
+    profile =
+      Profile.new(%{
+        host_pattern: "update-profile-server",
+        host_name: "10.0.0.81",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    # Initial connect fails
+    Mock
+    |> expect(:connect, fn "10.0.0.81", 22, _ ->
+      send(test_pid, :first_connect_attempt)
+      {:error, :econnrefused}
+    end)
+    # After profile update with corrected host, it connects immediately to new host
+    |> expect(:connect, fn "10.0.0.82", 22, _ ->
+      send(test_pid, :connected_to_updated_host)
+      {:ok, :dummy_conn_updated}
+    end)
+    |> stub(:open_channel, fn _conn -> {:ok, :dummy_chan} end)
+    |> stub(:exec, fn _conn, _chan, _cmd -> :ok end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: false}})
+
+    assert_receive :first_connect_attempt, 1000
+
+    # Update profile with corrected host
+    updated_profile = %{profile | host_name: "10.0.0.82"}
+    GenServer.cast(worker_pid, {:update_profile, updated_profile})
+
+    # Should immediately attempt connection to new host without waiting for backoff
+    assert_receive :connected_to_updated_host, 1000
+
+    stop_supervised(ServerWorker)
+  end
 end

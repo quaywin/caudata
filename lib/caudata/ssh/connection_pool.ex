@@ -54,9 +54,17 @@ defmodule Caudata.SSH.ConnectionPool do
 
   @doc """
   Releases a checked out connection slot back to the pool using the lease_ref.
+  Optional `status` can be `:ok` or `:error` (e.g. if opening a channel on this connection failed).
   """
-  def release_connection(pool, conn_ref, lease_ref) do
-    GenServer.call(pool, {:release_connection, conn_ref, lease_ref})
+  def release_connection(pool, conn_ref, lease_ref, status \\ :ok) do
+    GenServer.call(pool, {:release_connection, conn_ref, lease_ref, status})
+  end
+
+  @doc """
+  Updates the profile used by the connection pool.
+  """
+  def update_profile(pool, profile) do
+    GenServer.call(pool, {:update_profile, profile})
   end
 
   @doc """
@@ -138,8 +146,36 @@ defmodule Caudata.SSH.ConnectionPool do
   end
 
   @impl true
-  def handle_call({:release_connection, conn_ref, lease_ref}, _from, state) do
+  def handle_call({:update_profile, profile}, _from, state) do
+    {:reply, :ok, %{state | profile: profile}}
+  end
+
+  @impl true
+  def handle_call({:release_connection, conn_ref, lease_ref}, from, state) do
+    handle_call({:release_connection, conn_ref, lease_ref, :ok}, from, state)
+  end
+
+  @impl true
+  def handle_call({:release_connection, conn_ref, lease_ref, status}, _from, state) do
     state = do_release_lease(state, conn_ref, lease_ref)
+
+    state =
+      if status == :error do
+        Logger.warning("Purging failed SSH connection #{inspect(conn_ref)} from pool for #{state.profile.id}")
+        conn_info = Map.get(state.connections, conn_ref)
+        if conn_info && conn_info.monitor_ref, do: Process.demonitor(conn_info.monitor_ref, [:flush])
+
+        try do
+          state.ssh_client.close(conn_ref)
+        catch
+          _, _ -> :ok
+        end
+
+        handle_connection_down(state, conn_ref)
+      else
+        state
+      end
+
     {:reply, :ok, state}
   end
 
@@ -165,6 +201,16 @@ defmodule Caudata.SSH.ConnectionPool do
               "Failed to open channel on SSH connection #{inspect(conn_ref)}: #{inspect(reason)}"
             )
 
+            conn_info = Map.get(state.connections, conn_ref)
+            if conn_info && conn_info.monitor_ref, do: Process.demonitor(conn_info.monitor_ref, [:flush])
+
+            try do
+              state.ssh_client.close(conn_ref)
+            catch
+              _, _ -> :ok
+            end
+
+            state = handle_connection_down(state, conn_ref)
             {:reply, {:error, reason}, state}
         end
 

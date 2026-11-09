@@ -52,6 +52,10 @@ defmodule Caudata.ContainerWorker do
     GenServer.call(pid, :stop_streaming)
   end
 
+  def stop_streaming_async(pid) do
+    GenServer.cast(pid, :stop_streaming)
+  end
+
   def get_stream_channel(pid) do
     GenServer.call(pid, :get_stream_channel)
   end
@@ -178,7 +182,8 @@ defmodule Caudata.ContainerWorker do
               {:reply, :ok, new_state}
 
             {:error, reason} ->
-              {:reply, {:error, reason}, state}
+              timer = Process.send_after(self(), :reconnect_stream, 1000)
+              {:reply, {:error, reason}, %{state | reconnect_timer: timer, conn_ref: conn_ref}}
           end
         end
       end
@@ -191,6 +196,14 @@ defmodule Caudata.ContainerWorker do
     state = %{state | should_stream: false}
     new_state = close_log_channel(state)
     {:reply, :ok, new_state}
+  end
+
+  @impl true
+  def handle_cast(:stop_streaming, state) do
+    state = cancel_reconnect_timer(state)
+    state = %{state | should_stream: false}
+    new_state = close_log_channel(state)
+    {:noreply, new_state}
   end
 
   @impl true
@@ -518,7 +531,11 @@ defmodule Caudata.ContainerWorker do
           cond do
             stats.size > 0 && stats.last_ts && stats.last_ts != "" ->
               limit = state.tail_limit || 1000
-              since_ts = clamp_timestamp_max_age(stats.last_ts, 3600)
+              since_ts =
+                stats.last_ts
+                |> clamp_timestamp_max_age(3600)
+                |> format_systemd_timestamp()
+
               "journalctl -u \"#{escaped_service}\" -f -n #{limit} --since \"#{since_ts}\""
 
             stats.size > 0 ->
@@ -761,7 +778,8 @@ defmodule Caudata.ContainerWorker do
       String.starts_with?(state.container_id, "systemd:") ->
         "systemd:" <> service_name = state.container_id
         escaped_service = String.replace(service_name, "'", "'\\''")
-        cmd = "journalctl -u \"#{escaped_service}\" -n #{limit} --until \"#{first_ts}\""
+        formatted_until = format_systemd_timestamp(first_ts)
+        cmd = "journalctl -u \"#{escaped_service}\" -n #{limit} --until \"#{formatted_until}\""
         build_log_cmd(cmd, state.password)
 
       String.starts_with?(state.container_id, "launchd:") ->
@@ -838,6 +856,16 @@ defmodule Caudata.ContainerWorker do
 
       _ ->
         last_ts
+    end
+  end
+
+  def format_systemd_timestamp(nil), do: nil
+  def format_systemd_timestamp(""), do: nil
+
+  def format_systemd_timestamp(ts) when is_binary(ts) do
+    case parse_iso8601_dt(ts) do
+      {:ok, dt} -> Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S")
+      _ -> ts
     end
   end
 

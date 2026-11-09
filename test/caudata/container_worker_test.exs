@@ -725,7 +725,7 @@ defmodule Caudata.ContainerWorkerTest do
     )
 
     # Allow worker to flush logs
-    Process.sleep(100)
+    Process.sleep(200)
 
     # Check worker state: backfill_status should be :done without opening second channel
     worker_state = :sys.get_state(pid)

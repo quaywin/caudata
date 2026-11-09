@@ -8,6 +8,7 @@ defmodule Caudata.ServerWorker do
   @max_active_streams 5
   @health_check_interval 15_000
   @activity_timeout 15_000
+  @discovery_timeout 15_000
 
   @docker_discovery_cmd "echo '===DOCKER==='; docker ps -a --no-trunc --format '{{json .}}' 2>/dev/null"
   @os_discovery_cmd "echo '===OS==='; uname -s"
@@ -59,7 +60,9 @@ defmodule Caudata.ServerWorker do
     broadcast_timer: nil,
     pool: nil,
     max_active_streams: nil,
-    container_net_samples: %{}
+    container_net_samples: %{},
+    discovery_timer: nil,
+    conn_task_ref: nil
   ]
 
   # Client API
@@ -194,7 +197,9 @@ defmodule Caudata.ServerWorker do
       container_stats_buffer: "",
       log_stream_timer: nil,
       log_debounce_delay: log_delay,
-      stats_debounce_delay: stats_delay
+      stats_debounce_delay: stats_delay,
+      discovery_timer: nil,
+      conn_task_ref: nil
     }
 
     # Broadcast initial connecting status
@@ -327,12 +332,12 @@ defmodule Caudata.ServerWorker do
     old_profile = state.profile
     new_state = %{state | profile: updated_profile}
 
-    # Only refresh containers when connection-relevant fields change.
-    # Toggling disabled_containers is just a UI filter and should not
-    # trigger a full SSH refresh that causes status flicker.
-    needs_refresh =
-      old_profile.custom_logs != updated_profile.custom_logs or
-        old_profile.host_name != updated_profile.host_name or
+    if is_pid(new_state.pool) and Process.alive?(new_state.pool) do
+      Caudata.SSH.ConnectionPool.update_profile(new_state.pool, updated_profile)
+    end
+
+    credentials_changed =
+      old_profile.host_name != updated_profile.host_name or
         old_profile.port != updated_profile.port or
         old_profile.user != updated_profile.user or
         old_profile.identity_file != updated_profile.identity_file or
@@ -340,11 +345,30 @@ defmodule Caudata.ServerWorker do
         Map.get(old_profile, :auth_method) != Map.get(updated_profile, :auth_method) or
         Map.get(old_profile, :ssh_agent_socket) != Map.get(updated_profile, :ssh_agent_socket)
 
-    if needs_refresh and state.conn_ref do
-      GenServer.cast(self(), :refresh_containers)
-    end
+    custom_logs_changed = old_profile.custom_logs != updated_profile.custom_logs
 
-    {:noreply, new_state}
+    cond do
+      credentials_changed ->
+        if new_state.conn_ref do
+          handle_disconnect(new_state, "Profile credentials updated")
+        else
+          new_state = cancel_reconnect_timer(new_state)
+
+          if is_pid(new_state.pool) and Process.alive?(new_state.pool) do
+            Caudata.SSH.ConnectionPool.close_all(new_state.pool)
+          end
+
+          send(self(), :connect)
+          {:noreply, %{new_state | reconnect_delay: @initial_reconnect_delay}}
+        end
+
+      custom_logs_changed and new_state.conn_ref ->
+        GenServer.cast(self(), :refresh_containers)
+        {:noreply, new_state}
+
+      true ->
+        {:noreply, new_state}
+    end
   end
 
   @impl true
@@ -364,6 +388,8 @@ defmodule Caudata.ServerWorker do
                  wrapped_cmd
                ) do
             :ok ->
+              state = schedule_discovery_timeout(state)
+
               {:noreply,
                %{
                  state
@@ -372,14 +398,14 @@ defmodule Caudata.ServerWorker do
                }}
 
             {:error, reason} ->
-              Logger.info("Failed to exec docker ps on refresh: #{inspect(reason)}")
+              Logger.warning("Failed to exec docker ps on refresh: #{inspect(reason)}")
               state.ssh_client.close_channel(state.conn_ref, list_channel_id)
-              {:noreply, state}
+              handle_disconnect(state, "Failed to exec discovery on refresh: #{inspect(reason)}")
           end
 
         {:error, reason} ->
-          Logger.info("Failed to open channel on refresh: #{inspect(reason)}")
-          {:noreply, state}
+          Logger.warning("Failed to open channel on refresh: #{inspect(reason)}")
+          handle_disconnect(state, "Failed to open channel on refresh: #{inspect(reason)}")
       end
     else
       state = cancel_reconnect_timer(state)
@@ -402,29 +428,45 @@ defmodule Caudata.ServerWorker do
     ssh_client = state.ssh_client
     host = state.profile.host_name
     port = state.profile.port
+    task_ref = make_ref()
 
     Task.start(fn ->
       try do
         case ssh_client.connect(host, port, connect_opts) do
           {:ok, conn_ref} ->
-            send(parent, {:ssh_connected, conn_ref})
+            send(parent, {:ssh_connected, task_ref, conn_ref})
 
           {:error, reason} ->
-            send(parent, {:ssh_connect_failed, reason})
+            send(parent, {:ssh_connect_failed, task_ref, reason})
         end
       catch
         kind, reason ->
-          send(parent, {:ssh_connect_failed, {kind, reason}})
+          send(parent, {:ssh_connect_failed, task_ref, {kind, reason}})
       end
     end)
 
-    {:noreply, state}
+    {:noreply, %{state | conn_task_ref: task_ref}}
+  end
+
+  @impl true
+  def handle_info({:ssh_connect_failed, task_ref, reason}, state) do
+    if state.conn_task_ref == task_ref and is_nil(state.conn_ref) do
+      Logger.info("Failed to establish SSH connection to #{state.profile.id}: #{inspect(reason)}")
+      handle_disconnect(%{state | conn_task_ref: nil}, "Connection failed: #{inspect(reason)}")
+    else
+      Logger.debug("Ignoring stale ssh_connect_failed for #{state.profile.id}")
+      {:noreply, state}
+    end
   end
 
   @impl true
   def handle_info({:ssh_connect_failed, reason}, state) do
-    Logger.info("Failed to establish SSH connection to #{state.profile.id}: #{inspect(reason)}")
-    handle_disconnect(state, "Connection failed: #{inspect(reason)}")
+    if is_nil(state.conn_ref) do
+      Logger.info("Failed to establish SSH connection to #{state.profile.id}: #{inspect(reason)}")
+      handle_disconnect(%{state | conn_task_ref: nil}, "Connection failed: #{inspect(reason)}")
+    else
+      {:noreply, state}
+    end
   end
 
   @impl true
@@ -438,100 +480,35 @@ defmodule Caudata.ServerWorker do
   end
 
   @impl true
+  def handle_info({:ssh_connected, task_ref, conn_ref}, state) do
+    if state.conn_task_ref == task_ref and state.status == :connecting and is_nil(state.conn_ref) do
+      handle_ssh_connected(conn_ref, %{state | conn_task_ref: nil})
+    else
+      Logger.debug("Discarding stale ssh_connected for #{state.profile.id}")
+      state.ssh_client.close(conn_ref)
+      {:noreply, state}
+    end
+  end
+
+  @impl true
   def handle_info({:ssh_connected, conn_ref}, state) do
     if state.status == :connecting and is_nil(state.conn_ref) do
-      Logger.info("SSH connection established to #{state.profile.id}, discovering containers...")
-
-      # Demonitor old connection if any
-      if state.conn_monitor_ref do
-        Process.demonitor(state.conn_monitor_ref, [:flush])
-      end
-
-      monitor_ref = if is_pid(conn_ref), do: Process.monitor(conn_ref), else: nil
-
-      # Stop/close old channels on existing container workers so they don't hold stale SSH channels
-      Enum.each(state.container_pids, fn {_id, pid} ->
-        if Process.alive?(pid), do: Caudata.ContainerWorker.stop_streaming(pid)
-      end)
-
-      # Reset stale server-level monitoring channels so they re-subscribe on the new connection
-      state = close_metrics_channel(state)
-      state = close_events_channel(state)
-      state = close_container_stats_channel(state)
-
-      case state.ssh_client.open_channel(conn_ref) do
-        {:ok, list_channel_id} ->
-          wrapped_cmd = wrap_sudo(@discovery_cmd, state.profile.password)
-
-          case state.ssh_client.exec(
-                 conn_ref,
-                 list_channel_id,
-                 wrapped_cmd
-               ) do
-            :ok ->
-              {:noreply,
-               %{
-                 state
-                 | conn_ref: conn_ref,
-                   conn_monitor_ref: monitor_ref,
-                   list_channel_id: list_channel_id,
-                   list_buffer: "",
-                   reconnect_delay: @initial_reconnect_delay
-               }}
-
-            {:error, reason} ->
-              Logger.info(
-                "Docker ps execution failed or not available on #{state.profile.id}: #{inspect(reason)}. Falling back to server log command."
-              )
-
-              state.ssh_client.close_channel(conn_ref, list_channel_id)
-              broadcast_status(state.profile.id, :connected)
-
-              state = %{
-                state
-                | conn_ref: conn_ref,
-                  conn_monitor_ref: monitor_ref,
-                  list_channel_id: nil,
-                  list_buffer: "",
-                  status: :connected,
-                  containers: [],
-                  reconnect_delay: @initial_reconnect_delay
-              }
-
-              state = sync_container_workers(state, [])
-              state = start_metrics_streaming(state)
-              state = schedule_health_check(state)
-
-              {:noreply, state}
-          end
-
-        {:error, reason} ->
-          Logger.info(
-            "Failed to open channel for container list on #{state.profile.id}: #{inspect(reason)}."
-          )
-
-          broadcast_status(state.profile.id, :connected)
-
-          state = %{
-            state
-            | conn_ref: conn_ref,
-              conn_monitor_ref: monitor_ref,
-              list_channel_id: nil,
-              list_buffer: "",
-              status: :connected,
-              containers: [],
-              reconnect_delay: @initial_reconnect_delay
-          }
-
-          state = sync_container_workers(state, [])
-          state = start_metrics_streaming(state)
-          state = schedule_health_check(state)
-
-          {:noreply, state}
-      end
+      handle_ssh_connected(conn_ref, %{state | conn_task_ref: nil})
     else
-      # Discard stale connection from an outdated connect attempt
       state.ssh_client.close(conn_ref)
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info(:discovery_timeout, state) do
+    state = %{state | discovery_timer: nil}
+
+    if state.list_channel_id do
+      Logger.warning("Discovery timed out on #{state.profile.id}, treating as disconnected")
+      state = close_list_channel(state)
+      handle_disconnect(state, "Container discovery timed out")
+    else
       {:noreply, state}
     end
   end
@@ -651,6 +628,7 @@ defmodule Caudata.ServerWorker do
         {:noreply, %{state | validation_channels: remaining_validations}}
 
       conn_ref == state.conn_ref && channel_id == state.list_channel_id ->
+        state = cancel_discovery_timer(state)
         containers = parse_discovery_output(state.list_buffer)
 
         Logger.info(
@@ -685,9 +663,38 @@ defmodule Caudata.ServerWorker do
 
         state =
           if state.active_container_id do
-            active_c = Enum.find(all_containers, &(&1.id == state.active_container_id))
+            # Look for active container by ID first, then by name if ID changed (e.g. rebuild across disconnect)
+            active_c =
+              Enum.find(all_containers, fn c ->
+                to_string(c.id) == state.active_container_id or
+                  (state.active_container_name != nil and to_string(c.name) == state.active_container_name)
+              end)
 
             if active_c do
+              old_id = state.active_container_id
+              new_id = to_string(active_c.id)
+
+              state =
+                if old_id != new_id do
+                  Logger.info(
+                    "Container rebuilt across disconnect: #{old_id} -> #{new_id} for #{state.active_container_name}"
+                  )
+
+                  Phoenix.PubSub.broadcast(
+                    Caudata.PubSub,
+                    "servers",
+                    {:container_rebuilt, state.profile.id, state.active_container_name, old_id, new_id}
+                  )
+
+                  if Process.whereis(Caudata.LogStore) do
+                    Caudata.LogStore.clear_logs("#{state.profile.id}/#{new_id}")
+                  end
+
+                  %{state | active_container_id: new_id}
+                else
+                  state
+                end
+
               is_stopped =
                 active_c.state in ["exited", "stopped", "dead", "paused"] or
                   String.starts_with?(active_c.status, "Exited")
@@ -830,6 +837,65 @@ defmodule Caudata.ServerWorker do
     {:noreply, state}
   end
 
+  defp handle_ssh_connected(conn_ref, state) do
+    Logger.info("SSH connection established to #{state.profile.id}, discovering containers...")
+
+    # Demonitor old connection if any
+    if state.conn_monitor_ref do
+      Process.demonitor(state.conn_monitor_ref, [:flush])
+    end
+
+    monitor_ref = if is_pid(conn_ref), do: Process.monitor(conn_ref), else: nil
+
+    # Stop/close old channels on existing container workers asynchronously so we don't block
+    Enum.each(state.container_pids, fn {_id, pid} ->
+      if Process.alive?(pid), do: Caudata.ContainerWorker.stop_streaming_async(pid)
+    end)
+
+    # Reset stale server-level monitoring channels so they re-subscribe on the new connection
+    state = close_metrics_channel(state)
+    state = close_events_channel(state)
+    state = close_container_stats_channel(state)
+
+    case state.ssh_client.open_channel(conn_ref) do
+      {:ok, list_channel_id} ->
+        wrapped_cmd = wrap_sudo(@discovery_cmd, state.profile.password)
+
+        case state.ssh_client.exec(
+               conn_ref,
+               list_channel_id,
+               wrapped_cmd
+             ) do
+          :ok ->
+            state = schedule_discovery_timeout(state)
+
+            {:noreply,
+             %{
+               state
+               | conn_ref: conn_ref,
+                 conn_monitor_ref: monitor_ref,
+                 list_channel_id: list_channel_id,
+                 list_buffer: "",
+                 reconnect_delay: @initial_reconnect_delay
+             }}
+
+          {:error, reason} ->
+            Logger.warning("Failed to exec discovery on #{state.profile.id}: #{inspect(reason)}")
+            state.ssh_client.close_channel(conn_ref, list_channel_id)
+            state = %{state | conn_ref: conn_ref, conn_monitor_ref: monitor_ref}
+            handle_disconnect(state, "Failed to exec discovery: #{inspect(reason)}")
+        end
+
+      {:error, reason} ->
+        Logger.warning(
+          "Failed to open channel for container list on #{state.profile.id}: #{inspect(reason)}"
+        )
+
+        state = %{state | conn_ref: conn_ref, conn_monitor_ref: monitor_ref}
+        handle_disconnect(state, "Failed to open discovery channel: #{inspect(reason)}")
+    end
+  end
+
   defp schedule_containers_broadcast(state) do
     if state.broadcast_timer do
       state
@@ -891,6 +957,7 @@ defmodule Caudata.ServerWorker do
     state = cancel_container_stats_timer(state)
     state = cancel_log_stream_timer(state)
     state = cancel_containers_broadcast_timer(state)
+    state = cancel_discovery_timer(state)
 
     # Demonitor connection if any
     if state.conn_monitor_ref do
@@ -965,10 +1032,11 @@ defmodule Caudata.ServerWorker do
     state = cancel_containers_broadcast_timer(state)
     state = cancel_reconnect_timer(state)
     state = cancel_health_check(state)
+    state = cancel_discovery_timer(state)
 
-    # Stop all container streams
+    # Stop all container streams asynchronously without blocking on individual worker calls
     Enum.each(state.container_pids, fn {_id, pid} ->
-      if Process.alive?(pid), do: Caudata.ContainerWorker.stop_streaming(pid)
+      if Process.alive?(pid), do: Caudata.ContainerWorker.stop_streaming_async(pid)
     end)
 
     if is_pid(state.pool) and Process.alive?(state.pool) do
@@ -990,6 +1058,8 @@ defmodule Caudata.ServerWorker do
        | status: :connecting,
          conn_ref: nil,
          conn_monitor_ref: nil,
+         conn_task_ref: nil,
+         discovery_timer: nil,
          list_channel_id: nil,
          events_channel_id: nil,
          metrics_channel_id: nil,
@@ -1488,7 +1558,7 @@ defmodule Caudata.ServerWorker do
     case Map.fetch(state.container_pids, id) do
       {:ok, pid} ->
         if Process.alive?(pid) do
-          _ = Caudata.ContainerWorker.stop_streaming(pid)
+          _ = Caudata.ContainerWorker.stop_streaming_async(pid)
           :ok
         end
 
@@ -1512,7 +1582,7 @@ defmodule Caudata.ServerWorker do
     case Map.fetch(state.container_pids, id) do
       {:ok, pid} ->
         if Process.alive?(pid) do
-          _ = Caudata.ContainerWorker.stop_streaming(pid)
+          _ = Caudata.ContainerWorker.stop_streaming_async(pid)
           :ok
         end
 
@@ -1682,6 +1752,26 @@ defmodule Caudata.ServerWorker do
         end
       end)
     end
+  end
+
+  defp schedule_discovery_timeout(state) do
+    state = cancel_discovery_timer(state)
+    timer = Process.send_after(self(), :discovery_timeout, @discovery_timeout)
+    %{state | discovery_timer: timer}
+  end
+
+  defp cancel_discovery_timer(state) do
+    if state.discovery_timer do
+      Process.cancel_timer(state.discovery_timer)
+
+      receive do
+        :discovery_timeout -> :ok
+      after
+        0 -> :ok
+      end
+    end
+
+    %{state | discovery_timer: nil}
   end
 
   defp cancel_reconnect_timer(state) do
@@ -1915,7 +2005,7 @@ defmodule Caudata.ServerWorker do
                     "Max active channels (#{max_limit}) reached. Closing oldest channel for container #{old_id} to make room."
                   )
 
-                  Caudata.ContainerWorker.stop_streaming(old_pid)
+                  Caudata.ContainerWorker.stop_streaming_async(old_pid)
               end
             end
           end

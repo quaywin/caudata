@@ -170,4 +170,44 @@ defmodule Caudata.SSH.ConnectionPoolTest do
 
     GenServer.stop(pool)
   end
+
+  test "purges broken connection from pool when released with :error status", %{profile: profile} do
+    Mock
+    |> expect(:close, fn :bad_conn -> :ok end)
+
+    {:ok, pool} =
+      ConnectionPool.start_link(
+        profile: profile,
+        ssh_client: Mock,
+        primary_conn: :bad_conn,
+        max_channels_per_conn: 5
+      )
+
+    status = ConnectionPool.get_status(pool)
+    assert status.connection_count == 1
+
+    lease_ref = make_ref()
+    # Checkout and release with status: :error
+    ConnectionPool.release_connection(pool, :bad_conn, lease_ref, :error)
+
+    # Broken connection should be purged
+    status = ConnectionPool.get_status(pool)
+    assert status.connection_count == 0
+
+    GenServer.stop(pool)
+  end
+
+  test "update_profile updates profile in pool", %{profile: profile} do
+    {:ok, pool} =
+      ConnectionPool.start_link(
+        profile: profile,
+        ssh_client: Mock,
+        max_channels_per_conn: 5
+      )
+
+    updated_profile = %{profile | host_name: "new.host.internal"}
+    assert :ok = ConnectionPool.update_profile(pool, updated_profile)
+
+    GenServer.stop(pool)
+  end
 end

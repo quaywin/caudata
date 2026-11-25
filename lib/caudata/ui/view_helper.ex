@@ -479,30 +479,34 @@ defmodule Caudata.UI.ViewHelper do
   Returns `:ok` on success or `{:error, reason}` on failure.
   """
   def copy_to_clipboard(text) when is_binary(text) do
-    case :os.type() do
-      {:unix, :darwin} ->
-        try_port("pbcopy", [], text)
+    if Application.get_env(:caudata, :env) == :test do
+      :ok
+    else
+      case :os.type() do
+        {:unix, :darwin} ->
+          try_port("pbcopy", [], text)
 
-      {:unix, :linux} ->
-        cond do
-          System.find_executable("xclip") ->
-            try_port("xclip", ["-selection", "clipboard"], text)
+        {:unix, :linux} ->
+          cond do
+            System.find_executable("xclip") ->
+              try_port("xclip", ["-selection", "clipboard"], text)
 
-          System.find_executable("xsel") ->
-            try_port("xsel", ["--clipboard", "--input"], text)
+            System.find_executable("xsel") ->
+              try_port("xsel", ["--clipboard", "--input"], text)
 
-          System.find_executable("wl-copy") ->
-            try_port("wl-copy", [], text)
+            System.find_executable("wl-copy") ->
+              try_port("wl-copy", [], text)
 
-          true ->
-            {:error, :no_clipboard_tool}
-        end
+            true ->
+              {:error, :no_clipboard_tool}
+          end
 
-      {:win32, _} ->
-        try_port("clip", [], text)
+        {:win32, _} ->
+          try_port("clip", [], text)
 
-      _ ->
-        {:error, :unsupported_os}
+        _ ->
+          {:error, :unsupported_os}
+      end
     end
   end
 

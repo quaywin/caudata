@@ -22,6 +22,7 @@ defmodule Caudata.ContainerWorker do
     :reconnecting_stream,
     :should_stream,
     :reconnect_timer,
+    :reconnect_delay,
     :stream_channel,
     :pool,
     :target_capacity,
@@ -101,6 +102,7 @@ defmodule Caudata.ContainerWorker do
       reconnecting_stream: false,
       should_stream: false,
       reconnect_timer: nil,
+      reconnect_delay: 1000,
       stream_channel: nil,
       pool: Keyword.get(opts, :pool),
       target_capacity: Keyword.get(opts, :target_capacity, 10000),
@@ -179,11 +181,17 @@ defmodule Caudata.ContainerWorker do
         else
           case start_log_streaming(state, conn_ref) do
             {:ok, new_state} ->
-              {:reply, :ok, new_state}
+              {:reply, :ok, %{new_state | reconnect_delay: 1000}}
+
+            {:error, :pool_suspended} ->
+              {:reply, {:error, :pool_suspended},
+               %{state | should_stream: false, reconnect_delay: 1000}}
 
             {:error, reason} ->
               timer = Process.send_after(self(), :reconnect_stream, 1000)
-              {:reply, {:error, reason}, %{state | reconnect_timer: timer, conn_ref: conn_ref}}
+
+              {:reply, {:error, reason},
+               %{state | reconnect_timer: timer, conn_ref: conn_ref, reconnect_delay: 2000}}
           end
         end
       end
@@ -370,13 +378,23 @@ defmodule Caudata.ContainerWorker do
         {:ok, new_state} ->
           {:noreply, new_state}
 
-        {:error, reason} ->
-          Logger.warning(
-            "Failed to auto-reconnect log stream for #{state.container_id}: #{inspect(reason)}. Retrying in 2000ms..."
+        {:error, :pool_suspended} ->
+          Logger.info(
+            "Log stream reconnect paused for #{state.container_id}: connection pool suspended"
           )
 
-          timer = Process.send_after(self(), :reconnect_stream, 2000)
-          {:noreply, %{state | reconnect_timer: timer}}
+          {:noreply, %{state | should_stream: false, reconnect_delay: 1000}}
+
+        {:error, reason} ->
+          delay = state.reconnect_delay
+          next_delay = min(delay * 2, 15_000)
+
+          Logger.warning(
+            "Failed to auto-reconnect log stream for #{state.container_id}: #{inspect(reason)}. Retrying in #{delay}ms..."
+          )
+
+          timer = Process.send_after(self(), :reconnect_stream, delay)
+          {:noreply, %{state | reconnect_timer: timer, reconnect_delay: next_delay}}
       end
     else
       {:noreply, state}
@@ -436,12 +454,26 @@ defmodule Caudata.ContainerWorker do
       Caudata.SSH.StreamChannel.stop(state.stream_channel)
     end
 
+    stable_duration_ms =
+      if state.channel_opened_at do
+        System.convert_time_unit(
+          System.monotonic_time() - state.channel_opened_at,
+          :native,
+          :millisecond
+        )
+      else
+        0
+      end
+
+    next_reconnect_delay = if stable_duration_ms >= 10_000, do: 1000, else: state.reconnect_delay
+
     state = %{
       state
       | stream_channel: nil,
         channel_id: nil,
         channel_opened_at: nil,
-        reconnecting_stream: false
+        reconnecting_stream: false,
+        reconnect_delay: next_reconnect_delay
     }
 
     can_stream? =

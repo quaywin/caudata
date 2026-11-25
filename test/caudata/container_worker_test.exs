@@ -843,4 +843,42 @@ defmodule Caudata.ContainerWorkerTest do
     assert :ok = ContainerWorker.stop_streaming(pid)
     stop_supervised(ContainerWorker)
   end
+
+  test "stops reconnect attempts immediately when ConnectionPool is suspended" do
+    container = %{
+      id: "container_suspended",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 1 hour",
+      state: "running"
+    }
+
+    profile =
+      Caudata.Profile.new(%{
+        host_pattern: "cw-suspended-pool",
+        host_name: "10.0.0.102",
+        user: "root",
+        port: 22
+      })
+
+    {:ok, pool} =
+      Caudata.SSH.ConnectionPool.start_link(
+        profile: profile,
+        ssh_client: Mock,
+        max_channels_per_conn: 5
+      )
+
+    assert :ok = Caudata.SSH.ConnectionPool.suspend(pool)
+
+    opts = [ssh_client: Mock, pool: pool]
+    {:ok, pid} = start_supervised({ContainerWorker, {"cw-suspended-pool", container, opts}})
+
+    assert {:error, :pool_suspended} = ContainerWorker.start_streaming(pid, nil)
+    state = :sys.get_state(pid)
+    assert state.should_stream == false
+    assert state.reconnect_timer == nil
+
+    stop_supervised(ContainerWorker)
+    GenServer.stop(pool)
+  end
 end

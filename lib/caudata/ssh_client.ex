@@ -10,6 +10,37 @@ defmodule Caudata.SSHClient do
   @callback close_channel(term(), term()) :: :ok
   @callback close(term()) :: :ok
 
+  @doc """
+  Probes an SSH connection by opening and immediately closing a temporary session channel
+  with a bounded timeout. Used for liveness checks when SSH-level `:alive` is unavailable.
+  """
+  def probe_connection(ssh_client, conn_ref, timeout_ms \\ 5_000) do
+    task =
+      Task.async(fn ->
+        try do
+          case ssh_client.open_channel(conn_ref) do
+            {:ok, temp_channel} ->
+              ssh_client.close_channel(conn_ref, temp_channel)
+              :ok
+
+            {:error, reason} ->
+              {:error, reason}
+
+            other ->
+              {:error, other}
+          end
+        catch
+          :exit, reason -> {:error, {:exit, reason}}
+          kind, reason -> {:error, {kind, reason}}
+        end
+      end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      nil -> {:error, :health_check_timeout}
+    end
+  end
+
   defmodule Native do
     @behaviour Caudata.SSHClient
     require Logger

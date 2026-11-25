@@ -11,11 +11,14 @@ defmodule Caudata.SSH.ConnectionPool do
   require Logger
 
   @default_max_channels_per_conn 8
+  @default_health_check_interval 30_000
 
   defstruct [
     :profile,
     :ssh_client,
     :max_channels_per_conn,
+    :health_check_interval,
+    :health_check_timer,
     # %{conn_ref => %{active_channels: integer(), channels: MapSet.t(), monitor_ref: reference() | nil, is_primary: boolean()}}
     connections: %{},
     # List of conn_refs in order of creation
@@ -23,7 +26,11 @@ defmodule Caudata.SSH.ConnectionPool do
     # %{channel_key => {conn_ref, channel_id, caller_pid, caller_monitor_ref}}
     active_leases: %{},
     # %{caller_monitor_ref => {caller_pid, [channel_key]}}
-    caller_monitors: %{}
+    caller_monitors: %{},
+    # When true, pool rejects new checkouts/channels (e.g. while ServerWorker is disconnected)
+    suspended: false,
+    # Async connect state: nil or %{task_ref: ref, waiters: [{from, :checkout | :acquire, caller_pid}]}
+    pending_connect: nil
   ]
 
   # Client API
@@ -105,6 +112,20 @@ defmodule Caudata.SSH.ConnectionPool do
     GenServer.call(pool, :close_all)
   end
 
+  @doc """
+  Suspends the pool, closing all connections and rejecting new requests until `resume/1` is called.
+  """
+  def suspend(pool) do
+    GenServer.call(pool, :suspend)
+  end
+
+  @doc """
+  Resumes the pool so new checkouts/channels are allowed again.
+  """
+  def resume(pool) do
+    GenServer.call(pool, :resume)
+  end
+
   # Server Callbacks
 
   @impl true
@@ -113,10 +134,15 @@ defmodule Caudata.SSH.ConnectionPool do
     ssh_client = Keyword.get(opts, :ssh_client, Caudata.SSHClient.Native)
     max_channels = Keyword.get(opts, :max_channels_per_conn, @default_max_channels_per_conn)
 
+    health_check_interval =
+      Keyword.get(opts, :health_check_interval, default_health_check_interval(ssh_client))
+
     state = %__MODULE__{
       profile: profile,
       ssh_client: ssh_client,
       max_channels_per_conn: max_channels,
+      health_check_interval: health_check_interval,
+      health_check_timer: nil,
       connections: %{},
       conn_order: [],
       active_leases: %{},
@@ -129,19 +155,24 @@ defmodule Caudata.SSH.ConnectionPool do
         conn_ref -> do_add_primary(state, conn_ref)
       end
 
+    state = schedule_health_check(state)
+
     {:ok, state}
   end
 
   @impl true
-  def handle_call({:checkout_connection, caller_pid}, _from, state) do
-    case find_or_create_connection(state) do
-      {:ok, conn_ref, state} ->
-        lease_ref = make_ref()
-        state = register_lease(state, conn_ref, lease_ref, caller_pid)
-        {:reply, {:ok, conn_ref, lease_ref}, state}
+  def handle_call({:checkout_connection, caller_pid}, from, state) do
+    if state.suspended do
+      {:reply, {:error, :pool_suspended}, state}
+    else
+      case find_available_connection(state) do
+        nil ->
+          {:noreply, enqueue_connect(state, [{from, :checkout, caller_pid}])}
 
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+        conn_ref ->
+          {reply, state} = fulfill_request(state, conn_ref, :checkout, caller_pid)
+          {:reply, reply, state}
+      end
     end
   end
 
@@ -191,38 +222,18 @@ defmodule Caudata.SSH.ConnectionPool do
   end
 
   @impl true
-  def handle_call({:acquire_channel, caller_pid}, _from, state) do
-    case find_or_create_connection(state) do
-      {:ok, conn_ref, state} ->
-        case state.ssh_client.open_channel(conn_ref) do
-          {:ok, channel_id} ->
-            lease_ref = make_ref()
-            state = register_lease(state, conn_ref, lease_ref, caller_pid)
-            state = do_attach_channel(state, conn_ref, lease_ref, channel_id)
-            {:reply, {:ok, conn_ref, channel_id}, state}
+  def handle_call({:acquire_channel, caller_pid}, from, state) do
+    if state.suspended do
+      {:reply, {:error, :pool_suspended}, state}
+    else
+      case find_available_connection(state) do
+        nil ->
+          {:noreply, enqueue_connect(state, [{from, :acquire, caller_pid}])}
 
-          {:error, reason} ->
-            Logger.warning(
-              "Failed to open channel on SSH connection #{inspect(conn_ref)}: #{inspect(reason)}"
-            )
-
-            conn_info = Map.get(state.connections, conn_ref)
-
-            if conn_info && conn_info.monitor_ref,
-              do: Process.demonitor(conn_info.monitor_ref, [:flush])
-
-            try do
-              state.ssh_client.close(conn_ref)
-            catch
-              _, _ -> :ok
-            end
-
-            state = handle_connection_down(state, conn_ref)
-            {:reply, {:error, reason}, state}
-        end
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+        conn_ref ->
+          {reply, state} = fulfill_request(state, conn_ref, :acquire, caller_pid)
+          {:reply, reply, state}
+      end
     end
   end
 
@@ -254,45 +265,115 @@ defmodule Caudata.SSH.ConnectionPool do
 
   @impl true
   def handle_call(:close_all, _from, state) do
-    # Demonitor all callers
-    Enum.each(state.caller_monitors, fn {mref, _} ->
-      Process.demonitor(mref, [:flush])
-    end)
+    new_state =
+      state
+      |> do_close_all(:pool_closed)
+      |> schedule_health_check()
 
-    # Demonitor all connections
-    Enum.each(state.connections, fn {_conn_ref, info} ->
-      if info.monitor_ref, do: Process.demonitor(info.monitor_ref, [:flush])
-    end)
+    {:reply, :ok, new_state}
+  end
 
-    # Close all channels
-    Enum.each(state.active_leases, fn {_key, lease} ->
-      if lease.channel_id do
+  @impl true
+  def handle_call(:suspend, _from, state) do
+    state = cancel_health_check(state)
+    new_state = do_close_all(state, :pool_suspended)
+    {:reply, :ok, %{new_state | suspended: true}}
+  end
+
+  @impl true
+  def handle_call(:resume, _from, state) do
+    state = %{state | suspended: false}
+    state = schedule_health_check(state)
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_info(:health_check, state) do
+    if not state.suspended and map_size(state.connections) > 0 do
+      pool_pid = self()
+      ssh_client = state.ssh_client
+
+      Enum.each(state.conn_order, fn conn_ref ->
+        Task.start(fn ->
+          res = Caudata.SSHClient.probe_connection(ssh_client, conn_ref)
+          send(pool_pid, {:pool_health_check_result, conn_ref, res})
+        end)
+      end)
+    end
+
+    {:noreply, schedule_health_check(state)}
+  end
+
+  @impl true
+  def handle_info({:pool_health_check_result, _conn_ref, :ok}, state) do
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:pool_health_check_result, conn_ref, {:error, reason}}, state) do
+    case Map.get(state.connections, conn_ref) do
+      nil ->
+        {:noreply, state}
+
+      conn_info ->
+        Logger.warning(
+          "Health check failed for pooled SSH connection #{inspect(conn_ref)} (#{state.profile.id}): #{inspect(reason)}, purging"
+        )
+
+        if conn_info.monitor_ref, do: Process.demonitor(conn_info.monitor_ref, [:flush])
+
         try do
-          state.ssh_client.close_channel(lease.conn_ref, lease.channel_id)
+          state.ssh_client.close(conn_ref)
         catch
           _, _ -> :ok
         end
-      end
-    end)
 
-    # Close all connections
-    Enum.each(state.connections, fn {conn_ref, _info} ->
-      try do
-        state.ssh_client.close(conn_ref)
-      catch
-        _, _ -> :ok
-      end
-    end)
+        {:noreply, handle_connection_down(state, conn_ref)}
+    end
+  end
 
-    new_state = %{
-      state
-      | connections: %{},
-        conn_order: [],
-        active_leases: %{},
-        caller_monitors: %{}
-    }
+  @impl true
+  def handle_info({:pool_connect_result, task_ref, res}, state) do
+    case state.pending_connect do
+      %{task_ref: ^task_ref, waiters: waiters} ->
+        state = %{state | pending_connect: nil}
 
-    {:reply, :ok, new_state}
+        case res do
+          {:ok, conn_ref} ->
+            state = register_connection(state, conn_ref)
+            state = serve_waiters(state, waiters)
+            {:noreply, state}
+
+          {:error, reason} ->
+            Logger.error(
+              "Failed to establish new SSH connection in pool for #{state.profile.id}: #{inspect(reason)}"
+            )
+
+            {remaining, state} = drain_available(state, waiters)
+
+            Enum.each(remaining, fn {from, _op, _caller_pid} ->
+              GenServer.reply(from, {:error, reason})
+            end)
+
+            {:noreply, state}
+        end
+
+      _ ->
+        # Stale connect completed after suspend/close_all — close immediately so nothing leaks
+        case res do
+          {:ok, conn_ref} ->
+            try do
+              state.ssh_client.close(conn_ref)
+            catch
+              _, _ -> :ok
+            end
+
+          _ ->
+            :ok
+        end
+
+        {:noreply, state}
+    end
   end
 
   # Handle caller process crash
@@ -334,25 +415,7 @@ defmodule Caudata.SSH.ConnectionPool do
 
   @impl true
   def terminate(_reason, state) do
-    # Demonitor all callers
-    Enum.each(state.caller_monitors, fn {mref, _} ->
-      Process.demonitor(mref, [:flush])
-    end)
-
-    # Demonitor all connections
-    Enum.each(state.connections, fn {_conn_ref, info} ->
-      if info.monitor_ref, do: Process.demonitor(info.monitor_ref, [:flush])
-    end)
-
-    # Cleanup all connections on pool termination
-    Enum.each(state.connections, fn {conn_ref, _info} ->
-      try do
-        state.ssh_client.close(conn_ref)
-      catch
-        _, _ -> :ok
-      end
-    end)
-
+    _ = do_close_all(state, :pool_closed)
     :ok
   end
 
@@ -379,68 +442,217 @@ defmodule Caudata.SSH.ConnectionPool do
     end
   end
 
-  defp find_or_create_connection(state) do
-    # Try to find an existing connection with available capacity
-    available =
-      Enum.find(state.conn_order, fn conn_ref ->
-        case Map.get(state.connections, conn_ref) do
-          %{active_channels: count} -> count < state.max_channels_per_conn
-          _ -> false
-        end
-      end)
-
-    if available do
-      {:ok, available, state}
-    else
-      # All current connections are full or none exist, establish a new connection
-      Logger.info(
-        "All connections in pool full for #{state.profile.id} (capacity: #{state.max_channels_per_conn} ch/conn). Opening new connection..."
-      )
-
-      case connect_new(state) do
-        {:ok, new_conn_ref, state} ->
-          {:ok, new_conn_ref, state}
-
-        {:error, reason} ->
-          {:error, reason}
+  defp find_available_connection(state) do
+    Enum.find(state.conn_order, fn conn_ref ->
+      case Map.get(state.connections, conn_ref) do
+        %{active_channels: count} -> count < state.max_channels_per_conn
+        _ -> false
       end
+    end)
+  end
+
+  defp fulfill_request(state, conn_ref, :checkout, caller_pid) do
+    lease_ref = make_ref()
+    state = register_lease(state, conn_ref, lease_ref, caller_pid)
+    {{:ok, conn_ref, lease_ref}, state}
+  end
+
+  defp fulfill_request(state, conn_ref, :acquire, caller_pid) do
+    case state.ssh_client.open_channel(conn_ref) do
+      {:ok, channel_id} ->
+        lease_ref = make_ref()
+        state = register_lease(state, conn_ref, lease_ref, caller_pid)
+        state = do_attach_channel(state, conn_ref, lease_ref, channel_id)
+        {{:ok, conn_ref, channel_id}, state}
+
+      {:error, reason} ->
+        Logger.warning(
+          "Failed to open channel on SSH connection #{inspect(conn_ref)}: #{inspect(reason)}"
+        )
+
+        conn_info = Map.get(state.connections, conn_ref)
+
+        if conn_info && conn_info.monitor_ref,
+          do: Process.demonitor(conn_info.monitor_ref, [:flush])
+
+        try do
+          state.ssh_client.close(conn_ref)
+        catch
+          _, _ -> :ok
+        end
+
+        state = handle_connection_down(state, conn_ref)
+        {{:error, reason}, state}
     end
   end
 
-  defp connect_new(state) do
-    connect_opts = Caudata.Profile.to_connect_opts(state.profile)
+  defp enqueue_connect(state, new_waiters) do
+    case state.pending_connect do
+      %{waiters: existing} = pending ->
+        %{state | pending_connect: %{pending | waiters: existing ++ new_waiters}}
 
-    case state.ssh_client.connect(state.profile.host_name, state.profile.port, connect_opts) do
-      {:ok, conn_ref} ->
-        mref = if is_pid(conn_ref), do: Process.monitor(conn_ref), else: nil
-        is_first = map_size(state.connections) == 0
-
-        conn_info = %{
-          active_channels: 0,
-          channels: MapSet.new(),
-          monitor_ref: mref,
-          is_primary: is_first
-        }
-
-        new_state = %{
-          state
-          | connections: Map.put(state.connections, conn_ref, conn_info),
-            conn_order: state.conn_order ++ [conn_ref]
-        }
-
+      nil ->
         Logger.info(
-          "Successfully added new SSH connection #{inspect(conn_ref)} to pool for #{state.profile.id} (total: #{map_size(new_state.connections)})"
+          "All connections in pool full for #{state.profile.id} (capacity: #{state.max_channels_per_conn} ch/conn). Opening new connection..."
         )
 
-        {:ok, conn_ref, new_state}
+        pool_pid = self()
+        task_ref = make_ref()
+        ssh_client = state.ssh_client
+        host_name = state.profile.host_name
+        port = state.profile.port
+        connect_opts = Caudata.Profile.to_connect_opts(state.profile)
 
-      {:error, reason} ->
-        Logger.error(
-          "Failed to establish new SSH connection in pool for #{state.profile.id}: #{inspect(reason)}"
-        )
+        Task.start(fn ->
+          res =
+            try do
+              ssh_client.connect(host_name, port, connect_opts)
+            catch
+              kind, reason -> {:error, {kind, reason}}
+            end
 
-        {:error, reason}
+          if Process.alive?(pool_pid) do
+            send(pool_pid, {:pool_connect_result, task_ref, res})
+          else
+            case res do
+              {:ok, conn_ref} ->
+                try do
+                  ssh_client.close(conn_ref)
+                catch
+                  _, _ -> :ok
+                end
+
+              _ ->
+                :ok
+            end
+          end
+        end)
+
+        %{state | pending_connect: %{task_ref: task_ref, waiters: new_waiters}}
     end
+  end
+
+  defp register_connection(state, conn_ref) do
+    mref = if is_pid(conn_ref), do: Process.monitor(conn_ref), else: nil
+    is_first = map_size(state.connections) == 0
+
+    conn_info = %{
+      active_channels: 0,
+      channels: MapSet.new(),
+      monitor_ref: mref,
+      is_primary: is_first
+    }
+
+    new_state = %{
+      state
+      | connections: Map.put(state.connections, conn_ref, conn_info),
+        conn_order: state.conn_order ++ [conn_ref]
+    }
+
+    Logger.info(
+      "Successfully added new SSH connection #{inspect(conn_ref)} to pool for #{state.profile.id} (total: #{map_size(new_state.connections)})"
+    )
+
+    new_state
+  end
+
+  defp serve_waiters(state, waiters) do
+    case drain_available(state, waiters) do
+      {[], state} -> state
+      {remaining, state} -> enqueue_connect(state, remaining)
+    end
+  end
+
+  defp drain_available(state, []), do: {[], state}
+
+  defp drain_available(state, [{from, op, caller_pid} = waiter | rest]) do
+    case find_available_connection(state) do
+      nil ->
+        {[waiter | rest], state}
+
+      conn_ref ->
+        {reply, state} = fulfill_request(state, conn_ref, op, caller_pid)
+        GenServer.reply(from, reply)
+        drain_available(state, rest)
+    end
+  end
+
+  defp default_health_check_interval(Caudata.SSHClient.Native) do
+    if Application.get_env(:caudata, :env) != :test do
+      @default_health_check_interval
+    else
+      nil
+    end
+  end
+
+  defp default_health_check_interval(_ssh_client), do: nil
+
+  defp schedule_health_check(%{health_check_interval: interval, suspended: false} = state)
+       when is_integer(interval) and interval > 0 do
+    state = cancel_health_check(state)
+    timer = Process.send_after(self(), :health_check, interval)
+    %{state | health_check_timer: timer}
+  end
+
+  defp schedule_health_check(state), do: cancel_health_check(state)
+
+  defp cancel_health_check(%{health_check_timer: nil} = state), do: state
+
+  defp cancel_health_check(%{health_check_timer: timer} = state) do
+    Process.cancel_timer(timer)
+
+    receive do
+      :health_check -> :ok
+    after
+      0 -> :ok
+    end
+
+    %{state | health_check_timer: nil}
+  end
+
+  defp do_close_all(state, reject_reason) do
+    state = cancel_health_check(state)
+
+    if state.pending_connect do
+      Enum.each(state.pending_connect.waiters, fn {from, _op, _caller_pid} ->
+        GenServer.reply(from, {:error, reject_reason})
+      end)
+    end
+
+    Enum.each(state.caller_monitors, fn {mref, _} ->
+      Process.demonitor(mref, [:flush])
+    end)
+
+    Enum.each(state.connections, fn {_conn_ref, info} ->
+      if info.monitor_ref, do: Process.demonitor(info.monitor_ref, [:flush])
+    end)
+
+    Enum.each(state.active_leases, fn {_key, lease} ->
+      if lease.channel_id do
+        try do
+          state.ssh_client.close_channel(lease.conn_ref, lease.channel_id)
+        catch
+          _, _ -> :ok
+        end
+      end
+    end)
+
+    Enum.each(state.connections, fn {conn_ref, _info} ->
+      try do
+        state.ssh_client.close(conn_ref)
+      catch
+        _, _ -> :ok
+      end
+    end)
+
+    %{
+      state
+      | connections: %{},
+        conn_order: [],
+        active_leases: %{},
+        caller_monitors: %{},
+        pending_connect: nil
+    }
   end
 
   defp register_lease(state, conn_ref, lease_ref, caller_pid) do

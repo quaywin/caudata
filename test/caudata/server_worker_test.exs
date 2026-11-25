@@ -1973,4 +1973,109 @@ defmodule Caudata.ServerWorkerTest do
 
     stop_supervised(ServerWorker)
   end
+
+  test "refresh does not spawn duplicate connect tasks while connect is in flight" do
+    profile =
+      Profile.new(%{
+        host_pattern: "dedup-connect-server",
+        host_name: "10.0.0.83",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, 1, fn "10.0.0.83", 22, _ ->
+      send(test_pid, :connect_started)
+      Process.sleep(100)
+      {:ok, :dedup_conn}
+    end)
+    |> stub(:open_channel, fn _conn -> {:ok, :dummy_chan} end)
+    |> stub(:exec, fn _conn, _chan, _cmd -> :ok end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: false}})
+
+    assert_receive :connect_started, 1000
+    # Refresh while conn_task_ref is still in flight should be ignored
+    send(worker_pid, :refresh)
+    Process.sleep(150)
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "stops auto-reconnect immediately on permanent config error and resumes after update_profile" do
+    profile =
+      Profile.new(%{
+        host_pattern: "perm-error-server",
+        host_name: "10.0.0.84",
+        user: nil,
+        port: 22
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, 1, fn "10.0.0.84", 22, _ ->
+      send(test_pid, :missing_user_failed)
+      {:error, :missing_user}
+    end)
+    |> expect(:connect, 1, fn "10.0.0.84", 22, _ ->
+      send(test_pid, :reconnected_after_fix)
+      {:ok, :fixed_conn}
+    end)
+    |> stub(:open_channel, fn _conn -> {:ok, :dummy_chan} end)
+    |> stub(:exec, fn _conn, _chan, _cmd -> :ok end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: false}})
+
+    assert_receive :missing_user_failed, 1000
+    assert_receive {:status_updated, "perm-error-server", :disconnected}, 1000
+    assert ServerWorker.get_status(worker_pid) == :disconnected
+
+    # Fixing user via update_profile transitions back to connecting and succeeds
+    GenServer.cast(worker_pid, {:update_profile, %{profile | user: "root"}})
+    assert_receive :reconnected_after_fix, 1000
+
+    stop_supervised(ServerWorker)
+  end
+
+  test "pauses auto-reconnect after consecutive authentication failures to prevent lockout" do
+    profile =
+      Profile.new(%{
+        host_pattern: "auth-fail-server",
+        host_name: "10.0.0.87",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, 2, fn "10.0.0.87", 22, _ ->
+      send(test_pid, :auth_attempt)
+      {:error, ~c"Unable to connect using the available authentication methods"}
+    end)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "servers")
+
+    {:ok, worker_pid} =
+      start_supervised({ServerWorker, {profile, ssh_client: Mock, enable_events: false}})
+
+    assert_receive :auth_attempt, 1000
+    assert_receive {:status_updated, "auth-fail-server", :connecting}, 1000
+    assert_receive :auth_attempt, 2000
+    assert_receive {:status_updated, "auth-fail-server", :disconnected}, 1000
+    assert ServerWorker.get_status(worker_pid) == :disconnected
+
+    stop_supervised(ServerWorker)
+  end
 end

@@ -5,6 +5,7 @@ defmodule Caudata.ServerWorker do
 
   @max_reconnect_delay 10_000
   @initial_reconnect_delay 1000
+  @max_auth_failures 2
   @max_active_streams 5
   @health_check_interval 15_000
   @activity_timeout 15_000
@@ -62,7 +63,8 @@ defmodule Caudata.ServerWorker do
     max_active_streams: nil,
     container_net_samples: %{},
     discovery_timer: nil,
-    conn_task_ref: nil
+    conn_task_ref: nil,
+    auth_failures: 0
   ]
 
   # Client API
@@ -358,8 +360,16 @@ defmodule Caudata.ServerWorker do
             Caudata.SSH.ConnectionPool.close_all(new_state.pool)
           end
 
+          broadcast_status(new_state.profile.id, :connecting)
           send(self(), :connect)
-          {:noreply, %{new_state | reconnect_delay: @initial_reconnect_delay}}
+
+          {:noreply,
+           %{
+             new_state
+             | status: :connecting,
+               auth_failures: 0,
+               reconnect_delay: @initial_reconnect_delay
+           }}
         end
 
       custom_logs_changed and new_state.conn_ref ->
@@ -408,9 +418,21 @@ defmodule Caudata.ServerWorker do
           handle_disconnect(state, "Failed to open channel on refresh: #{inspect(reason)}")
       end
     else
-      state = cancel_reconnect_timer(state)
-      send(self(), :connect)
-      {:noreply, %{state | reconnect_delay: @initial_reconnect_delay}}
+      if is_nil(state.conn_task_ref) do
+        state = cancel_reconnect_timer(state)
+        broadcast_status(state.profile.id, :connecting)
+        send(self(), :connect)
+
+        {:noreply,
+         %{
+           state
+           | status: :connecting,
+             auth_failures: 0,
+             reconnect_delay: @initial_reconnect_delay
+         }}
+      else
+        {:noreply, state}
+      end
     end
   end
 
@@ -452,7 +474,7 @@ defmodule Caudata.ServerWorker do
   def handle_info({:ssh_connect_failed, task_ref, reason}, state) do
     if state.conn_task_ref == task_ref and is_nil(state.conn_ref) do
       Logger.info("Failed to establish SSH connection to #{state.profile.id}: #{inspect(reason)}")
-      handle_disconnect(%{state | conn_task_ref: nil}, "Connection failed: #{inspect(reason)}")
+      handle_connect_failure(%{state | conn_task_ref: nil}, reason)
     else
       Logger.debug("Ignoring stale ssh_connect_failed for #{state.profile.id}")
       {:noreply, state}
@@ -463,7 +485,7 @@ defmodule Caudata.ServerWorker do
   def handle_info({:ssh_connect_failed, reason}, state) do
     if is_nil(state.conn_ref) do
       Logger.info("Failed to establish SSH connection to #{state.profile.id}: #{inspect(reason)}")
-      handle_disconnect(%{state | conn_task_ref: nil}, "Connection failed: #{inspect(reason)}")
+      handle_connect_failure(%{state | conn_task_ref: nil}, reason)
     else
       {:noreply, state}
     end
@@ -854,6 +876,10 @@ defmodule Caudata.ServerWorker do
       if Process.alive?(pid), do: Caudata.ContainerWorker.stop_streaming_async(pid)
     end)
 
+    if is_pid(state.pool) and Process.alive?(state.pool) do
+      Caudata.SSH.ConnectionPool.resume(state.pool)
+    end
+
     # Reset stale server-level monitoring channels so they re-subscribe on the new connection
     state = close_metrics_channel(state)
     state = close_events_channel(state)
@@ -878,7 +904,8 @@ defmodule Caudata.ServerWorker do
                  conn_monitor_ref: monitor_ref,
                  list_channel_id: list_channel_id,
                  list_buffer: "",
-                 reconnect_delay: @initial_reconnect_delay
+                 reconnect_delay: @initial_reconnect_delay,
+                 auth_failures: 0
              }}
 
           {:error, reason} ->
@@ -909,39 +936,13 @@ defmodule Caudata.ServerWorker do
 
   defp async_health_check(server_pid, ssh_client, conn_ref) do
     Task.start(fn ->
-      task =
-        Task.async(fn ->
-          try do
-            case ssh_client.open_channel(conn_ref) do
-              {:ok, temp_channel} ->
-                ssh_client.close_channel(conn_ref, temp_channel)
-                :ok
-
-              {:error, reason} ->
-                {:error, reason}
-
-              other ->
-                {:error, other}
-            end
-          catch
-            :exit, reason -> {:error, {:exit, reason}}
-            kind, reason -> {:error, {kind, reason}}
-          end
-        end)
-
-      res =
-        case Task.yield(task, 5000) || Task.shutdown(task, :brutal_kill) do
-          {:ok, result} -> result
-          nil -> {:error, :health_check_timeout}
-        end
-
+      res = Caudata.SSHClient.probe_connection(ssh_client, conn_ref)
       send(server_pid, {:health_check_result, conn_ref, res})
     end)
   end
 
   defp schedule_health_check_reschedule(state) do
-    timer = Process.send_after(self(), :health_check, @health_check_interval)
-    {:noreply, %{state | health_check_timer: timer}}
+    {:noreply, schedule_health_check(state)}
   end
 
   @impl true
@@ -1008,6 +1009,78 @@ defmodule Caudata.ServerWorker do
 
   # Helpers
 
+  defp handle_connect_failure(state, reason) do
+    case classify_connect_failure(reason) do
+      :permanent ->
+        Logger.warning(
+          "Permanent SSH configuration error for #{state.profile.id}: #{inspect(reason)}. Pausing auto-reconnect."
+        )
+
+        stop_auto_reconnect(state)
+
+      :auth ->
+        auth_failures = state.auth_failures + 1
+
+        if auth_failures >= @max_auth_failures do
+          Logger.warning(
+            "Authentication failed #{auth_failures} times for #{state.profile.id}: #{inspect(reason)}. Pausing auto-reconnect to avoid lockout."
+          )
+
+          stop_auto_reconnect(%{state | auth_failures: auth_failures})
+        else
+          handle_disconnect(
+            %{state | auth_failures: auth_failures},
+            "Connection failed: #{inspect(reason)}"
+          )
+        end
+
+      :transient ->
+        handle_disconnect(%{state | auth_failures: 0}, "Connection failed: #{inspect(reason)}")
+    end
+  end
+
+  defp classify_connect_failure(:missing_user), do: :permanent
+  defp classify_connect_failure({:options, _}), do: :permanent
+  defp classify_connect_failure(:authentication_failed), do: :auth
+  defp classify_connect_failure({:authentication_failed, _}), do: :auth
+
+  defp classify_connect_failure(reason) when is_binary(reason) or is_list(reason) do
+    msg = reason |> to_string() |> String.downcase()
+
+    if String.contains?(msg, "unable to connect using the available authentication methods") or
+         String.contains?(msg, "authentication failed") do
+      :auth
+    else
+      :transient
+    end
+  rescue
+    _ -> :transient
+  end
+
+  defp classify_connect_failure(_), do: :transient
+
+  defp stop_auto_reconnect(state) do
+    state = cancel_reconnect_timer(state)
+    state = cancel_health_check(state)
+    state = cancel_discovery_timer(state)
+
+    if is_pid(state.pool) and Process.alive?(state.pool) do
+      Caudata.SSH.ConnectionPool.suspend(state.pool)
+    end
+
+    broadcast_status(state.profile.id, :disconnected)
+
+    {:noreply,
+     %{
+       state
+       | status: :disconnected,
+         conn_ref: nil,
+         conn_monitor_ref: nil,
+         conn_task_ref: nil,
+         reconnect_delay: @initial_reconnect_delay
+     }}
+  end
+
   defp handle_disconnect(state, reason) do
     # Reply to any pending validation channels
     Enum.each(state.validation_channels || %{}, fn
@@ -1042,17 +1115,19 @@ defmodule Caudata.ServerWorker do
     end)
 
     if is_pid(state.pool) and Process.alive?(state.pool) do
-      Caudata.SSH.ConnectionPool.close_all(state.pool)
+      Caudata.SSH.ConnectionPool.suspend(state.pool)
     end
 
     broadcast_status(state.profile.id, :connecting)
 
-    # Schedule reconnect with exponential backoff
+    # Schedule reconnect with exponential backoff + jitter to avoid synchronized reconnect storms
     delay = state.reconnect_delay
+    jitter = :rand.uniform(max(1, div(delay, 4)))
+    actual_delay = delay + jitter
     next_delay = min(delay * 2, @max_reconnect_delay)
 
-    Logger.info("Reconnecting to #{state.profile.id} in #{delay}ms (reason: #{reason})")
-    timer = Process.send_after(self(), :reconnect, delay)
+    Logger.info("Reconnecting to #{state.profile.id} in #{actual_delay}ms (reason: #{reason})")
+    timer = Process.send_after(self(), :reconnect, actual_delay)
 
     {:noreply,
      %{

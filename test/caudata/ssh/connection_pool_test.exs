@@ -210,4 +210,158 @@ defmodule Caudata.SSH.ConnectionPoolTest do
 
     GenServer.stop(pool)
   end
+
+  test "suspend and resume reject new checkouts while disconnected and close late connections", %{
+    profile: profile
+  } do
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, fn "10.0.0.100", 22, _ ->
+      send(test_pid, :connect_started)
+
+      receive do
+        :finish_connect -> {:ok, :late_conn}
+      after
+        200 -> {:ok, :late_conn}
+      end
+    end)
+    |> expect(:close, fn :late_conn ->
+      send(test_pid, :closed_late_conn)
+      :ok
+    end)
+    |> expect(:connect, fn "10.0.0.100", 22, _ ->
+      {:ok, :resumed_conn}
+    end)
+    |> expect(:open_channel, fn :resumed_conn -> {:ok, :resumed_chan} end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    {:ok, pool} =
+      ConnectionPool.start_link(
+        profile: profile,
+        ssh_client: Mock,
+        max_channels_per_conn: 5
+      )
+
+    # Start async checkout that blocks in connect
+    waiter = Task.async(fn -> ConnectionPool.checkout_connection(pool) end)
+    assert_receive :connect_started, 500
+
+    # Pool remains responsive (non-blocking) while connect is in flight!
+    status = ConnectionPool.get_status(pool)
+    assert status.connection_count == 0
+
+    # Suspending rejects the pending waiter immediately and marks pool suspended
+    assert :ok = ConnectionPool.suspend(pool)
+    assert {:error, :pool_suspended} = Task.await(waiter, 500)
+    assert {:error, :pool_suspended} = ConnectionPool.checkout_connection(pool)
+
+    # Late connection finishing after suspend is closed automatically
+    assert_receive :closed_late_conn, 500
+
+    # Resuming allows new acquisitions again
+    assert :ok = ConnectionPool.resume(pool)
+    assert {:ok, :resumed_conn, :resumed_chan} = ConnectionPool.acquire_channel(pool)
+
+    GenServer.stop(pool)
+  end
+
+  test "concurrent checkouts share a single pending connect up to max_channels_per_conn", %{
+    profile: profile
+  } do
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, 1, fn "10.0.0.100", 22, _ ->
+      send(test_pid, :single_connect)
+      Process.sleep(60)
+      {:ok, :shared_conn}
+    end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    {:ok, pool} =
+      ConnectionPool.start_link(
+        profile: profile,
+        ssh_client: Mock,
+        max_channels_per_conn: 3
+      )
+
+    tasks =
+      Enum.map(1..3, fn _ ->
+        Task.async(fn -> ConnectionPool.checkout_connection(pool, test_pid) end)
+      end)
+
+    results = Enum.map(tasks, &Task.await(&1, 1000))
+    assert Enum.all?(results, &match?({:ok, :shared_conn, _lease}, &1))
+    assert_received :single_connect
+
+    status = ConnectionPool.get_status(pool)
+    assert status.connection_count == 1
+    assert [%{conn_ref: :shared_conn, active_channels: 3}] = status.connections
+
+    Enum.each(results, fn {:ok, conn_ref, lease_ref} ->
+      assert :ok = ConnectionPool.release_connection(pool, conn_ref, lease_ref)
+    end)
+
+    GenServer.stop(pool)
+  end
+
+  test "closes connection opened by in-flight task if pool terminates before connect finishes", %{
+    profile: profile
+  } do
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, fn "10.0.0.100", 22, _ ->
+      send(test_pid, :in_flight_connect_started)
+      Process.sleep(80)
+      {:ok, :orphaned_conn}
+    end)
+    |> expect(:close, fn :orphaned_conn ->
+      send(test_pid, :closed_orphaned_conn)
+      :ok
+    end)
+
+    {:ok, pool} =
+      ConnectionPool.start_link(
+        profile: profile,
+        ssh_client: Mock,
+        max_channels_per_conn: 2
+      )
+
+    waiter = Task.async(fn -> ConnectionPool.checkout_connection(pool, test_pid) end)
+    assert_receive :in_flight_connect_started, 500
+
+    GenServer.stop(pool)
+    assert {:error, :pool_closed} = Task.await(waiter, 500)
+    assert_receive :closed_orphaned_conn, 500
+  end
+
+  test "periodic health check purges dead pooled connection when enabled", %{profile: profile} do
+    test_pid = self()
+
+    Mock
+    |> expect(:open_channel, fn :stale_pool_conn ->
+      {:error, :closed}
+    end)
+    |> expect(:close, fn :stale_pool_conn ->
+      send(test_pid, :purged_stale_pool_conn)
+      :ok
+    end)
+
+    {:ok, pool} =
+      ConnectionPool.start_link(
+        profile: profile,
+        ssh_client: Mock,
+        primary_conn: :stale_pool_conn,
+        health_check_interval: 40
+      )
+
+    assert_receive :purged_stale_pool_conn, 1000
+    status = ConnectionPool.get_status(pool)
+    assert status.connection_count == 0
+
+    GenServer.stop(pool)
+  end
 end

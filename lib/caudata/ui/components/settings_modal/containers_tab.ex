@@ -38,7 +38,9 @@ defmodule Caudata.UI.Components.SettingsModal.ContainersTab do
         ]
       else
         display_rows_limit = max(2, div(state.height * 90, 100) - 11)
-        start_row = Caudata.UI.ViewHelper.scroll_start_row(state.settings_container_idx, display_rows_limit)
+
+        start_row =
+          Caudata.UI.ViewHelper.scroll_start_row(state.settings_container_idx, display_rows_limit)
 
         docker_only_containers
         |> Enum.with_index()

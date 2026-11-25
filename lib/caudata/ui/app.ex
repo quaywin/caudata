@@ -266,15 +266,13 @@ defmodule Caudata.UI.App do
               default_scroll =
                 if not is_nil(target_scroll), do: target_scroll, else: new_state.logs_scroll_y
 
-              {new_state.logs, default_scroll, new_state.visual_cursor,
-               new_state.visual_anchor}
+              {new_state.logs, default_scroll, new_state.visual_cursor, new_state.visual_anchor}
             end
           else
             default_scroll =
               if not is_nil(target_scroll), do: target_scroll, else: new_state.logs_scroll_y
 
-            {new_state.logs, default_scroll, new_state.visual_cursor,
-             new_state.visual_anchor}
+            {new_state.logs, default_scroll, new_state.visual_cursor, new_state.visual_anchor}
           end
 
         final_state = %{
@@ -737,13 +735,7 @@ defmodule Caudata.UI.App do
         {:noreply, adjust_log_subscription(state, new_state)}
 
       {:update_filter, value} ->
-        # Regex compile safety check
-        {error, _compiled} =
-          case Regex.compile(value) do
-            {:ok, re} -> {false, re}
-            _ -> {true, nil}
-          end
-
+        {error, _compiled} = ViewHelper.compile_filter_regex(value)
         {:noreply, %{state | filter_regex: value, filter_error: error}}
 
       :toggle_freeze ->

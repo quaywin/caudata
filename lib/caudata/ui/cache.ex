@@ -11,7 +11,8 @@ defmodule Caudata.UI.Cache do
   If the key is not found, executes `compute_fn`, stores the result, and returns it.
   Guarantees memory is strictly bounded to at most `2 * max_size` entries.
   """
-  def fetch(namespace, key, max_size \\ @default_max_size, compute_fn) when is_function(compute_fn, 0) do
+  def fetch(namespace, key, max_size \\ @default_max_size, compute_fn)
+      when is_function(compute_fn, 0) do
     {curr_gen, old_gen} = Process.get(namespace, {%{}, %{}})
 
     case Map.fetch(curr_gen, key) do

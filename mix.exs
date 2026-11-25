@@ -75,9 +75,14 @@ defmodule Caudata.MixProject do
 
     targets =
       case System.get_env("BURRITO_TARGET") do
-        target when target in ["macos_aarch64", "macos"] -> Keyword.take(targets, [:macos_aarch64])
-        target when target in ["linux_x86_64", "linux"] -> Keyword.take(targets, [:linux_x86_64])
-        _ -> targets
+        target when target in ["macos_aarch64", "macos"] ->
+          Keyword.take(targets, [:macos_aarch64])
+
+        target when target in ["linux_x86_64", "linux"] ->
+          Keyword.take(targets, [:linux_x86_64])
+
+        _ ->
+          targets
       end
 
     [
@@ -102,7 +107,9 @@ defmodule Caudata.MixProject do
       try do
         ExRatatui.Burrito.verify_linux_nif(release)
       after
-        if prev, do: System.put_env("BURRITO_TARGET", prev), else: System.delete_env("BURRITO_TARGET")
+        if prev,
+          do: System.put_env("BURRITO_TARGET", prev),
+          else: System.delete_env("BURRITO_TARGET")
       end
     else
       ExRatatui.Burrito.verify_linux_nif(release)

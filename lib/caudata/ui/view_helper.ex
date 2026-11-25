@@ -331,11 +331,12 @@ defmodule Caudata.UI.ViewHelper do
                "|"
              ]) do
             re =
-              Map.get(model, :compiled_filter_regex) ||
+              Cache.fetch_latest(:compiled_filter_regex, query, fn ->
                 case Regex.compile(query) do
                   {:ok, compiled} -> compiled
                   _ -> nil
                 end
+              end)
 
             if re do
               Enum.filter(level_filtered_logs, fn
@@ -429,7 +430,7 @@ defmodule Caudata.UI.ViewHelper do
 
   def count_wrapped_lines(lines, width, lines_len) do
     w = max(1, width)
-    len = lines_len || (if is_list(lines), do: length(lines), else: 0)
+    len = lines_len || if is_list(lines), do: length(lines), else: 0
 
     hd_line =
       case lines do
@@ -727,7 +728,8 @@ defmodule Caudata.UI.ViewHelper do
         name_str = to_string(c.name)
 
         if service_container?(c) do
-          MapSet.member?(enabled_services_set, id_str) or MapSet.member?(enabled_services_set, name_str)
+          MapSet.member?(enabled_services_set, id_str) or
+            MapSet.member?(enabled_services_set, name_str)
         else
           not MapSet.member?(disabled_set, id_str) and
             not MapSet.member?(disabled_set, name_str)
@@ -762,6 +764,45 @@ defmodule Caudata.UI.ViewHelper do
       _ ->
         false
     end)
+  end
+
+  @doc """
+  Compiles a filter string (stripping any leading `!` negation prefix).
+  Returns `{error?, compiled_regex_or_nil}`.
+  """
+  def compile_filter_regex(value) when is_binary(value) do
+    pattern =
+      if String.starts_with?(value, "!"),
+        do: String.slice(value, 1..-1//1),
+        else: value
+
+    if pattern == "" do
+      {false, nil}
+    else
+      case Regex.compile(pattern) do
+        {:ok, re} -> {false, re}
+        _ -> {true, nil}
+      end
+    end
+  end
+
+  @doc """
+  Builds the editable connection fields map for SettingsModal from a Profile struct.
+  """
+  def connection_fields_for_profile(nil), do: %{}
+
+  def connection_fields_for_profile(profile) do
+    if Map.get(profile, :is_local, false) do
+      %{"password" => profile.password || ""}
+    else
+      %{
+        "host_name" => profile.host_name || "",
+        "port" => to_string(profile.port || 22),
+        "user" => profile.user || "",
+        "identity_file" => profile.identity_file || "",
+        "password" => profile.password || ""
+      }
+    end
   end
 
   @doc """

@@ -9,7 +9,13 @@ defmodule Caudata.UI.Components.AddServerModalTest do
       state = %{
         modal_type: :select_ssh,
         ssh_config_profiles: [
-          %Caudata.Profile{id: "server1", host_pattern: "server1", host_name: "10.0.0.1", port: 22, user: "root"}
+          %Caudata.Profile{
+            id: "server1",
+            host_pattern: "server1",
+            host_name: "10.0.0.1",
+            port: 22,
+            user: "root"
+          }
         ],
         modal_selected_index: 0,
         modal_error: nil,
@@ -26,7 +32,13 @@ defmodule Caudata.UI.Components.AddServerModalTest do
     test "renders scrolled window and progress indicator when options exceed display limit" do
       profiles =
         for i <- 1..25 do
-          %Caudata.Profile{id: "server#{i}", host_pattern: "server#{i}", host_name: "10.0.0.#{i}", port: 22, user: "admin"}
+          %Caudata.Profile{
+            id: "server#{i}",
+            host_pattern: "server#{i}",
+            host_name: "10.0.0.#{i}",
+            port: 22,
+            user: "admin"
+          }
         end
 
       state = %{
@@ -55,9 +67,11 @@ defmodule Caudata.UI.Components.AddServerModalTest do
 
       [popup] = AddServerModal.render(state)
       assert %Popup{} = popup
-      lines_text = Enum.map(popup.content.text, fn line ->
-        Enum.map(line.spans, & &1.content) |> Enum.join()
-      end)
+
+      lines_text =
+        Enum.map(popup.content.text, fn line ->
+          Enum.map(line.spans, & &1.content) |> Enum.join()
+        end)
 
       assert Enum.any?(lines_text, &String.contains?(&1, "Error: Connection refused"))
     end

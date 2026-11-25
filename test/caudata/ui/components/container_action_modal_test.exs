@@ -53,7 +53,8 @@ defmodule Caudata.UI.Components.ContainerActionModalTest do
       {:ok, state: state, server_id: server_id}
     end
 
-    test "on 'y' key deletes profile, removes from profiles, updates selected_profile_id, and sets notification", %{state: state, server_id: server_id} do
+    test "on 'y' key deletes profile, removes from profiles, updates selected_profile_id, and sets notification",
+         %{state: state, server_id: server_id} do
       {new_state, cmds} = ContainerActionModal.handle_key_confirm("y", %{}, state)
 
       assert cmds == []
@@ -72,7 +73,10 @@ defmodule Caudata.UI.Components.ContainerActionModalTest do
       refute Enum.any?(new_state.profiles, &(&1.id == server_id))
     end
 
-    test "on 'n' or 'Esc' key cancels deletion and restores state", %{state: state, server_id: server_id} do
+    test "on 'n' or 'Esc' key cancels deletion and restores state", %{
+      state: state,
+      server_id: server_id
+    } do
       {new_state, cmds} = ContainerActionModal.handle_key_confirm("n", %{}, state)
 
       assert cmds == []
@@ -113,7 +117,9 @@ defmodule Caudata.UI.Components.ContainerActionModalTest do
 
       # Down at last stays at last
       {s_down_stop, []} = ContainerActionModal.handle_key(:down, %{}, s_end)
-      assert s_down_stop.container_action_modal_selected_index == s_end.container_action_modal_selected_index
+
+      assert s_down_stop.container_action_modal_selected_index ==
+               s_end.container_action_modal_selected_index
 
       # Home / g moves to 0
       {s_home, []} = ContainerActionModal.handle_key(:char, %{char: "g"}, s_down_stop)

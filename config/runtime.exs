@@ -35,21 +35,24 @@ ip =
       {0, 0, 0, 0}
 
     _ ->
-      ip_str
-      |> String.split(".")
-      |> Enum.map(&String.to_integer/1)
-      |> List.to_tuple()
+      case :inet.parse_address(String.to_charlist(ip_str)) do
+        {:ok, addr} -> addr
+        {:error, _reason} -> raise "Invalid CAUDATA_IP address: #{inspect(ip_str)}"
+      end
   end
 
-# Secret key base
+# Secret key base: require explicit SECRET_KEY_BASE in production or generate an ephemeral runtime secret
 secret_key_base =
-  System.get_env("RELEASE_COOKIE") ||
-    System.get_env("SECRET_KEY_BASE") ||
-    String.duplicate("secret_key_base_secure_salt_caudata_streamer", 2)
+  System.get_env("SECRET_KEY_BASE") ||
+    :crypto.strong_rand_bytes(48) |> Base.encode64()
+
+live_view_signing_salt =
+  System.get_env("LIVE_VIEW_SIGNING_SALT") ||
+    :crypto.strong_rand_bytes(18) |> Base.encode64()
 
 config :caudata, Caudata.Web.Endpoint,
   http: [ip: ip, port: port],
   pubsub_server: Caudata.PubSub,
   secret_key_base: secret_key_base,
-  live_view: [signing_salt: "SigningSaltForCaudataLiveViewSecuritySalt"],
+  live_view: [signing_salt: live_view_signing_salt],
   render_errors: [formats: [html: Caudata.Web.ErrorHTML], layout: false]

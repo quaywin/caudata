@@ -17,7 +17,9 @@ defmodule Caudata.UI.Components.ContainerInspectModal do
     scroll_y = Map.get(state, :container_inspect_scroll_y, 0)
     mode = Map.get(state, :container_inspect_mode, :summary)
 
-    selected_profile = Enum.find(Map.get(state, :profiles, []), &(&1.id == Map.get(state, :selected_profile_id)))
+    selected_profile =
+      Enum.find(Map.get(state, :profiles, []), &(&1.id == Map.get(state, :selected_profile_id)))
+
     server_host = (selected_profile && selected_profile.host_name) || ""
 
     {formatted_lines, total_lines, is_running} = get_inspect_info(inspect_raw, mode, server_host)
@@ -76,7 +78,9 @@ defmodule Caudata.UI.Components.ContainerInspectModal do
     mode = Map.get(model, :container_inspect_mode, :summary)
     inspect_raw = Map.get(model, :container_inspect_data, "")
 
-    selected_profile = Enum.find(Map.get(model, :profiles, []), &(&1.id == Map.get(model, :selected_profile_id)))
+    selected_profile =
+      Enum.find(Map.get(model, :profiles, []), &(&1.id == Map.get(model, :selected_profile_id)))
+
     server_host = (selected_profile && selected_profile.host_name) || ""
 
     {_lines, total_lines, _is_running} = get_inspect_info(inspect_raw, mode, server_host)

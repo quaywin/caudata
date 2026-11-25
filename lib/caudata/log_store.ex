@@ -58,7 +58,9 @@ defmodule Caudata.LogStore do
 
   defp try_ets_lookup(tab, key) when is_atom(tab) do
     case :ets.info(tab) do
-      :undefined -> :error
+      :undefined ->
+        :error
+
       _ ->
         case :ets.lookup(tab, key) do
           [{^key, val}] -> {:ok, val}
@@ -134,19 +136,7 @@ defmodule Caudata.LogStore do
 
   @impl true
   def handle_cast({:append_logs, source_id, lines}, state) do
-    sanitized_lines =
-      Enum.map(lines, fn
-        %{timestamp: ts, stream: stream, message: msg} ->
-          %{timestamp: ts, stream: stream, message: LogSanitizer.sanitize(msg)}
-
-        {stream, line} ->
-          {ts, msg} = parse_docker_log(line)
-          %{timestamp: ts, stream: stream, message: LogSanitizer.sanitize(msg)}
-
-        line when is_binary(line) ->
-          {ts, msg} = parse_docker_log(line)
-          %{timestamp: ts, stream: :stdout, message: LogSanitizer.sanitize(msg)}
-      end)
+    sanitized_lines = sanitize_lines(lines)
 
     # Retrieve or initialize the source buffer state
     source_state =
@@ -199,21 +189,7 @@ defmodule Caudata.LogStore do
         sanitized_lines,
         {source_state.queue, source_state.size, source_state.drop_count},
         fn line, {q, sz, dr} ->
-          q = :queue.in(line, q)
-          sz = sz + 1
-
-          if sz > state.capacity do
-            # Drop the oldest item
-            case :queue.out(q) do
-              {{:value, _}, remaining_q} ->
-                {remaining_q, sz - 1, dr + 1}
-
-              {:empty, empty_q} ->
-                {empty_q, 0, dr}
-            end
-          else
-            {q, sz, dr}
-          end
+          trim_queue_to_capacity(:queue.in(line, q), sz + 1, dr, state.capacity)
         end
       )
 
@@ -246,16 +222,7 @@ defmodule Caudata.LogStore do
         |> Enum.sort_by(fn line -> Map.get(line, :timestamp) || "" end)
       end
 
-    tail_lines = Enum.take(snapshot_lines, -500)
-    medium_lines = Enum.take(snapshot_lines, -1500)
-
-    if Map.has_key?(state, :table) do
-      :ets.insert(state.table, [
-        {{:snapshot, source_id}, snapshot_lines},
-        {{:snapshot_medium, source_id}, medium_lines},
-        {{:snapshot_tail, source_id}, tail_lines}
-      ])
-    end
+    write_ets_snapshots(state, source_id, snapshot_lines)
 
     # Broadcast notification to PubSub
     Phoenix.PubSub.broadcast(
@@ -269,19 +236,7 @@ defmodule Caudata.LogStore do
 
   @impl true
   def handle_cast({:prepend_logs, source_id, lines}, state) do
-    sanitized_lines =
-      Enum.map(lines, fn
-        %{timestamp: ts, stream: stream, message: msg} ->
-          %{timestamp: ts, stream: stream, message: LogSanitizer.sanitize(msg)}
-
-        {stream, line} ->
-          {ts, msg} = parse_docker_log(line)
-          %{timestamp: ts, stream: stream, message: LogSanitizer.sanitize(msg)}
-
-        line when is_binary(line) ->
-          {ts, msg} = parse_docker_log(line)
-          %{timestamp: ts, stream: :stdout, message: LogSanitizer.sanitize(msg)}
-      end)
+    sanitized_lines = sanitize_lines(lines)
 
     source_state =
       Map.get(state.sources, source_id, %{
@@ -336,17 +291,7 @@ defmodule Caudata.LogStore do
 
     new_sources = Map.put(state.sources, source_id, new_source_state)
 
-    snapshot_lines = combined_lines
-    tail_lines = Enum.take(snapshot_lines, -500)
-    medium_lines = Enum.take(snapshot_lines, -1500)
-
-    if Map.has_key?(state, :table) do
-      :ets.insert(state.table, [
-        {{:snapshot, source_id}, snapshot_lines},
-        {{:snapshot_medium, source_id}, medium_lines},
-        {{:snapshot_tail, source_id}, tail_lines}
-      ])
-    end
+    write_ets_snapshots(state, source_id, combined_lines)
 
     Phoenix.PubSub.broadcast(
       Caudata.PubSub,
@@ -404,8 +349,47 @@ defmodule Caudata.LogStore do
   end
 
   @impl true
-  def handle_call({:set_capacity, new_capacity}, _from, state) do
-    {:reply, :ok, %{state | capacity: max(state.capacity, new_capacity)}}
+  def handle_call({:set_capacity, new_capacity}, _from, state) when is_integer(new_capacity) do
+    effective_capacity = max(1, new_capacity)
+
+    new_sources =
+      if effective_capacity < state.capacity do
+        Map.new(state.sources, fn {source_id, source_state} ->
+          {trimmed_q, trimmed_size, trimmed_drops} =
+            trim_queue_to_capacity(
+              source_state.queue,
+              source_state.size,
+              source_state.drop_count,
+              effective_capacity
+            )
+
+          if trimmed_size != source_state.size do
+            snapshot_lines = :queue.to_list(trimmed_q)
+            write_ets_snapshots(state, source_id, snapshot_lines)
+
+            first_ts =
+              case :queue.peek(trimmed_q) do
+                {:value, %{timestamp: ts}} when is_binary(ts) and ts != "" -> ts
+                _ -> nil
+              end
+
+            {source_id,
+             %{
+               source_state
+               | queue: trimmed_q,
+                 size: trimmed_size,
+                 drop_count: trimmed_drops,
+                 first_ts: first_ts
+             }}
+          else
+            {source_id, source_state}
+          end
+        end)
+      else
+        state.sources
+      end
+
+    {:reply, :ok, %{state | capacity: effective_capacity, sources: new_sources}}
   end
 
   @impl true
@@ -430,6 +414,46 @@ defmodule Caudata.LogStore do
     )
 
     %{state | sources: new_sources}
+  end
+
+  defp sanitize_lines(lines) do
+    Enum.map(lines, fn
+      %{timestamp: ts, stream: stream, message: msg} ->
+        %{timestamp: ts, stream: stream, message: LogSanitizer.sanitize(msg)}
+
+      {stream, line} ->
+        {ts, msg} = parse_docker_log(line)
+        %{timestamp: ts, stream: stream, message: LogSanitizer.sanitize(msg)}
+
+      line when is_binary(line) ->
+        {ts, msg} = parse_docker_log(line)
+        %{timestamp: ts, stream: :stdout, message: LogSanitizer.sanitize(msg)}
+    end)
+  end
+
+  defp trim_queue_to_capacity(q, sz, dr, capacity) when sz > capacity do
+    case :queue.out(q) do
+      {{:value, _}, remaining_q} ->
+        trim_queue_to_capacity(remaining_q, sz - 1, dr + 1, capacity)
+
+      {:empty, empty_q} ->
+        {empty_q, 0, dr}
+    end
+  end
+
+  defp trim_queue_to_capacity(q, sz, dr, _capacity), do: {q, sz, dr}
+
+  defp write_ets_snapshots(state, source_id, snapshot_lines) do
+    if Map.has_key?(state, :table) do
+      tail_lines = Enum.take(snapshot_lines, -500)
+      medium_lines = Enum.take(snapshot_lines, -1500)
+
+      :ets.insert(state.table, [
+        {{:snapshot, source_id}, snapshot_lines},
+        {{:snapshot_medium, source_id}, medium_lines},
+        {{:snapshot_tail, source_id}, tail_lines}
+      ])
+    end
   end
 
   defp parse_docker_log(line) do

@@ -35,7 +35,12 @@ defmodule Caudata.UI.Components.SettingsModal.CustomLogsTab do
         ]
       else
         display_rows_limit = max(2, div(state.height * 90, 100) - 11)
-        start_row = Caudata.UI.ViewHelper.scroll_start_row(state.settings_custom_log_idx, display_rows_limit)
+
+        start_row =
+          Caudata.UI.ViewHelper.scroll_start_row(
+            state.settings_custom_log_idx,
+            display_rows_limit
+          )
 
         custom_logs
         |> Enum.with_index()

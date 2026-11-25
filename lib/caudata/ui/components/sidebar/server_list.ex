@@ -84,7 +84,11 @@ defmodule Caudata.UI.Components.Sidebar.ServerList do
       text: server_rows,
       scroll: {scroll_y, 0},
       block: %Block{
-        title: if(active_panel == :sidebar and focus == :servers, do: " [1] Servers [ACTIVE] ", else: " [1] Servers "),
+        title:
+          if(active_panel == :sidebar and focus == :servers,
+            do: " [1] Servers [ACTIVE] ",
+            else: " [1] Servers "
+          ),
         borders: [:all],
         border_type: :rounded,
         border_style: %Style{fg: border_color}

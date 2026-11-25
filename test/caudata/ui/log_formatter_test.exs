@@ -65,7 +65,9 @@ defmodule Caudata.UI.LogFormatterTest do
 
   describe "Stage 1: JSON Log Parser" do
     test "parses structured info JSON log" do
-      json_line = ~s({"level":"info","timestamp":"2026-06-08 12:00:00","message":"Server booted","port":4000})
+      json_line =
+        ~s({"level":"info","timestamp":"2026-06-08 12:00:00","message":"Server booted","port":4000})
+
       {spans, is_error, _level} = LogFormatter.format_line_with_meta(json_line)
 
       refute is_error
@@ -94,7 +96,9 @@ defmodule Caudata.UI.LogFormatterTest do
     end
 
     test "parses container prefixed JSON logs" do
-      prefixed_line = ~s(2026-08-04T10:15:00Z stdout F {"level":"info","message":"App started","port":4000})
+      prefixed_line =
+        ~s(2026-08-04T10:15:00Z stdout F {"level":"info","message":"App started","port":4000})
+
       {spans, is_error, _level} = LogFormatter.format_line_with_meta(prefixed_line)
 
       refute is_error
@@ -179,7 +183,9 @@ defmodule Caudata.UI.LogFormatterTest do
     end
 
     test "highlights all IP variants (IPv4, IPv4 with port, IPv4 CIDR, IPv6, IPv6 CIDR, bracketed IPv6 with port, ::/0, ::)" do
-      line = "Conn from 192.168.1.1 172.16.0.1:8080 10.0.0.0/8 2001:db8::1 fe80::/10 [2001:db8::1]:443 ::/0 ::"
+      line =
+        "Conn from 192.168.1.1 172.16.0.1:8080 10.0.0.0/8 2001:db8::1 fe80::/10 [2001:db8::1]:443 ::/0 ::"
+
       spans = LogFormatter.sub_highlight(line)
 
       ip_spans = Enum.filter(spans, &(&1.style.fg == :magenta))
@@ -196,10 +202,14 @@ defmodule Caudata.UI.LogFormatterTest do
     end
 
     test "sanitizes trailing quotes and punctuation from URL and Path tokens" do
-      line = ~s("1" => "https://dns.quaywin.com/assets/js/app.js?vsn=d", "file" => "/api/v1/checkout",)
+      line =
+        ~s("1" => "https://dns.quaywin.com/assets/js/app.js?vsn=d", "file" => "/api/v1/checkout",)
+
       spans = LogFormatter.sub_highlight(line)
 
-      url_span = Enum.find(spans, &(&1.content == "https://dns.quaywin.com/assets/js/app.js?vsn=d"))
+      url_span =
+        Enum.find(spans, &(&1.content == "https://dns.quaywin.com/assets/js/app.js?vsn=d"))
+
       assert url_span != nil
       assert url_span.style.fg == :magenta
 
@@ -212,29 +222,84 @@ defmodule Caudata.UI.LogFormatterTest do
     end
 
     test "evaluates is_error comprehensively across JSON, Logfmt, General, Exceptions and Panics" do
-      assert elem(LogFormatter.format_line_with_meta(~s({"level":"error","msg":"Failed"})), 1) == true
-      assert elem(LogFormatter.format_line_with_meta(~s({"status":500,"msg":"Server Error"})), 1) == true
-      assert elem(LogFormatter.format_line_with_meta(~s({"status":"502","msg":"Bad Gateway"})), 1) == true
-      assert elem(LogFormatter.format_line_with_meta(~s(ts=12:00:00 level=warn err="connection refused")), 1) == true
-      assert elem(LogFormatter.format_line_with_meta(~s(ts=12:00:00 status=503 msg="Service Unavailable")), 1) == true
-      assert elem(LogFormatter.format_line_with_meta("2026-08-04 10:00:00 [info] GET /checkout 500 120ms"), 1) == true
-      assert elem(LogFormatter.format_line_with_meta("2026-08-04 10:00:00 [info] ** (RuntimeError) crash"), 1) == true
-      assert elem(LogFormatter.format_line_with_meta("panic: runtime error: index out of range"), 1) == true
+      assert elem(LogFormatter.format_line_with_meta(~s({"level":"error","msg":"Failed"})), 1) ==
+               true
 
-      refute elem(LogFormatter.format_line_with_meta("2026-08-04 10:00:00 [info] GET /checkout 200 15ms"), 1)
+      assert elem(LogFormatter.format_line_with_meta(~s({"status":500,"msg":"Server Error"})), 1) ==
+               true
+
+      assert elem(LogFormatter.format_line_with_meta(~s({"status":"502","msg":"Bad Gateway"})), 1) ==
+               true
+
+      assert elem(
+               LogFormatter.format_line_with_meta(
+                 ~s(ts=12:00:00 level=warn err="connection refused")
+               ),
+               1
+             ) == true
+
+      assert elem(
+               LogFormatter.format_line_with_meta(
+                 ~s(ts=12:00:00 status=503 msg="Service Unavailable")
+               ),
+               1
+             ) == true
+
+      assert elem(
+               LogFormatter.format_line_with_meta(
+                 "2026-08-04 10:00:00 [info] GET /checkout 500 120ms"
+               ),
+               1
+             ) == true
+
+      assert elem(
+               LogFormatter.format_line_with_meta(
+                 "2026-08-04 10:00:00 [info] ** (RuntimeError) crash"
+               ),
+               1
+             ) == true
+
+      assert elem(
+               LogFormatter.format_line_with_meta("panic: runtime error: index out of range"),
+               1
+             ) == true
+
+      refute elem(
+               LogFormatter.format_line_with_meta(
+                 "2026-08-04 10:00:00 [info] GET /checkout 200 15ms"
+               ),
+               1
+             )
     end
 
     test "avoids false positive is_error for null/false error keys or info level logs with casual mentions" do
       # JSON logs with null/false/empty error fields
-      refute elem(LogFormatter.format_line_with_meta(~s({"level":"info","error":null,"msg":"Operation successful"})), 1)
-      refute elem(LogFormatter.format_line_with_meta(~s({"level":"info","err":false,"msg":"No error occurred"})), 1)
+      refute elem(
+               LogFormatter.format_line_with_meta(
+                 ~s({"level":"info","error":null,"msg":"Operation successful"})
+               ),
+               1
+             )
+
+      refute elem(
+               LogFormatter.format_line_with_meta(
+                 ~s({"level":"info","err":false,"msg":"No error occurred"})
+               ),
+               1
+             )
+
       refute elem(LogFormatter.format_line_with_meta(~s({"level":"info","exception":""})), 1)
 
       # Logfmt with empty error
       refute elem(LogFormatter.format_line_with_meta(~s(level=info msg="Completed" err="")), 1)
 
       # Info level log mentioning keywords casually
-      refute elem(LogFormatter.format_line_with_meta("2026-08-04 10:00:00 [info] Handled exception recovery gracefully"), 1)
+      refute elem(
+               LogFormatter.format_line_with_meta(
+                 "2026-08-04 10:00:00 [info] Handled exception recovery gracefully"
+               ),
+               1
+             )
 
       nginx_log =
         """
@@ -247,26 +312,49 @@ defmodule Caudata.UI.LogFormatterTest do
 
     test "handles numeric levels, MongoDB severity, stacktraces, and expanded error keys" do
       # Bunyan / Syslog numeric error levels
-      assert elem(LogFormatter.format_line_with_meta(~s({"level":50,"msg":"Database connection failed"})), 1) == true
-      assert elem(LogFormatter.format_line_with_meta(~s({"level":60,"msg":"Fatal crash"})), 1) == true
+      assert elem(
+               LogFormatter.format_line_with_meta(
+                 ~s({"level":50,"msg":"Database connection failed"})
+               ),
+               1
+             ) == true
+
+      assert elem(LogFormatter.format_line_with_meta(~s({"level":60,"msg":"Fatal crash"})), 1) ==
+               true
 
       # MongoDB short severity E (Error) and F (Fatal)
-      assert elem(LogFormatter.format_line_with_meta(~s({"s":"E","msg":"Mongo error"})), 1) == true
+      assert elem(LogFormatter.format_line_with_meta(~s({"s":"E","msg":"Mongo error"})), 1) ==
+               true
 
       # Extra JSON error keys: stack, stacktrace, cause, error_message
-      assert elem(LogFormatter.format_line_with_meta(~s({"level":"info","stack":"Error: connect ECONNREFUSED"})), 1) == true
-      assert elem(LogFormatter.format_line_with_meta(~s({"level":"info","cause":"Disk full"})), 1) == true
+      assert elem(
+               LogFormatter.format_line_with_meta(
+                 ~s({"level":"info","stack":"Error: connect ECONNREFUSED"})
+               ),
+               1
+             ) == true
+
+      assert elem(LogFormatter.format_line_with_meta(~s({"level":"info","cause":"Disk full"})), 1) ==
+               true
 
       # Stacktrace lines without explicit log level
-      assert elem(LogFormatter.format_line_with_meta("Traceback (most recent call last):"), 1) == true
-      assert elem(LogFormatter.format_line_with_meta("Caused by: java.lang.NullPointerException"), 1) == true
+      assert elem(LogFormatter.format_line_with_meta("Traceback (most recent call last):"), 1) ==
+               true
+
+      assert elem(
+               LogFormatter.format_line_with_meta("Caused by: java.lang.NullPointerException"),
+               1
+             ) == true
+
       assert elem(LogFormatter.format_line_with_meta("stack backtrace:"), 1) == true
     end
 
     test "accurately formats Nginx access log with status colors, bytes, duration, and user-agent" do
-      line = ~S"""
-      172.22.0.2 - - [08/Sep/2026:02:18:15 +0000] "GET /wp-json/unlock/v1/device-codes?email=diepnguyenkieu1988%40gmail.com HTTP/1.1" 200 580 74ms "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0"
-      """ |> String.trim()
+      line =
+        ~S"""
+        172.22.0.2 - - [08/Sep/2026:02:18:15 +0000] "GET /wp-json/unlock/v1/device-codes?email=diepnguyenkieu1988%40gmail.com HTTP/1.1" 200 580 74ms "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0"
+        """
+        |> String.trim()
 
       {spans, is_error, level} = LogFormatter.format_line_with_meta(line)
 
@@ -287,7 +375,10 @@ defmodule Caudata.UI.LogFormatterTest do
       refute Enum.any?(spans, &(&1.style.fg == :red and String.contains?(&1.content, "537")))
 
       # 151.0.0.0 in user agent is NOT treated as an IP (no magenta span with 151.0.0.0)
-      refute Enum.any?(spans, &(&1.style.fg == :magenta and String.contains?(&1.content, "151.0.0.0")))
+      refute Enum.any?(
+               spans,
+               &(&1.style.fg == :magenta and String.contains?(&1.content, "151.0.0.0"))
+             )
     end
   end
 end

@@ -289,20 +289,12 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
         end
 
       "/" ->
-        {%{model | mode: :searching, active_field: :filter_regex}, []}
+        {model |> Map.put(:mode, :searching) |> Map.put(:active_field, :filter_regex), []}
 
       "v" ->
         displayed_logs = ViewHelper.get_displayed_logs(model)
 
-        # Only enter visual mode when there are real log lines
-        has_real_logs? =
-          model.selected_container_id != nil and model.logs != [] and
-            displayed_logs not in [
-              ["No logs captured yet."],
-              ["No container selected. Select a container in the sidebar to view logs."]
-            ]
-
-        if has_real_logs? do
+        if has_real_logs?(model, displayed_logs) do
           last_idx = max(0, length(displayed_logs) - 1)
           inner_width = ViewHelper.get_logs_inner_width(model)
           max_scroll = get_max_scroll(model, displayed_logs)
@@ -328,7 +320,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
 
           {new_model, []}
         else
-          {%{model | notification: {"No logs to select", 25}}, []}
+          {Map.put(model, :notification, {"No logs to select", 25}), []}
         end
 
       "y" ->
@@ -342,21 +334,26 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
   defp copy_all_logs(model) do
     displayed_logs = ViewHelper.get_displayed_logs(model)
 
-    has_real_logs? =
-      model.selected_container_id != nil and
-        model.logs != [] and
-        displayed_logs not in [
-          ["No logs captured yet."],
-          ["No container selected. Select a container in the sidebar to view logs."]
-        ]
-
-    if has_real_logs? do
+    if has_real_logs?(model, displayed_logs) do
       text = displayed_logs |> Enum.map(&extract_log_text/1) |> Enum.join("\n")
       count = length(displayed_logs)
       copy_text_to_clipboard(text, count, model)
     else
-      {%{model | notification: {"No logs to copy", 25}}, []}
+      {Map.put(model, :notification, {"No logs to copy", 25}), []}
     end
+  end
+
+  defp has_real_logs?(model, displayed_logs) do
+    model.selected_container_id != nil and
+      model.logs != [] and
+      not match?(
+        [%{timestamp: nil, stream: :stdout, message: msg}]
+        when msg in [
+               "No logs captured yet.",
+               "No container selected. Select a container in the sidebar to view logs."
+             ],
+        displayed_logs
+      )
   end
 
   # ── Search Mode ─────────────────────────────────────────────────────
@@ -392,23 +389,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
   end
 
   defp update_filter_regex(model, new_val) do
-    pattern_to_check =
-      if String.starts_with?(new_val, "!") do
-        String.slice(new_val, 1..-1//1)
-      else
-        new_val
-      end
-
-    error =
-      if pattern_to_check == "" do
-        false
-      else
-        case Regex.compile(pattern_to_check) do
-          {:ok, _} -> false
-          _ -> true
-        end
-      end
-
+    {error, _compiled} = ViewHelper.compile_filter_regex(new_val)
     {%{model | filter_regex: new_val, filter_error: error}, []}
   end
 

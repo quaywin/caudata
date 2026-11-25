@@ -515,68 +515,80 @@ defmodule Caudata.ContainerWorker do
     cond do
       String.starts_with?(state.container_id, "file:") ->
         "file:" <> path = state.container_id
-        escaped_path = String.replace(path, "'", "'\\\'\''")
+        quoted_path = Caudata.Shell.quote_arg(path)
         limit = if stats.size > 0, do: 0, else: state.tail_limit || 1000
 
-        build_log_cmd(
-          "tail -n #{limit} -F \"#{escaped_path}\"",
+        Caudata.Shell.wrap_supervised_sudo(
+          "tail -n #{limit} -F #{quoted_path}",
           state.password
         )
 
       String.starts_with?(state.container_id, "systemd:") ->
         "systemd:" <> service_name = state.container_id
-        escaped_service = String.replace(service_name, "'", "'\\\'\''")
+        quoted_service = Caudata.Shell.quote_arg(service_name)
 
         cmd =
           cond do
             stats.size > 0 && stats.last_ts && stats.last_ts != "" ->
               limit = state.tail_limit || 1000
+
               since_ts =
                 stats.last_ts
                 |> clamp_timestamp_max_age(3600)
                 |> format_systemd_timestamp()
+                |> Caudata.Shell.quote_arg()
 
-              "journalctl -u \"#{escaped_service}\" -f -n #{limit} --since \"#{since_ts}\""
+              "journalctl -u #{quoted_service} -f -n #{limit} --since #{since_ts}"
 
             stats.size > 0 ->
-              "journalctl -u \"#{escaped_service}\" -f -n 0"
+              "journalctl -u #{quoted_service} -f -n 0"
 
             true ->
               limit = state.tail_limit || 1000
-              "journalctl -u \"#{escaped_service}\" -f -n #{limit}"
+              "journalctl -u #{quoted_service} -f -n #{limit}"
           end
 
-        build_log_cmd(cmd, state.password)
+        Caudata.Shell.wrap_supervised_sudo(cmd, state.password)
 
       String.starts_with?(state.container_id, "launchd:") ->
         "launchd:" <> service_name = state.container_id
-        escaped_service = String.replace(service_name, "'", "'\\\'\''")
 
-        build_log_cmd(
-          "log stream --predicate \"process == \\\"#{escaped_service}\\\"\"",
+        escaped_predicate_val =
+          service_name
+          |> String.replace("\\", "\\\\")
+          |> String.replace("\"", "\\\"")
+
+        quoted_predicate = Caudata.Shell.quote_arg("process == \"#{escaped_predicate_val}\"")
+
+        Caudata.Shell.wrap_supervised_sudo(
+          "log stream --predicate #{quoted_predicate}",
           state.password
         )
 
       true ->
-        escaped_container_id = String.replace(state.container_id, "'", "'\\\'\''")
+        quoted_container_id = Caudata.Shell.quote_arg(state.container_id)
 
         cmd =
           cond do
             stats.size > 0 && stats.last_ts && stats.last_ts != "" ->
               limit = state.tail_limit || 1000
-              since_ts = clamp_timestamp_max_age(stats.last_ts, 3600)
 
-              "docker logs -t --follow --tail #{limit} --since \"#{since_ts}\" #{escaped_container_id}"
+              since_ts =
+                stats.last_ts
+                |> clamp_timestamp_max_age(3600)
+                |> Caudata.Shell.quote_arg()
+
+              "docker logs -t --follow --tail #{limit} --since #{since_ts} #{quoted_container_id}"
 
             stats.size > 0 ->
-              "docker logs -t --follow --tail 0 #{escaped_container_id}"
+              "docker logs -t --follow --tail 0 #{quoted_container_id}"
 
             true ->
               limit = state.tail_limit || 1000
-              "docker logs -t --follow --tail #{limit} #{escaped_container_id}"
+              "docker logs -t --follow --tail #{limit} #{quoted_container_id}"
           end
 
-        build_log_cmd(cmd, state.password)
+        Caudata.Shell.wrap_supervised_sudo(cmd, state.password)
     end
   end
 
@@ -701,7 +713,10 @@ defmodule Caudata.ContainerWorker do
         }
 
       {:error, reason} ->
-        Logger.warning("Backfill stream failed to start for #{state.container_id}: #{inspect(reason)}")
+        Logger.warning(
+          "Backfill stream failed to start for #{state.container_id}: #{inspect(reason)}"
+        )
+
         %{state | backfill_status: :failed, first_ts: first_ts}
     end
   end
@@ -777,18 +792,19 @@ defmodule Caudata.ContainerWorker do
 
       String.starts_with?(state.container_id, "systemd:") ->
         "systemd:" <> service_name = state.container_id
-        escaped_service = String.replace(service_name, "'", "'\\''")
-        formatted_until = format_systemd_timestamp(first_ts)
-        cmd = "journalctl -u \"#{escaped_service}\" -n #{limit} --until \"#{formatted_until}\""
-        build_log_cmd(cmd, state.password)
+        quoted_service = Caudata.Shell.quote_arg(service_name)
+        quoted_until = first_ts |> format_systemd_timestamp() |> Caudata.Shell.quote_arg()
+        cmd = "journalctl -u #{quoted_service} -n #{limit} --until #{quoted_until}"
+        Caudata.Shell.wrap_supervised_sudo(cmd, state.password)
 
       String.starts_with?(state.container_id, "launchd:") ->
         nil
 
       true ->
-        escaped_container_id = String.replace(state.container_id, "'", "'\\''")
-        cmd = "docker logs -t --tail #{limit} --until \"#{first_ts}\" #{escaped_container_id}"
-        build_log_cmd(cmd, state.password)
+        quoted_container_id = Caudata.Shell.quote_arg(state.container_id)
+        quoted_until = Caudata.Shell.quote_arg(first_ts)
+        cmd = "docker logs -t --tail #{limit} --until #{quoted_until} #{quoted_container_id}"
+        Caudata.Shell.wrap_supervised_sudo(cmd, state.password)
     end
   end
 
@@ -808,34 +824,6 @@ defmodule Caudata.ContainerWorker do
     else
       state
     end
-  end
-
-  defp build_log_cmd(base_cmd, password) do
-    escaped_cmd = String.replace(base_cmd, "'", "'\\''")
-
-    inner_script =
-      if password && password != "" do
-        escaped_password = String.replace(password, "'", "'\\''")
-
-        "if true <&0 2>/dev/null; then exec 3<&0; fi; " <>
-          "echo '#{escaped_password}' | sudo -S -p '' sh -c 'if true <&3 2>/dev/null; then exec 0<&3 3<&-; fi; exec #{escaped_cmd}' & pid=$!; " <>
-          "trap 'kill $pid 2>/dev/null' EXIT HUP INT TERM; wait $pid 2>/dev/null; kill $pid 2>/dev/null"
-      else
-        "if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then exec sudo -n #{escaped_cmd}; else exec #{escaped_cmd}; fi & pid=$!; trap 'kill $pid 2>/dev/null' EXIT HUP INT TERM; wait $pid 2>/dev/null; kill $pid 2>/dev/null"
-      end
-
-    escape_for_subshell(inner_script)
-  end
-
-  defp escape_for_subshell(cmd) do
-    escaped_for_dq =
-      cmd
-      |> String.replace("\\", "\\\\")
-      |> String.replace("\"", "\\\"")
-      |> String.replace("$", "\\$")
-      |> String.replace("`", "\\`")
-
-    "sh -c \"#{escaped_for_dq}\""
   end
 
   def clamp_timestamp_max_age(nil, _max_seconds), do: nil

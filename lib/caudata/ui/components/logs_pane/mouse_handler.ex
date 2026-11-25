@@ -834,23 +834,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
               Caudata.UI.ViewHelper.navigate_bounded_index(current, direction, length(profiles))
 
             profile = Enum.at(profiles, new_idx)
-
-            connection_fields =
-              if profile do
-                if Map.get(profile, :is_local, false) do
-                  %{"password" => profile.password || ""}
-                else
-                  %{
-                    "host_name" => profile.host_name || "",
-                    "port" => to_string(profile.port || 22),
-                    "user" => profile.user || "",
-                    "identity_file" => profile.identity_file || "",
-                    "password" => profile.password || ""
-                  }
-                end
-              else
-                %{}
-              end
+            connection_fields = ViewHelper.connection_fields_for_profile(profile)
 
             {Map.merge(state, %{
                settings_selected_profile_idx: new_idx,
@@ -1039,23 +1023,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
 
                   if clicked_row >= 0 and clicked_row < display_rows_limit and target_idx < total do
                     profile = Enum.at(state.profiles, target_idx)
-
-                    connection_fields =
-                      if profile do
-                        if Map.get(profile, :is_local, false) do
-                          %{"password" => profile.password || ""}
-                        else
-                          %{
-                            "host_name" => profile.host_name || "",
-                            "port" => to_string(profile.port || 22),
-                            "user" => profile.user || "",
-                            "identity_file" => profile.identity_file || "",
-                            "password" => profile.password || ""
-                          }
-                        end
-                      else
-                        %{}
-                      end
+                    connection_fields = ViewHelper.connection_fields_for_profile(profile)
 
                     {Map.merge(state, %{
                        settings_selected_profile_idx: target_idx,

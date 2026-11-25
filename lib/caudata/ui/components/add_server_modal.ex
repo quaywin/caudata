@@ -30,7 +30,10 @@ defmodule Caudata.UI.Components.AddServerModal do
         display_rows_limit = max(3, inner_height - 2 - error_rows)
 
         total_options = length(options)
-        selected_idx = min(max(0, Map.get(state, :modal_selected_index, 0)), max(0, total_options - 1))
+
+        selected_idx =
+          min(max(0, Map.get(state, :modal_selected_index, 0)), max(0, total_options - 1))
+
         start_row = ViewHelper.scroll_start_row(selected_idx, display_rows_limit)
 
         option_lines =
@@ -56,7 +59,9 @@ defmodule Caudata.UI.Components.AddServerModal do
 
             Line.new([
               Span.new(prefix, style: %Style{fg: color}),
-              Span.new(label, style: %Style{fg: color, modifiers: if(selected, do: [:bold], else: [])})
+              Span.new(label,
+                style: %Style{fg: color, modifiers: if(selected, do: [:bold], else: [])}
+              )
             ])
           end)
 
@@ -119,7 +124,11 @@ defmodule Caudata.UI.Components.AddServerModal do
         ]
 
         form_lines =
-          ViewHelper.render_form_fields(fields_config, state.modal_fields, state.modal_focus_index)
+          ViewHelper.render_form_fields(
+            fields_config,
+            state.modal_fields,
+            state.modal_focus_index
+          )
 
         buttons_line =
           ViewHelper.render_action_buttons(
@@ -167,7 +176,11 @@ defmodule Caudata.UI.Components.AddServerModal do
         ]
 
         form_lines =
-          ViewHelper.render_form_fields(fields_config, state.modal_fields, state.modal_focus_index)
+          ViewHelper.render_form_fields(
+            fields_config,
+            state.modal_fields,
+            state.modal_focus_index
+          )
 
         buttons_line =
           ViewHelper.render_action_buttons(
@@ -240,7 +253,23 @@ defmodule Caudata.UI.Components.AddServerModal do
     page_step = max(3, div(Map.get(model, :height, 24) * 60, 100) - 4)
 
     case norm_key do
-      k when k in [:up, :down, :home, :end, :page_up, :page_down, :pageup, :pagedown, "k", "j", "g", "G", "K", "J"] ->
+      k
+      when k in [
+             :up,
+             :down,
+             :home,
+             :end,
+             :page_up,
+             :page_down,
+             :pageup,
+             :pagedown,
+             "k",
+             "j",
+             "g",
+             "G",
+             "K",
+             "J"
+           ] ->
         new_index = ViewHelper.navigate_bounded_index(current_index, k, total_options, page_step)
         {%{model | modal_selected_index: new_index}, []}
 
@@ -333,7 +362,8 @@ defmodule Caudata.UI.Components.AddServerModal do
           :enter ->
             case active_item do
               :cancel ->
-                {%{model | modal_type: :select_ssh, modal_selected_index: 0, modal_error: nil}, []}
+                {%{model | modal_type: :select_ssh, modal_selected_index: 0, modal_error: nil},
+                 []}
 
               :save ->
                 on_save.(model)

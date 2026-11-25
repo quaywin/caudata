@@ -10,6 +10,7 @@ defmodule Caudata.UI.Components.SettingsModal do
   alias ExRatatui.Widgets.Popup
 
   alias Caudata.UI.ViewHelper
+
   alias Caudata.UI.Components.SettingsModal.{
     ServersTab,
     ConnectionTab,
@@ -100,8 +101,6 @@ defmodule Caudata.UI.Components.SettingsModal do
     [popup_widget]
   end
 
-
-
   @doc """
   Dispatches key events for the settings modal.
   """
@@ -173,7 +172,9 @@ defmodule Caudata.UI.Components.SettingsModal do
                             catch
                               :exit, _ -> {:error, :timeout}
                             end
-                          _ -> {:error, :not_connected}
+
+                          _ ->
+                            {:error, :not_connected}
                         end
 
                       send(ui_pid, {:validation_result, server_id, path, result})
@@ -258,34 +259,40 @@ defmodule Caudata.UI.Components.SettingsModal do
                   {model, []}
                 end
 
-              k when k in [:up, :down, :home, :end, :page_up, :page_down, :pageup, :pagedown, "k", "j", "g", "G", "K", "J"] ->
+              k
+              when k in [
+                     :up,
+                     :down,
+                     :home,
+                     :end,
+                     :page_up,
+                     :page_down,
+                     :pageup,
+                     :pagedown,
+                     "k",
+                     "j",
+                     "g",
+                     "G",
+                     "K",
+                     "J"
+                   ] ->
                 page_step = max(3, div(Map.get(model, :height, 24) * 90, 100) - 11)
 
                 case model.settings_focus do
                   :servers ->
                     profiles = Map.get(model, :profiles, [])
                     current_idx = Map.get(model, :settings_selected_profile_idx, 0)
-                    new_idx = ViewHelper.navigate_bounded_index(current_idx, k, length(profiles), page_step)
-                    profile = Enum.at(profiles, new_idx)
 
-                    connection_fields =
-                      if profile do
-                        if Map.get(profile, :is_local, false) do
-                          %{
-                            "password" => profile.password || ""
-                          }
-                        else
-                          %{
-                            "host_name" => profile.host_name || "",
-                            "port" => to_string(profile.port || 22),
-                            "user" => profile.user || "",
-                            "identity_file" => profile.identity_file || "",
-                            "password" => profile.password || ""
-                          }
-                        end
-                      else
-                        %{}
-                      end
+                    new_idx =
+                      ViewHelper.navigate_bounded_index(
+                        current_idx,
+                        k,
+                        length(profiles),
+                        page_step
+                      )
+
+                    profile = Enum.at(profiles, new_idx)
+                    connection_fields = ViewHelper.connection_fields_for_profile(profile)
 
                     {Map.merge(model, %{
                        settings_selected_profile_idx: new_idx,
@@ -301,18 +308,47 @@ defmodule Caudata.UI.Components.SettingsModal do
 
                   :containers ->
                     current_idx = Map.get(model, :settings_container_idx, 0)
-                    new_idx = ViewHelper.navigate_bounded_index(current_idx, k, length(docker_only_containers), page_step)
-                    {Map.merge(model, %{settings_container_idx: new_idx, settings_status_msg: nil}), []}
+
+                    new_idx =
+                      ViewHelper.navigate_bounded_index(
+                        current_idx,
+                        k,
+                        length(docker_only_containers),
+                        page_step
+                      )
+
+                    {Map.merge(model, %{settings_container_idx: new_idx, settings_status_msg: nil}),
+                     []}
 
                   :services ->
                     current_idx = Map.get(model, :settings_service_idx, 0)
-                    new_idx = ViewHelper.navigate_bounded_index(current_idx, k, length(services_only), page_step)
-                    {Map.merge(model, %{settings_service_idx: new_idx, settings_status_msg: nil}), []}
+
+                    new_idx =
+                      ViewHelper.navigate_bounded_index(
+                        current_idx,
+                        k,
+                        length(services_only),
+                        page_step
+                      )
+
+                    {Map.merge(model, %{settings_service_idx: new_idx, settings_status_msg: nil}),
+                     []}
 
                   :custom_logs ->
                     current_idx = Map.get(model, :settings_custom_log_idx, 0)
-                    new_idx = ViewHelper.navigate_bounded_index(current_idx, k, length(custom_logs), page_step)
-                    {Map.merge(model, %{settings_custom_log_idx: new_idx, settings_status_msg: nil}), []}
+
+                    new_idx =
+                      ViewHelper.navigate_bounded_index(
+                        current_idx,
+                        k,
+                        length(custom_logs),
+                        page_step
+                      )
+
+                    {Map.merge(model, %{
+                       settings_custom_log_idx: new_idx,
+                       settings_status_msg: nil
+                     }), []}
                 end
 
               " " ->
@@ -623,20 +659,7 @@ defmodule Caudata.UI.Components.SettingsModal do
         case active_item do
           :cancel ->
             # Revert fields to profile defaults and go back to :servers tab
-            reverted_fields =
-              if is_local do
-                %{
-                  "password" => profile.password || ""
-                }
-              else
-                %{
-                  "host_name" => profile.host_name || "",
-                  "port" => to_string(profile.port || 22),
-                  "user" => profile.user || "",
-                  "identity_file" => profile.identity_file || "",
-                  "password" => profile.password || ""
-                }
-              end
+            reverted_fields = ViewHelper.connection_fields_for_profile(profile)
 
             {%{
                model
@@ -771,8 +794,6 @@ defmodule Caudata.UI.Components.SettingsModal do
       end
     end
   end
-
-
 
   @doc """
   Delegates service filtering to ServicesTab.

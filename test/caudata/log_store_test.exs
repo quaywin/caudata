@@ -77,12 +77,17 @@ defmodule Caudata.LogStoreTest do
       "line without timestamp 1",
       "line without timestamp 2"
     ])
+
     _ = LogStore.get_stats(TestLogStore, "source_ts")
 
     snapshot = LogStore.get_snapshot(TestLogStore, "source_ts")
 
     assert snapshot == [
-             %{timestamp: "2026-08-04T10:00:00Z", stream: :stdout, message: "line with timestamp"},
+             %{
+               timestamp: "2026-08-04T10:00:00Z",
+               stream: :stdout,
+               message: "line with timestamp"
+             },
              %{timestamp: nil, stream: :stdout, message: "line without timestamp 1"},
              %{timestamp: nil, stream: :stdout, message: "line without timestamp 2"}
            ]
@@ -92,6 +97,7 @@ defmodule Caudata.LogStoreTest do
     LogStore.append_logs(TestLogStore, "source_dedup", [
       "2026-08-04T10:00:00Z line 1"
     ])
+
     _ = LogStore.get_stats(TestLogStore, "source_dedup")
 
     # Re-append same line (from --since inclusive response) plus a new line
@@ -99,6 +105,7 @@ defmodule Caudata.LogStoreTest do
       "2026-08-04T10:00:00Z line 1",
       "2026-08-04T10:00:01Z line 2"
     ])
+
     _ = LogStore.get_stats(TestLogStore, "source_dedup")
 
     snapshot = LogStore.get_snapshot(TestLogStore, "source_dedup")
@@ -223,5 +230,24 @@ defmodule Caudata.LogStoreTest do
     assert length(snapshot) == 2
     assert List.first(snapshot).message == "line 1"
     assert List.last(snapshot).message == "line 2"
+  end
+
+  test "set_capacity can shrink capacity and trims existing buffers" do
+    LogStore.append_logs(TestLogStore, "source_shrink", ["1", "2", "3", "4", "5"])
+    _ = LogStore.get_stats(TestLogStore, "source_shrink")
+
+    assert :ok = LogStore.set_capacity(TestLogStore, 3)
+
+    snapshot = LogStore.get_snapshot(TestLogStore, "source_shrink")
+
+    assert snapshot == [
+             %{timestamp: nil, stream: :stdout, message: "3"},
+             %{timestamp: nil, stream: :stdout, message: "4"},
+             %{timestamp: nil, stream: :stdout, message: "5"}
+           ]
+
+    stats = LogStore.get_stats(TestLogStore, "source_shrink")
+    assert stats.size == 3
+    assert stats.drop_count == 2
   end
 end

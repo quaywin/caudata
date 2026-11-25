@@ -720,8 +720,7 @@ defmodule Caudata.ContainerWorkerTest do
     # Send lines without timestamp
     send(
       follow_stream_pid,
-      {:ssh_cm, :dummy_conn,
-       {:data, :follow_channel, 0, "log line without any timestamp\n"}}
+      {:ssh_cm, :dummy_conn, {:data, :follow_channel, 0, "log line without any timestamp\n"}}
     )
 
     # Allow worker to flush logs
@@ -824,8 +823,7 @@ defmodule Caudata.ContainerWorkerTest do
     # Send an error output and non-zero exit status
     send(
       backfill_pid,
-      {:ssh_cm, :dummy_conn,
-       {:data, :backfill_channel, 1, "unknown flag: --until\n"}}
+      {:ssh_cm, :dummy_conn, {:data, :backfill_channel, 1, "unknown flag: --until\n"}}
     )
 
     send(backfill_pid, {:ssh_cm, :dummy_conn, {:exit_status, :backfill_channel, 1}})

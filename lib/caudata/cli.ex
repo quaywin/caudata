@@ -36,7 +36,13 @@ defmodule Caudata.CLI do
         System.halt(0)
 
       ["web" | rest] ->
-        case OptionParser.parse(rest,
+        normalized_rest =
+          Enum.map(rest, fn
+            "--tailscale_port" -> "--tailscale-port"
+            arg -> arg
+          end)
+
+        case OptionParser.parse(normalized_rest,
                aliases: [p: :port, t: :tailscale, k: :authkey],
                strict: [
                  port: :integer,
@@ -59,8 +65,11 @@ defmodule Caudata.CLI do
                     end
                 end
 
-            if opts[:tailscale] && opts[:authkey] do
-              System.put_env("TAILSCALE_AUTHKEY", opts[:authkey])
+            if opts[:tailscale] do
+              if opts[:authkey] do
+                System.put_env("TAILSCALE_AUTHKEY", opts[:authkey])
+              end
+
               ts_port = opts[:tailscale_port] || 80
               System.put_env("TAILSCALE_WEB_PORT", to_string(ts_port))
             end
@@ -113,7 +122,7 @@ defmodule Caudata.CLI do
   def get_current_version do
     case Application.spec(:caudata, :vsn) do
       # Fallback if not loaded
-      nil -> "0.1.14"
+      nil -> "0.1.76"
       vsn -> to_string(vsn)
     end
   end
@@ -252,12 +261,16 @@ defmodule Caudata.CLI do
     end
   end
 
-  defp download_json(url) do
+  defp download_json(url), do: http_get(url, 10_000)
+
+  defp download_file(url), do: http_get(url, 60_000)
+
+  defp http_get(url, timeout) do
     Application.ensure_all_started(:inets)
     Application.ensure_all_started(:ssl)
 
     headers = [{~c"user-agent", ~c"caudata-updater"}]
-    http_opts = [autoredirect: true, timeout: 10_000]
+    http_opts = [autoredirect: true, timeout: timeout, ssl: ssl_verify_opts()]
     opts = [body_format: :binary]
 
     case :httpc.request(:get, {to_charlist(url), headers}, http_opts, opts) do
@@ -272,23 +285,19 @@ defmodule Caudata.CLI do
     end
   end
 
-  defp download_file(url) do
-    Application.ensure_all_started(:inets)
-    Application.ensure_all_started(:ssl)
+  defp ssl_verify_opts do
+    try do
+      cacerts = :public_key.cacerts_get()
 
-    headers = [{~c"user-agent", ~c"caudata-updater"}]
-    http_opts = [autoredirect: true, timeout: 60_000]
-    opts = [body_format: :binary]
-
-    case :httpc.request(:get, {to_charlist(url), headers}, http_opts, opts) do
-      {:ok, {{_, 200, _}, _headers, body}} ->
-        {:ok, body}
-
-      {:ok, {{_, status, _}, _, _}} ->
-        {:error, "HTTP status #{status}"}
-
-      {:error, reason} ->
-        {:error, reason}
+      [
+        verify: :verify_peer,
+        cacerts: cacerts,
+        customize_hostname_check: [
+          match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+        ]
+      ]
+    rescue
+      _ -> [verify: :verify_peer]
     end
   end
 

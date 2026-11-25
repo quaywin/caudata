@@ -241,4 +241,33 @@ defmodule Caudata.ConfigManagerTest do
     assert {:ok, loaded_config} = Caudata.Config.load()
     assert Caudata.Config.custom_profiles(loaded_config) == []
   end
+
+  test "ConfigStore restricts config file permissions and flushes pending save on terminate" do
+    temp_config =
+      "test/fixtures/config_store_perm_#{System.unique_integer([:positive])}.db"
+
+    on_exit(fn ->
+      File.rm_rf(temp_config)
+    end)
+
+    store_name = :"PermStore_#{System.unique_integer([:positive])}"
+    {:ok, pid} = Caudata.ConfigStore.start_link(name: store_name, config_path: temp_config)
+
+    assert File.exists?(temp_config)
+    {:ok, stat} = File.stat(temp_config)
+    assert Bitwise.band(stat.mode, 0o777) == 0o600
+
+    :ok = Caudata.ConfigStore.put_setting(store_name, :global, :capacity, 4242)
+    # Simulate an un-flushed pending save timer before stopping
+    :sys.replace_state(pid, fn st ->
+      timer = Process.send_after(pid, :perform_save, 5_000)
+      Map.put(st, :save_timer, timer)
+    end)
+
+    :ok = GenServer.stop(pid, :normal)
+
+    {:ok, tab} = :ets.file2tab(String.to_charlist(temp_config))
+    assert [{_, 4242}] = :ets.lookup(tab, {:global, :capacity})
+    :ets.delete(tab)
+  end
 end

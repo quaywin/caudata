@@ -10,7 +10,8 @@ defmodule Caudata.UI.Components.ContainerInspectModalTest do
       modal_type: :container_inspect,
       container_inspect_scroll_y: 0,
       container_inspect_mode: :summary,
-      container_inspect_data: ~s([{"Id":"1234567890123456","Name":"/my-container","State":{"Running":true,"Status":"running"}}]),
+      container_inspect_data:
+        ~s([{"Id":"1234567890123456","Name":"/my-container","State":{"Running":true,"Status":"running"}}]),
       selected_container_name: "my-container",
       width: 100,
       height: 30
@@ -27,7 +28,8 @@ defmodule Caudata.UI.Components.ContainerInspectModalTest do
       modal_type: :container_inspect,
       container_inspect_scroll_y: 0,
       container_inspect_mode: :summary,
-      container_inspect_data: ~s([{"Id":"1234567890123456","Name":"/my-container","Config":{"Env":["A=1","B=2","C=3","D=4","E=5","F=6","G=7","H=8","I=9","J=10","K=11","L=12","M=13","N=14","O=15"]}}]),
+      container_inspect_data:
+        ~s([{"Id":"1234567890123456","Name":"/my-container","Config":{"Env":["A=1","B=2","C=3","D=4","E=5","F=6","G=7","H=8","I=9","J=10","K=11","L=12","M=13","N=14","O=15"]}}]),
       selected_container_name: "my-container",
       height: 20
     }

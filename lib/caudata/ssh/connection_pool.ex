@@ -161,9 +161,14 @@ defmodule Caudata.SSH.ConnectionPool do
 
     state =
       if status == :error do
-        Logger.warning("Purging failed SSH connection #{inspect(conn_ref)} from pool for #{state.profile.id}")
+        Logger.warning(
+          "Purging failed SSH connection #{inspect(conn_ref)} from pool for #{state.profile.id}"
+        )
+
         conn_info = Map.get(state.connections, conn_ref)
-        if conn_info && conn_info.monitor_ref, do: Process.demonitor(conn_info.monitor_ref, [:flush])
+
+        if conn_info && conn_info.monitor_ref,
+          do: Process.demonitor(conn_info.monitor_ref, [:flush])
 
         try do
           state.ssh_client.close(conn_ref)
@@ -202,7 +207,9 @@ defmodule Caudata.SSH.ConnectionPool do
             )
 
             conn_info = Map.get(state.connections, conn_ref)
-            if conn_info && conn_info.monitor_ref, do: Process.demonitor(conn_info.monitor_ref, [:flush])
+
+            if conn_info && conn_info.monitor_ref,
+              do: Process.demonitor(conn_info.monitor_ref, [:flush])
 
             try do
               state.ssh_client.close(conn_ref)

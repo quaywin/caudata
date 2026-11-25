@@ -71,7 +71,9 @@ defmodule Caudata.UI.Components.LevelFilterModal do
 
     header_lines = [
       Line.new([
-        Span.new("Filter Logs by Minimum Severity Level (hl standard):", style: %Style{fg: :cyan, modifiers: [:bold]})
+        Span.new("Filter Logs by Minimum Severity Level (hl standard):",
+          style: %Style{fg: :cyan, modifiers: [:bold]}
+        )
       ]),
       Line.new([
         Span.new(String.duplicate("─", popup_inner_width), style: %Style{fg: :dark_gray})
@@ -83,7 +85,9 @@ defmodule Caudata.UI.Components.LevelFilterModal do
         Span.new(String.duplicate("─", popup_inner_width), style: %Style{fg: :dark_gray})
       ]),
       Line.new([
-        Span.new("↑/↓ / j/k: navigate • 0-3 / Enter: select • Esc: close", style: %Style{fg: :dark_gray})
+        Span.new("↑/↓ / j/k: navigate • 0-3 / Enter: select • Esc: close",
+          style: %Style{fg: :dark_gray}
+        )
       ])
     ]
 

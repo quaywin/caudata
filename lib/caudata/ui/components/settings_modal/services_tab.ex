@@ -114,7 +114,8 @@ defmodule Caudata.UI.Components.SettingsModal.ServicesTab do
           Line.new([Span.new(empty_msg, style: %Style{fg: :dark_gray})])
         ]
       else
-        start_row = Caudata.UI.ViewHelper.scroll_start_row(state.settings_service_idx, display_rows_limit)
+        start_row =
+          Caudata.UI.ViewHelper.scroll_start_row(state.settings_service_idx, display_rows_limit)
 
         filtered_services
         |> Enum.with_index()

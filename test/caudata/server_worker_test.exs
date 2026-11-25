@@ -1332,7 +1332,9 @@ defmodule Caudata.ServerWorkerTest do
       {:ssh_cm, :dummy_conn, {:data, stats_channel, 0, stats_data_2}}
     )
 
-    assert_receive {:containers_updated, "container-stats-test-server", updated_containers_2}, 1000
+    assert_receive {:containers_updated, "container-stats-test-server", updated_containers_2},
+                   1000
+
     c1_2 = Enum.find(updated_containers_2, &(&1.id == "container1"))
     assert c1_2.net_rx_speed > 0
     assert c1_2.net_tx_speed > 0
@@ -1341,7 +1343,15 @@ defmodule Caudata.ServerWorkerTest do
   end
 
   test "container stats does not misattribute metrics to other containers with prefix collision or empty ID" do
-    profile = Profile.new(%{"id" => "stats-isolation-server", "host_name" => "10.0.0.41", "host_pattern" => "stats-isolation-server", "port" => 22, "user" => "root"})
+    profile =
+      Profile.new(%{
+        "id" => "stats-isolation-server",
+        "host_name" => "10.0.0.41",
+        "host_pattern" => "stats-isolation-server",
+        "port" => 22,
+        "user" => "root"
+      })
+
     test_pid = self()
 
     dummy_list_channel = :chan_list
@@ -1385,10 +1395,11 @@ defmodule Caudata.ServerWorkerTest do
 
     # 3 containers: container1, container10 (shares prefix!), and a 64-char sha container
     full_sha = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+
     bootstrap_ps =
       "{\"ID\":\"container1\",\"Names\":\"app1\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n" <>
-      "{\"ID\":\"container10\",\"Names\":\"app10\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n" <>
-      "{\"ID\":\"#{full_sha}\",\"Names\":\"sha_app\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n"
+        "{\"ID\":\"container10\",\"Names\":\"app10\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n" <>
+        "{\"ID\":\"#{full_sha}\",\"Names\":\"sha_app\",\"Image\":\"nginx\",\"Status\":\"Up\",\"State\":\"running\"}\n"
 
     send(worker_pid, {:ssh_cm, :dummy_conn, {:data, dummy_list_channel, 0, bootstrap_ps}})
     send(worker_pid, {:ssh_cm, :dummy_conn, {:closed, dummy_list_channel}})
@@ -1434,7 +1445,15 @@ defmodule Caudata.ServerWorkerTest do
   end
 
   test "exec_container_action executes docker command and returns result" do
-    profile = Profile.new(%{"id" => "action-test-server", "host_name" => "10.0.0.99", "host_pattern" => "action-test-server", "port" => 22, "user" => "root"})
+    profile =
+      Profile.new(%{
+        "id" => "action-test-server",
+        "host_name" => "10.0.0.99",
+        "host_pattern" => "action-test-server",
+        "port" => 22,
+        "user" => "root"
+      })
+
     test_pid = self()
 
     Mock
@@ -1540,8 +1559,6 @@ defmodule Caudata.ServerWorkerTest do
         :ok
     end
   end
-
-
 
   test "recovers immediately when monitored conn_ref process dies" do
     profile =
@@ -1825,8 +1842,7 @@ defmodule Caudata.ServerWorkerTest do
 
     {:ok, worker_pid} =
       start_supervised(
-        {ServerWorker,
-         {profile, ssh_client: Mock, enable_events: false, log_debounce_delay: 0}}
+        {ServerWorker, {profile, ssh_client: Mock, enable_events: false, log_debounce_delay: 0}}
       )
 
     assert_receive :opened_list_chan1, 1000
@@ -1857,7 +1873,10 @@ defmodule Caudata.ServerWorkerTest do
     send(worker_pid, {:ssh_cm, :dummy_conn2, {:closed, :list_chan2}})
 
     # Should broadcast container_rebuilt to PubSub
-    assert_receive {:container_rebuilt, "rebuild-reconnect-server", "my-app", "c_old_111", "c_new_222"}, 1000
+    assert_receive {:container_rebuilt, "rebuild-reconnect-server", "my-app", "c_old_111",
+                    "c_new_222"},
+                   1000
+
     # And should start streaming on the new container
     assert_receive :stream_started_for_rebuilt_container, 1000
 

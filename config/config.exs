@@ -2,8 +2,7 @@ import Config
 
 config :caudata, :env, Mix.env()
 
-config :caudata, Caudata.Web.Endpoint,
-  adapter: Bandit.PhoenixAdapter
+config :caudata, Caudata.Web.Endpoint, adapter: Bandit.PhoenixAdapter
 
 config :logger, level: :info
 

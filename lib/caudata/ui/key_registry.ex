@@ -464,7 +464,11 @@ defmodule Caudata.UI.KeyRegistry do
 
   def apply_level_filter(level, model) do
     level_name = Atom.to_string(level) |> String.upcase()
-    notif = if level == :all, do: "Log level filter cleared (All logs)", else: "Log level filter: #{level_name} only"
+
+    notif =
+      if level == :all,
+        do: "Log level filter cleared (All logs)",
+        else: "Log level filter: #{level_name} only"
 
     new_model =
       model
@@ -546,7 +550,8 @@ defmodule Caudata.UI.KeyRegistry do
         open_container_action_modal(model)
 
       :enter ->
-        if Map.get(model, :sidebar_focus, :servers) == :containers and Map.get(model, :selected_container_id) do
+        if Map.get(model, :sidebar_focus, :servers) == :containers and
+             Map.get(model, :selected_container_id) do
           open_container_action_modal(model)
         else
           Sidebar.handle_key(:enter, key_data, model)
@@ -563,6 +568,14 @@ defmodule Caudata.UI.KeyRegistry do
 
       k when k in ["t", "T"] ->
         {%{model | show_timestamps: not Map.get(model, :show_timestamps, false)}, []}
+
+      " " ->
+        if Map.get(model, :active_panel, :sidebar) == :logs or
+             Map.get(model, :logs_full_screen, false) do
+          {%{model | freeze: not Map.get(model, :freeze, false)}, []}
+        else
+          {model, []}
+        end
 
       k when k in ["a", "A"] ->
         ssh_config_profiles = Caudata.ConfigManager.discover_ssh_profiles()
@@ -633,19 +646,7 @@ defmodule Caudata.UI.KeyRegistry do
         Enum.find_index(profiles, &(&1.id == selected_profile_id)) || 0
 
       profile = Enum.at(profiles, selected_idx)
-
-      connection_fields =
-        if Map.get(profile, :is_local, false) do
-          %{"password" => profile.password || ""}
-        else
-          %{
-            "host_name" => profile.host_name || "",
-            "port" => to_string(profile.port || 22),
-            "user" => profile.user || "",
-            "identity_file" => profile.identity_file || "",
-            "password" => profile.password || ""
-          }
-        end
+      connection_fields = ViewHelper.connection_fields_for_profile(profile)
 
       {%{
          model

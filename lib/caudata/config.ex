@@ -56,7 +56,11 @@ defmodule Caudata.Config do
       end
 
     :ets.insert(tab, {{:profile, profile.id}, profile})
+    dir = Path.dirname(path)
+    File.mkdir_p!(dir)
+    if Path.basename(dir) == ".caudata", do: _ = File.chmod(dir, 0o700)
     res = :ets.tab2file(tab, char_path)
+    if res == :ok, do: _ = File.chmod(path, 0o600)
     :ets.delete(tab)
 
     case res do
@@ -201,11 +205,13 @@ defmodule Caudata.Config do
     unless File.exists?(path) do
       dir = Path.dirname(path)
       File.mkdir_p!(dir)
+      if Path.basename(dir) == ".caudata", do: _ = File.chmod(dir, 0o700)
 
       # Write default map as an ETS file
       tab = :ets.new(:caudata_config_file, [:set, :public])
       map_to_ets(tab, default_map)
       :ok = :ets.tab2file(tab, String.to_charlist(path))
+      _ = File.chmod(path, 0o600)
       :ets.delete(tab)
       Logger.info("Created default configuration file at #{path}")
     end

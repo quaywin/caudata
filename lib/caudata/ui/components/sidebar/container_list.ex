@@ -113,7 +113,11 @@ defmodule Caudata.UI.Components.Sidebar.ContainerList do
       text: container_rows,
       scroll: {scroll_y, 0},
       block: %Block{
-        title: if(active_panel == :sidebar and focus == :containers, do: " [2] Containers / Services [ACTIVE] ", else: " [2] Containers / Services "),
+        title:
+          if(active_panel == :sidebar and focus == :containers,
+            do: " [2] Containers / Services [ACTIVE] ",
+            else: " [2] Containers / Services "
+          ),
         borders: [:all],
         border_type: :rounded,
         border_style: %Style{fg: border_color}

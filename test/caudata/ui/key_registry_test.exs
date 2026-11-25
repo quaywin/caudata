@@ -178,7 +178,8 @@ defmodule Caudata.UI.KeyRegistryTest do
       assert KeyRegistry.current_panel_number(m2) == 2
     end
 
-    test "navigates right (1 -> 2 -> 3 -> 1) and left (3 -> 2 -> 1 -> 3) using arrows / vim keys", %{model: model} do
+    test "navigates right (1 -> 2 -> 3 -> 1) and left (3 -> 2 -> 1 -> 3) using arrows / vim keys",
+         %{model: model} do
       right_key = %{key: :right, modifiers: []}
       left_key = %{key: :left, modifiers: []}
 

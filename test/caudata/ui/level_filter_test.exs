@@ -48,18 +48,48 @@ defmodule Caudata.UI.LevelFilterTest do
     assert filtered_state.log_level_filter == :warn
 
     # Pressing '0' clears filter
-    {cleared_state, _cmds} = KeyRegistry.dispatch_key(%{key: :char, char: "0"}, %{filtered_state | modal_visible: true, modal_type: :level_filter})
+    {cleared_state, _cmds} =
+      KeyRegistry.dispatch_key(%{key: :char, char: "0"}, %{
+        filtered_state
+        | modal_visible: true,
+          modal_type: :level_filter
+      })
+
     assert cleared_state.log_level_filter == :all
   end
 
   test "ViewHelper filters logs by exact severity level" do
     logs = [
-      %{timestamp: "2026-08-21T06:00:00Z", stream: :stdout, message: ~s({"level":"debug","msg":"connecting"})},
-      %{timestamp: "2026-08-21T06:00:01Z", stream: :stdout, message: ~s({"level":"info","msg":"connected"})},
-      %{timestamp: "2026-08-21T06:00:02Z", stream: :stdout, message: ~s({"level":"warn","msg":"high latency"})},
-      %{timestamp: "2026-08-21T06:00:03Z", stream: :stderr, message: ~s({"level":"error","msg":"database timeout"})},
-      %{timestamp: "2026-08-21T06:00:04Z", stream: :stderr, message: ~s({"level":"fatal","msg":"kernel panic"})},
-      %{timestamp: "2026-08-21T06:00:05Z", stream: :stdout, message: "Plain text log without level"}
+      %{
+        timestamp: "2026-08-21T06:00:00Z",
+        stream: :stdout,
+        message: ~s({"level":"debug","msg":"connecting"})
+      },
+      %{
+        timestamp: "2026-08-21T06:00:01Z",
+        stream: :stdout,
+        message: ~s({"level":"info","msg":"connected"})
+      },
+      %{
+        timestamp: "2026-08-21T06:00:02Z",
+        stream: :stdout,
+        message: ~s({"level":"warn","msg":"high latency"})
+      },
+      %{
+        timestamp: "2026-08-21T06:00:03Z",
+        stream: :stderr,
+        message: ~s({"level":"error","msg":"database timeout"})
+      },
+      %{
+        timestamp: "2026-08-21T06:00:04Z",
+        stream: :stderr,
+        message: ~s({"level":"fatal","msg":"kernel panic"})
+      },
+      %{
+        timestamp: "2026-08-21T06:00:05Z",
+        stream: :stdout,
+        message: "Plain text log without level"
+      }
     ]
 
     base_model = %{

@@ -56,5 +56,14 @@ defmodule Caudata.CLITest do
         System.delete_env("PORT")
       end
     end
+
+    test "handle_args sets TAILSCALE_WEB_PORT when --tailscale is used with env TAILSCALE_AUTHKEY" do
+      try do
+        assert CLI.handle_args(["web", "--tailscale", "--tailscale_port", "8443"]) == {:web, 4000}
+        assert System.get_env("TAILSCALE_WEB_PORT") == "8443"
+      after
+        System.delete_env("TAILSCALE_WEB_PORT")
+      end
+    end
   end
 end

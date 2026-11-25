@@ -55,7 +55,10 @@ defmodule Caudata.UI.Components.LogsPaneTest do
       assert outer_block.border_style == %Style{fg: :cyan}
     end
 
-    test "renders disabled pane with dark_gray border when inactive", %{state: state, profile: profile} do
+    test "renders disabled pane with dark_gray border when inactive", %{
+      state: state,
+      profile: profile
+    } do
       disabled_profile = %{profile | enabled: false}
       disabled_state = %{state | profiles: [disabled_profile]}
       area = %Rect{x: 0, y: 0, width: 80, height: 24}
@@ -66,7 +69,10 @@ defmodule Caudata.UI.Components.LogsPaneTest do
       assert outer_block.border_style == %Style{fg: :dark_gray}
     end
 
-    test "renders disabled pane with cyan border when logs_full_screen is true", %{state: state, profile: profile} do
+    test "renders disabled pane with cyan border when logs_full_screen is true", %{
+      state: state,
+      profile: profile
+    } do
       disabled_profile = %{profile | enabled: false}
       disabled_state = %{state | profiles: [disabled_profile], logs_full_screen: true}
       area = %Rect{x: 0, y: 0, width: 80, height: 24}
@@ -90,12 +96,24 @@ defmodule Caudata.UI.Components.LogsPaneTest do
       assert active_block.border_style == %Style{fg: :cyan}
     end
 
-    test "clamps scroll_y to max_scroll when scrolling up so frame does not jump up leaving blank lines", %{state: state} do
+    test "clamps scroll_y to max_scroll when scrolling up so frame does not jump up leaving blank lines",
+         %{state: state} do
       area = %Rect{x: 0, y: 0, width: 80, height: 24}
-      logs = Enum.map(1..50, fn i -> %{timestamp: nil, stream: :stdout, message: "Log line #{i}"} end)
+
+      logs =
+        Enum.map(1..50, fn i -> %{timestamp: nil, stream: :stdout, message: "Log line #{i}"} end)
 
       # 1. State at :bottom
-      bottom_state = %{state | width: 80, height: 24, active_panel: :logs, logs: logs, logs_scroll_y: :bottom, selected_container_id: "c1"}
+      bottom_state = %{
+        state
+        | width: 80,
+          height: 24,
+          active_panel: :logs,
+          logs: logs,
+          logs_scroll_y: :bottom,
+          selected_container_id: "c1"
+      }
+
       {_, [{logs_widget, _} | _]} = LogsPane.render(bottom_state, area)
       assert logs_widget.scroll == {10, 0}
 
@@ -109,15 +127,36 @@ defmodule Caudata.UI.Components.LogsPaneTest do
       assert scrolled_widget.scroll == {0, 0}
 
       # 3. State with an out-of-bounds large scroll_y integer
-      oob_state = %{state | width: 80, height: 24, active_panel: :logs, logs: logs, logs_scroll_y: 999, selected_container_id: "c1"}
+      oob_state = %{
+        state
+        | width: 80,
+          height: 24,
+          active_panel: :logs,
+          logs: logs,
+          logs_scroll_y: 999,
+          selected_container_id: "c1"
+      }
+
       {_, [{oob_widget, _} | _]} = LogsPane.render(oob_state, area)
       # Target line gets clamped so it doesn't overshoot
       assert oob_widget.scroll == {0, 0}
     end
 
-    test "handles scaling / resizing of log pane area without empty space or error", %{state: state} do
-      logs = Enum.map(1..50, fn i -> %{timestamp: nil, stream: :stdout, message: "Log line #{i}"} end)
-      initial_state = %{state | width: 80, height: 24, active_panel: :logs, logs: logs, logs_scroll_y: 28, selected_container_id: "c1"}
+    test "handles scaling / resizing of log pane area without empty space or error", %{
+      state: state
+    } do
+      logs =
+        Enum.map(1..50, fn i -> %{timestamp: nil, stream: :stdout, message: "Log line #{i}"} end)
+
+      initial_state = %{
+        state
+        | width: 80,
+          height: 24,
+          active_panel: :logs,
+          logs: logs,
+          logs_scroll_y: 28,
+          selected_container_id: "c1"
+      }
 
       # Small window (height: 15)
       small_area = %Rect{x: 0, y: 0, width: 80, height: 15}
@@ -162,8 +201,11 @@ defmodule Caudata.UI.Components.LogsPaneTest do
       assert commands == [{:command, {:load_history, 10000, 0}}]
     end
 
-    test "pressing page_up at top triggers history fetch when logs_fetch_limit < 10000", %{state: state} do
-      logs = Enum.map(1..100, fn i -> %{timestamp: nil, stream: :stdout, message: "Log line #{i}"} end)
+    test "pressing page_up at top triggers history fetch when logs_fetch_limit < 10000", %{
+      state: state
+    } do
+      logs =
+        Enum.map(1..100, fn i -> %{timestamp: nil, stream: :stdout, message: "Log line #{i}"} end)
 
       initial_state = %{
         state
@@ -184,6 +226,77 @@ defmodule Caudata.UI.Components.LogsPaneTest do
       assert new_model.logs_fetch_limit == 2000
       assert new_model.loading_history == true
       assert commands == [{:command, {:load_history, 2000}}]
+    end
+  end
+
+  describe "visual mode, copy, and freeze edge cases" do
+    test "does not select or copy placeholder text when filter reduces logs to empty", %{
+      state: state
+    } do
+      logs = [%{timestamp: nil, stream: :stdout, message: "hello world"}]
+
+      filtered_state = %{
+        state
+        | active_panel: :logs,
+          selected_container_id: "c1",
+          logs: logs,
+          filter_regex: "nonexistent_match"
+      }
+
+      {v_model, []} = LogsPane.handle_key(:char, %{key: :char, char: "v"}, filtered_state)
+      assert v_model.mode == :browsing
+      assert v_model.notification == {"No logs to select", 25}
+
+      {y_model, []} = LogsPane.handle_key(:char, %{key: :char, char: "y"}, filtered_state)
+      assert y_model.notification == {"No logs to copy", 25}
+    end
+
+    test "Space toggles freeze in normal mode when logs pane is active", %{state: state} do
+      logs_active_state = state |> Map.put(:active_panel, :logs) |> Map.put(:freeze, false)
+
+      {frozen_model, []} =
+        Caudata.UI.KeyRegistry.dispatch_key(
+          %{key: :char, char: " ", modifiers: []},
+          logs_active_state
+        )
+
+      assert frozen_model.freeze == true
+
+      {unfrozen_model, []} =
+        Caudata.UI.KeyRegistry.dispatch_key(%{key: :char, char: " ", modifiers: []}, frozen_model)
+
+      assert unfrozen_model.freeze == false
+    end
+
+    test "search mode regex updates displayed logs accurately after :update_filter", %{
+      state: state
+    } do
+      logs = [
+        %{timestamp: nil, stream: :stdout, message: "error one"},
+        %{timestamp: nil, stream: :stdout, message: "warn two"}
+      ]
+
+      base_state = %{state | selected_container_id: "c1", logs: logs, active_panel: :logs}
+      {:noreply, via_info} = Caudata.UI.App.handle_info({:update_filter, "err.*"}, base_state)
+
+      assert Enum.map(Caudata.UI.ViewHelper.get_displayed_logs(via_info), & &1.message) == [
+               "error one"
+             ]
+
+      {search_state, []} =
+        LogsPane.handle_key(:char, %{key: :char, char: "/"}, %{via_info | filter_regex: ""})
+
+      {typed_state, []} =
+        Enum.reduce(["w", "a", "r", "n", ".", "*"], {search_state, []}, fn ch, {acc, _} ->
+          LogsPane.handle_key(:char, %{key: :char, char: ch}, acc)
+        end)
+
+      assert typed_state.filter_regex == "warn.*"
+      assert typed_state.filter_error == false
+
+      assert Enum.map(Caudata.UI.ViewHelper.get_displayed_logs(typed_state), & &1.message) == [
+               "warn two"
+             ]
     end
   end
 end

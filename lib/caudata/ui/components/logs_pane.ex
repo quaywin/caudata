@@ -350,7 +350,6 @@ defmodule Caudata.UI.Components.LogsPane do
     end
   end
 
-
   defp get_wrapped_line_chunks(line, wrap_width) do
     Cache.fetch(:fmt_wrapped_chunks, {line, wrap_width}, fn ->
       {spans, is_err_level, _level} = LogFormatter.format_line_with_meta(line)

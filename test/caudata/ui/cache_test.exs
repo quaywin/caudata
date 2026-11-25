@@ -4,6 +4,7 @@ defmodule Caudata.UI.CacheTest do
 
   test "fetch/4 caches and retrieves values" do
     calls = :counters.new(1, [:atomics])
+
     compute = fn ->
       :counters.add(calls, 1, 1)
       "computed_val"
@@ -53,26 +54,32 @@ defmodule Caudata.UI.CacheTest do
   test "fetch_latest/3 caches single latest value and discards previous" do
     calls = :counters.new(1, [:atomics])
 
-    c1 = Cache.fetch_latest(:test_latest, "key_A", fn ->
-      :counters.add(calls, 1, 1)
-      "res_A"
-    end)
+    c1 =
+      Cache.fetch_latest(:test_latest, "key_A", fn ->
+        :counters.add(calls, 1, 1)
+        "res_A"
+      end)
+
     assert c1 == "res_A"
     assert :counters.get(calls, 1) == 1
 
     # Same key -> cached
-    c2 = Cache.fetch_latest(:test_latest, "key_A", fn ->
-      :counters.add(calls, 1, 1)
-      "res_A"
-    end)
+    c2 =
+      Cache.fetch_latest(:test_latest, "key_A", fn ->
+        :counters.add(calls, 1, 1)
+        "res_A"
+      end)
+
     assert c2 == "res_A"
     assert :counters.get(calls, 1) == 1
 
     # Different key -> replaces previous
-    c3 = Cache.fetch_latest(:test_latest, "key_B", fn ->
-      :counters.add(calls, 1, 1)
-      "res_B"
-    end)
+    c3 =
+      Cache.fetch_latest(:test_latest, "key_B", fn ->
+        :counters.add(calls, 1, 1)
+        "res_B"
+      end)
+
     assert c3 == "res_B"
     assert :counters.get(calls, 1) == 2
 

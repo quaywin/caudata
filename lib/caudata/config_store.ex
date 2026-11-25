@@ -101,6 +101,7 @@ defmodule Caudata.ConfigStore do
 
   @impl true
   def init(opts) do
+    Process.flag(:trap_exit, true)
     name = Keyword.get(opts, :name, __MODULE__)
     path = Keyword.get(opts, :config_path) || Caudata.Config.config_path()
     char_path = String.to_charlist(path)
@@ -139,10 +140,10 @@ defmodule Caudata.ConfigStore do
           :ets.delete(file_tab)
 
         {:error, _reason} ->
-          initialize_defaults(my_tab)
+          initialize_defaults(my_tab, path)
       end
     else
-      initialize_defaults(my_tab)
+      initialize_defaults(my_tab, path)
     end
 
     {:ok, %{table: my_tab, config_path: path, save_timer: nil}}
@@ -209,9 +210,26 @@ defmodule Caudata.ConfigStore do
     {:noreply, Map.put(state, :save_timer, nil)}
   end
 
+  @impl true
+  def terminate(_reason, state) do
+    if state.save_timer do
+      Process.cancel_timer(state.save_timer)
+
+      receive do
+        :perform_save -> :ok
+      after
+        0 -> :ok
+      end
+
+      do_perform_save(state)
+    end
+
+    :ok
+  end
+
   # Helpers
 
-  defp initialize_defaults(t) do
+  defp initialize_defaults(t, path) do
     :ets.insert(t, {{:global, :capacity}, 10000})
     :ets.insert(t, {{:global, :discover_ssh_config}, true})
 
@@ -221,23 +239,7 @@ defmodule Caudata.ConfigStore do
     :ets.insert(t, {{:ssh_server, :host_keys_dir}, "~/.caudata/ssh_keys"})
 
     # Trigger synchronous save of defaults
-    path = Caudata.Config.config_path()
-    char_path = String.to_charlist(path)
-    dir = Path.dirname(path)
-    File.mkdir_p!(dir)
-
-    file_tab = :ets.new(:caudata_config_file, [:set, :public])
-
-    :ets.foldl(
-      fn element, _acc ->
-        :ets.insert(file_tab, element)
-      end,
-      :ok,
-      t
-    )
-
-    :ok = :ets.tab2file(file_tab, char_path)
-    :ets.delete(file_tab)
+    do_perform_save(%{table: t, config_path: path})
     :ok
   end
 
@@ -268,13 +270,20 @@ defmodule Caudata.ConfigStore do
 
     dir = Path.dirname(path)
     File.mkdir_p!(dir)
+
+    if Path.basename(dir) == ".caudata" do
+      _ = File.chmod(dir, 0o700)
+    end
+
     tmp_path = path <> ".tmp.#{System.unique_integer([:positive])}"
     tmp_char_path = String.to_charlist(tmp_path)
 
     try do
       case :ets.tab2file(file_tab, tmp_char_path) do
         :ok ->
+          _ = File.chmod(tmp_path, 0o600)
           File.rename!(tmp_path, path)
+          _ = File.chmod(path, 0o600)
 
         {:error, reason} ->
           Logger.error("Failed to persist config to disk at #{path}: #{inspect(reason)}")

@@ -110,7 +110,12 @@ defmodule Caudata.UI.Components.SidebarTest do
     sidebar_area = %Rect{x: 0, y: 0, width: 38, height: 10}
 
     widgets = Sidebar.render(state, sidebar_area)
-    {container_widget, _} = Enum.find(widgets, fn {%ExRatatui.Widgets.Paragraph{block: block}, _} -> String.contains?(to_string(block.title), "Containers") end)
+
+    {container_widget, _} =
+      Enum.find(widgets, fn {%ExRatatui.Widgets.Paragraph{block: block}, _} ->
+        String.contains?(to_string(block.title), "Containers")
+      end)
+
     assert container_widget.scroll == {4, 0}
   end
 
@@ -156,9 +161,11 @@ defmodule Caudata.UI.Components.SidebarTest do
     }
 
     {widget, _} = Caudata.UI.Components.Sidebar.ContainerInfo.render(state, box_area)
-    rendered_text = Enum.map_join(widget.text, "\n", fn line ->
-      Enum.map_join(line.spans, "", & &1.content)
-    end)
+
+    rendered_text =
+      Enum.map_join(widget.text, "\n", fn line ->
+        Enum.map_join(line.spans, "", & &1.content)
+      end)
 
     # Status, CPU, RAM, Net must be present
     assert String.contains?(rendered_text, "Status:")
@@ -197,9 +204,11 @@ defmodule Caudata.UI.Components.SidebarTest do
     }
 
     {widget, _} = Caudata.UI.Components.Sidebar.ContainerInfo.render(state, box_area)
-    rendered_text = Enum.map_join(widget.text, "\n", fn line ->
-      Enum.map_join(line.spans, "", & &1.content)
-    end)
+
+    rendered_text =
+      Enum.map_join(widget.text, "\n", fn line ->
+        Enum.map_join(line.spans, "", & &1.content)
+      end)
 
     assert String.contains?(rendered_text, "Net:")
     assert String.contains?(rendered_text, "▼")
@@ -212,6 +221,7 @@ defmodule Caudata.UI.Components.SidebarTest do
     box_area = %Rect{x: 0, y: 0, width: 38, height: 6}
 
     metrics = {25, 40, 6.4, 16.0, 50, 50.0, 100, 120 * 1024, 45 * 1024}
+
     state = %{
       state
       | statuses: %{"test-server" => :connected},
@@ -219,9 +229,11 @@ defmodule Caudata.UI.Components.SidebarTest do
     }
 
     {widget, _} = Caudata.UI.Components.Sidebar.ServerMetrics.render(state, box_area)
-    rendered_text = Enum.map_join(widget.text, "\n", fn line ->
-      Enum.map_join(line.spans, "", & &1.content)
-    end)
+
+    rendered_text =
+      Enum.map_join(widget.text, "\n", fn line ->
+        Enum.map_join(line.spans, "", & &1.content)
+      end)
 
     assert String.contains?(rendered_text, "CPU:")
     assert String.contains?(rendered_text, "25%")

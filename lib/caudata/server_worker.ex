@@ -233,9 +233,9 @@ defmodule Caudata.ServerWorker do
     else
       case state.ssh_client.open_channel(state.conn_ref) do
         {:ok, channel_id} ->
-          escaped_path = String.replace(path, "\"", "\\\"")
-          cmd = "if [ -r \"#{escaped_path}\" ]; then echo \"valid\"; else echo \"invalid\"; fi"
-          wrapped_cmd = wrap_sudo(cmd, state.profile.password)
+          quoted_path = Caudata.Shell.quote_arg(path)
+          cmd = "if [ -r #{quoted_path} ]; then echo valid; else echo invalid; fi"
+          wrapped_cmd = Caudata.Shell.wrap_sudo(cmd, state.profile.password)
 
           case state.ssh_client.exec(state.conn_ref, channel_id, wrapped_cmd) do
             :ok ->
@@ -260,21 +260,21 @@ defmodule Caudata.ServerWorker do
     else
       case state.ssh_client.open_channel(state.conn_ref) do
         {:ok, channel_id} ->
-          escaped_id = String.replace(to_string(container_id), "'", "'\\''")
+          quoted_id = Caudata.Shell.quote_arg(container_id)
 
           cmd =
             case action do
-              :start -> "docker start '#{escaped_id}'"
-              :stop -> "docker stop '#{escaped_id}'"
-              :restart -> "docker restart '#{escaped_id}'"
-              :kill -> "docker kill '#{escaped_id}'"
-              :remove -> "docker rm '#{escaped_id}'"
-              :inspect -> "docker inspect '#{escaped_id}'"
+              :start -> "docker start #{quoted_id}"
+              :stop -> "docker stop #{quoted_id}"
+              :restart -> "docker restart #{quoted_id}"
+              :kill -> "docker kill #{quoted_id}"
+              :remove -> "docker rm #{quoted_id}"
+              :inspect -> "docker inspect #{quoted_id}"
               _ -> nil
             end
 
           if cmd do
-            wrapped_cmd = wrap_sudo(cmd, state.profile.password)
+            wrapped_cmd = Caudata.Shell.wrap_sudo(cmd, state.profile.password)
 
             case state.ssh_client.exec(state.conn_ref, channel_id, wrapped_cmd) do
               :ok ->
@@ -380,7 +380,7 @@ defmodule Caudata.ServerWorker do
 
       case state.ssh_client.open_channel(state.conn_ref) do
         {:ok, list_channel_id} ->
-          wrapped_cmd = wrap_sudo(@discovery_cmd, state.profile.password)
+          wrapped_cmd = Caudata.Shell.wrap_sudo(@discovery_cmd, state.profile.password)
 
           case state.ssh_client.exec(
                  state.conn_ref,
@@ -667,7 +667,8 @@ defmodule Caudata.ServerWorker do
             active_c =
               Enum.find(all_containers, fn c ->
                 to_string(c.id) == state.active_container_id or
-                  (state.active_container_name != nil and to_string(c.name) == state.active_container_name)
+                  (state.active_container_name != nil and
+                     to_string(c.name) == state.active_container_name)
               end)
 
             if active_c do
@@ -683,7 +684,8 @@ defmodule Caudata.ServerWorker do
                   Phoenix.PubSub.broadcast(
                     Caudata.PubSub,
                     "servers",
-                    {:container_rebuilt, state.profile.id, state.active_container_name, old_id, new_id}
+                    {:container_rebuilt, state.profile.id, state.active_container_name, old_id,
+                     new_id}
                   )
 
                   if Process.whereis(Caudata.LogStore) do
@@ -859,7 +861,7 @@ defmodule Caudata.ServerWorker do
 
     case state.ssh_client.open_channel(conn_ref) do
       {:ok, list_channel_id} ->
-        wrapped_cmd = wrap_sudo(@discovery_cmd, state.profile.password)
+        wrapped_cmd = Caudata.Shell.wrap_sudo(@discovery_cmd, state.profile.password)
 
         case state.ssh_client.exec(
                conn_ref,
@@ -1109,7 +1111,7 @@ defmodule Caudata.ServerWorker do
           event_cmd =
             "docker events --filter 'type=container' --filter 'event=start' --filter 'event=die' --filter 'event=destroy' --filter 'event=stop' --filter 'event=restart' --format '{{json .}}'"
 
-          wrapped_cmd = wrap_sudo(event_cmd, state.profile.password)
+          wrapped_cmd = Caudata.Shell.wrap_sudo(event_cmd, state.profile.password)
 
           case state.ssh_client.exec(state.conn_ref, events_channel_id, wrapped_cmd) do
             :ok ->
@@ -2099,12 +2101,12 @@ defmodule Caudata.ServerWorker do
 
       case state.ssh_client.open_channel(state.conn_ref) do
         {:ok, stats_channel_id} ->
-          escaped_id = String.replace(state.active_container_id, "'", "'\\''")
+          quoted_id = Caudata.Shell.quote_arg(state.active_container_id)
 
           cmd =
-            "cid=\"#{escaped_id}\"; cpid=$(docker inspect -f \"{{.State.Pid}}\" \"$cid\" 2>/dev/null); host_net=$(docker inspect -f \"{{.HostConfig.NetworkMode}}\" \"$cid\" 2>/dev/null); docker stats --format \"{{.ID}} | {{.CPUPerc}} | {{.MemUsage}}\" \"$cid\" | while IFS= read -r line; do if [ -z \"$cpid\" ] || [ ! -d \"/proc/$cpid\" ]; then cpid=$(docker inspect -f \"{{.State.Pid}}\" \"$cid\" 2>/dev/null); host_net=$(docker inspect -f \"{{.HostConfig.NetworkMode}}\" \"$cid\" 2>/dev/null); fi; rx_tx=\"0 0\"; if [ \"$host_net\" != \"host\" ] && [ -n \"$cpid\" ] && [ \"$cpid\" -gt 0 ] 2>/dev/null && [ -f \"/proc/$cpid/net/dev\" ]; then c_ns=$(readlink /proc/$cpid/ns/net 2>/dev/null); h_ns=$(readlink /proc/1/ns/net 2>/dev/null || readlink /proc/$$/ns/net 2>/dev/null); if [ -z \"$c_ns\" ] || [ -z \"$h_ns\" ] || [ \"$c_ns\" != \"$h_ns\" ]; then rx_tx=$(awk \"/:/ && \\$1 !~ /^(lo|docker|veth|br-)/ { sub(/.*:/, \\\"\\\"); rx += \\$1; tx += \\$9 } END { printf \\\"%.0f %.0f\\\\n\\\", rx, tx }\" \"/proc/$cpid/net/dev\" 2>/dev/null); fi; fi; echo \"CONTAINER_METRICS: $line | $rx_tx\"; done"
+            "cid=#{quoted_id}; cpid=$(docker inspect -f \"{{.State.Pid}}\" \"$cid\" 2>/dev/null); host_net=$(docker inspect -f \"{{.HostConfig.NetworkMode}}\" \"$cid\" 2>/dev/null); docker stats --format \"{{.ID}} | {{.CPUPerc}} | {{.MemUsage}}\" \"$cid\" | while IFS= read -r line; do if [ -z \"$cpid\" ] || [ ! -d \"/proc/$cpid\" ]; then cpid=$(docker inspect -f \"{{.State.Pid}}\" \"$cid\" 2>/dev/null); host_net=$(docker inspect -f \"{{.HostConfig.NetworkMode}}\" \"$cid\" 2>/dev/null); fi; rx_tx=\"0 0\"; if [ \"$host_net\" != \"host\" ] && [ -n \"$cpid\" ] && [ \"$cpid\" -gt 0 ] 2>/dev/null && [ -f \"/proc/$cpid/net/dev\" ]; then c_ns=$(readlink /proc/$cpid/ns/net 2>/dev/null); h_ns=$(readlink /proc/1/ns/net 2>/dev/null || readlink /proc/$$/ns/net 2>/dev/null); if [ -z \"$c_ns\" ] || [ -z \"$h_ns\" ] || [ \"$c_ns\" != \"$h_ns\" ]; then rx_tx=$(awk \"/:/ && \\$1 !~ /^(lo|docker|veth|br-)/ { sub(/.*:/, \\\"\\\"); rx += \\$1; tx += \\$9 } END { printf \\\"%.0f %.0f\\\\n\\\", rx, tx }\" \"/proc/$cpid/net/dev\" 2>/dev/null); fi; fi; echo \"CONTAINER_METRICS: $line | $rx_tx\"; done"
 
-          wrapped_cmd = wrap_sudo(cmd, state.profile.password)
+          wrapped_cmd = Caudata.Shell.wrap_sudo(cmd, state.profile.password)
 
           case state.ssh_client.exec(state.conn_ref, stats_channel_id, wrapped_cmd) do
             :ok ->
@@ -2123,32 +2125,5 @@ defmodule Caudata.ServerWorker do
     else
       state
     end
-  end
-
-  defp wrap_sudo(cmd, password) do
-    escaped_cmd = String.replace(cmd, "'", "'\\''")
-
-    inner_script =
-      cond do
-        password && password != "" ->
-          escaped_password = String.replace(password, "'", "'\\''")
-
-          "if command -v sudo >/dev/null 2>&1; then if true <&0 2>/dev/null; then exec 3<&0; fi; echo '#{escaped_password}' | sudo -S -p '' sh -c 'if true <&3 2>/dev/null; then exec 0<&3 3<&-; fi; #{escaped_cmd}' 2>/dev/null || sh -c '#{escaped_cmd}'; else sh -c '#{escaped_cmd}'; fi"
-
-        true ->
-          "if command -v sudo >/dev/null 2>&1; then sudo -n sh -c '#{escaped_cmd}' 2>/dev/null || sh -c '#{escaped_cmd}'; else sh -c '#{escaped_cmd}'; fi"
-      end
-
-    # Wrap the entire script in sh -c "..." to ensure compatibility with
-    # any login shell (fish, zsh, bash, etc.) - the login shell only sees
-    # a simple `sh -c "..."` command, not the POSIX syntax inside.
-    escaped_for_dq =
-      inner_script
-      |> String.replace("\\", "\\\\")
-      |> String.replace("\"", "\\\"")
-      |> String.replace("$", "\\$")
-      |> String.replace("`", "\\`")
-
-    "sh -c \"#{escaped_for_dq}\""
   end
 end

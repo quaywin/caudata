@@ -10,43 +10,48 @@ defmodule Caudata.UI.Components.HelpModal do
   alias ExRatatui.Widgets.Popup
 
   @sections [
-    {"🌐 Global Shortcuts", [
-      {"1 / 2 / 3", "Jump focus to Servers (1), Containers (2), or Logs (3)"},
-      {"Tab  or  ← / →", "Cycle active panel focus (1 ↔ 2 ↔ 3)"},
-      {"l / L", "Open Log Level filter modal (hl standard)"},
-      {"a / A", "Open Add Server connection modal"},
-      {"s / S", "Open Global Settings modal"},
-      {"f / F", "Toggle Fullscreen Logs view"},
-      {"t / T", "Toggle log timestamps"},
-      {"? ", "Toggle this Help modal"},
-      {"q / Ctrl+C", "Quit Caudata"}
-    ]},
-    {"📁 Servers (Panel 1)", [
-      {"j / k  or  ↑ / ↓", "Navigate server list"},
-      {"Enter", "Connect / Refresh server"}
-    ]},
-    {"📦 Containers & Services (Panel 2)", [
-      {"j / k  or  ↑ / ↓", "Navigate container / service list"},
-      {"Enter / m", "Open Docker container actions (Start/Stop/Restart/Kill/Inspect)"},
-      {"Space", "Toggle log stream on/off"}
-    ]},
-    {"📜 Logs Pane (Panel 3)", [
-      {"j / k  or  ↑ / ↓", "Scroll logs down / up (with auto-acceleration)"},
-      {"g / G", "Jump to Top (g) or Bottom (G) of logs"},
-      {"PageUp / PageDown", "Scroll logs page-by-page"},
-      {"l / L", "Open Log Level filter modal (hl standard)"},
-      {"/", "Enter Live Regex Filter search mode"},
-      {"v / V", "Enter Visual Selection mode (extend selection with j/k)"},
-      {"y / Y", "Copy all displayed logs (or selected lines) to clipboard"},
-      {"Esc", "Clear active filter regex / exit visual mode"}
-    ]},
-    {"✏️ Form & Modal Shortcuts", [
-      {"Tab / Shift+Tab", "Navigate next / previous form field"},
-      {"Enter", "Submit form / Confirm modal action"},
-      {"1 - 6", "Quick-select action number in container action modal"},
-      {"y / n", "Confirm (y) or Cancel (n) destructive confirmation dialogs"},
-      {"Esc / q", "Close active modal"}
-    ]}
+    {"🌐 Global Shortcuts",
+     [
+       {"1 / 2 / 3", "Jump focus to Servers (1), Containers (2), or Logs (3)"},
+       {"Tab  or  ← / →", "Cycle active panel focus (1 ↔ 2 ↔ 3)"},
+       {"l / L", "Open Log Level filter modal (hl standard)"},
+       {"a / A", "Open Add Server connection modal"},
+       {"s / S", "Open Global Settings modal"},
+       {"f / F", "Toggle Fullscreen Logs view"},
+       {"t / T", "Toggle log timestamps"},
+       {"? ", "Toggle this Help modal"},
+       {"q / Ctrl+C", "Quit Caudata"}
+     ]},
+    {"📁 Servers (Panel 1)",
+     [
+       {"j / k  or  ↑ / ↓", "Navigate server list"},
+       {"Enter", "Connect / Refresh server"}
+     ]},
+    {"📦 Containers & Services (Panel 2)",
+     [
+       {"j / k  or  ↑ / ↓", "Navigate container / service list"},
+       {"Enter / m", "Open Docker container actions (Start/Stop/Restart/Kill/Inspect)"},
+       {"Space", "Toggle log stream on/off"}
+     ]},
+    {"📜 Logs Pane (Panel 3)",
+     [
+       {"j / k  or  ↑ / ↓", "Scroll logs down / up (with auto-acceleration)"},
+       {"g / G", "Jump to Top (g) or Bottom (G) of logs"},
+       {"PageUp / PageDown", "Scroll logs page-by-page"},
+       {"l / L", "Open Log Level filter modal (hl standard)"},
+       {"/", "Enter Live Regex Filter search mode"},
+       {"v / V", "Enter Visual Selection mode (extend selection with j/k)"},
+       {"y / Y", "Copy all displayed logs (or selected lines) to clipboard"},
+       {"Esc", "Clear active filter regex / exit visual mode"}
+     ]},
+    {"✏️ Form & Modal Shortcuts",
+     [
+       {"Tab / Shift+Tab", "Navigate next / previous form field"},
+       {"Enter", "Submit form / Confirm modal action"},
+       {"1 - 6", "Quick-select action number in container action modal"},
+       {"y / n", "Confirm (y) or Cancel (n) destructive confirmation dialogs"},
+       {"Esc / q", "Close active modal"}
+     ]}
   ]
 
   @doc """

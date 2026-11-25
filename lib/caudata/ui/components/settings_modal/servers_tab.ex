@@ -19,7 +19,12 @@ defmodule Caudata.UI.Components.SettingsModal.ServersTab do
       ]
     else
       display_rows_limit = max(3, div(state.height * 90, 100) - 9)
-      start_row = Caudata.UI.ViewHelper.scroll_start_row(state.settings_selected_profile_idx, display_rows_limit)
+
+      start_row =
+        Caudata.UI.ViewHelper.scroll_start_row(
+          state.settings_selected_profile_idx,
+          display_rows_limit
+        )
 
       rows =
         state.profiles

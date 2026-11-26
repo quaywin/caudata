@@ -9,6 +9,88 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    name: Format, Compile & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MIX_ENV: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19.5"
+          otp-version: "28.5"
+
+      - name: Resolve release SemVer
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          RESOLVED=$(TAG="$TAG" elixir -e '
+            tag = System.fetch_env!("TAG")
+            case Version.parse(tag) do
+              {:ok, _} -> IO.write(tag)
+              :error ->
+                clean = tag |> String.split(".") |> Enum.map(&Regex.replace(~r/^0+(\d)/, &1, "\\1")) |> Enum.join(".")
+                if match?({:ok, _}, Version.parse(clean)), do: IO.write(clean), else: IO.write("")
+            end
+          ')
+          if [ -n "$RESOLVED" ]; then
+            echo "CAUDATA_VERSION=$RESOLVED" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check formatting
+        run: mix format --check-formatted
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: false
+
+      - name: Cache Mix dependencies
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            ~/.hex
+            ~/.mix/archives
+          key: ci-test-deps-${{ runner.os }}-1.19.5-28.5-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ci-test-deps-${{ runner.os }}-1.19.5-28.5-
+
+      - name: Cache Mix build & Rust crates
+        uses: actions/cache@v4
+        with:
+          path: |
+            _build/test
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ci-test-build-${{ runner.os }}-1.19.5-28.5-${{ hashFiles('**/mix.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ci-test-build-${{ runner.os }}-1.19.5-28.5-${{ hashFiles('**/mix.lock') }}-
+            ci-test-build-${{ runner.os }}-1.19.5-28.5-
+
+      - name: Install Hex & Rebar dependencies
+        run: |
+          mix local.rebar --if-missing --force
+          mix local.hex --if-missing --force
+          if [ "${{ steps.cache-deps.outputs.cache-hit }}" != "true" ]; then
+            mix deps.get
+          fi
+
+      - name: Compile with warnings as errors
+        run: mix compile --warnings-as-errors
+
+      - name: Run tests
+        run: mix test --no-compile
+
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -46,17 +128,31 @@ jobs:
         with:
           toolchain: stable
           target: ${{ matrix.rust_target }}
-          cache: true
+          cache: false
 
-      - name: Cache Mix dependencies & build
+      - name: Cache Mix prod dependencies
+        id: cache-deps
         uses: actions/cache@v4
         with:
           path: |
             deps
-            _build
-          key: ${{ matrix.target }}-mix-${{ hashFiles('**/mix.lock') }}
+            ~/.hex
+            ~/.mix/archives
+          key: ${{ matrix.target }}-prod-deps-1.19.5-28.5-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ matrix.target }}-mix-
+            ${{ matrix.target }}-prod-deps-1.19.5-28.5-
+
+      - name: Cache Mix prod build & Rust crates
+        uses: actions/cache@v4
+        with:
+          path: |
+            _build/prod
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ matrix.target }}-prod-build-1.19.5-28.5-${{ hashFiles('**/mix.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ matrix.target }}-prod-build-1.19.5-28.5-${{ hashFiles('**/mix.lock') }}-
+            ${{ matrix.target }}-prod-build-1.19.5-28.5-
 
       - name: Cache Burrito downloads
         uses: actions/cache@v4
@@ -69,24 +165,46 @@ jobs:
       - name: Install system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils p7zip-full musl-tools
+          if ! command -v xz >/dev/null 2>&1 || ! command -v 7z >/dev/null 2>&1 || ! command -v musl-gcc >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xz-utils p7zip-full musl-tools
+          fi
 
       - name: Install system dependencies (macOS)
         if: startsWith(matrix.os, 'macos-')
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
         run: |
-          brew install p7zip
+          command -v 7z >/dev/null 2>&1 || brew install p7zip
 
       - name: Install Hex & Rebar dependencies
         env:
+          MIX_ENV: prod
           HEX_HTTP_TIMEOUT: "120"
         run: |
-          mix local.rebar --force
-          mix local.hex --force
-          mix deps.get
+          mix local.rebar --if-missing --force
+          mix local.hex --if-missing --force
+          if [ "${{ steps.cache-deps.outputs.cache-hit }}" != "true" ]; then
+            mix deps.get --only prod
+          fi
+
+      - name: Resolve release SemVer
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          RESOLVED=$(TAG="$TAG" elixir -e '
+            tag = System.fetch_env!("TAG")
+            case Version.parse(tag) do
+              {:ok, _} -> IO.write(tag)
+              :error ->
+                clean = tag |> String.split(".") |> Enum.map(&Regex.replace(~r/^0+(\d)/, &1, "\\1")) |> Enum.join(".")
+                if match?({:ok, _}, Version.parse(clean)), do: IO.write(clean), else: IO.write("")
+            end
+          ')
+          if [ -n "$RESOLVED" ]; then
+            echo "CAUDATA_VERSION=$RESOLVED" >> "$GITHUB_ENV"
+          fi
 
       - name: Build release binary
         env:
@@ -98,9 +216,10 @@ jobs:
           fi
           mix release
 
-      - name: List outputs
+      - name: Verify release binary
         run: |
-          ls -la burrito_out/ || true
+          ls -la burrito_out/
+          ./burrito_out/caudata_${{ matrix.target }} --version
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
@@ -111,13 +230,10 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [test, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:

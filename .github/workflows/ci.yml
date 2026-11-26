@@ -6,11 +6,17 @@ on:
   pull_request:
     branches: ["main"]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Format, Compile & Test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      MIX_ENV: test
 
     steps:
       - name: Checkout code
@@ -22,33 +28,49 @@ jobs:
           elixir-version: "1.19.5"
           otp-version: "28.5"
 
+      - name: Check formatting
+        run: mix format --check-formatted
+
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
-          cache: true
+          cache: false
 
-      - name: Cache Mix dependencies & build
+      - name: Cache Mix dependencies
+        id: cache-deps
         uses: actions/cache@v4
         with:
           path: |
             deps
-            _build
-          key: ci-mix-${{ runner.os }}-${{ hashFiles('**/mix.lock') }}
+            ~/.hex
+            ~/.mix/archives
+          key: ci-test-deps-${{ runner.os }}-1.19.5-28.5-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ci-mix-${{ runner.os }}-
+            ci-test-deps-${{ runner.os }}-1.19.5-28.5-
+
+      - name: Cache Mix build & Rust crates
+        uses: actions/cache@v4
+        with:
+          path: |
+            _build/test
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ci-test-build-${{ runner.os }}-1.19.5-28.5-${{ hashFiles('**/mix.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ci-test-build-${{ runner.os }}-1.19.5-28.5-${{ hashFiles('**/mix.lock') }}-
+            ci-test-build-${{ runner.os }}-1.19.5-28.5-
 
       - name: Install Hex & Rebar dependencies
         run: |
-          mix local.rebar --force
-          mix local.hex --force
-          mix deps.get
-
-      - name: Check formatting
-        run: mix format --check-formatted
+          mix local.rebar --if-missing --force
+          mix local.hex --if-missing --force
+          if [ "${{ steps.cache-deps.outputs.cache-hit }}" != "true" ]; then
+            mix deps.get
+          fi
 
       - name: Compile with warnings as errors
         run: mix compile --warnings-as-errors
 
       - name: Run tests
-        run: mix test
+        run: mix test --no-compile

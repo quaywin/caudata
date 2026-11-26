@@ -64,30 +64,10 @@ defmodule Caudata.ConfigStore do
   end
 
   @doc """
-  Retrieves a global setting directly from ETS (non-blocking).
-  """
-  def get_setting(store \\ __MODULE__, section, key, default \\ nil) do
-    tab = get_table_name(store)
-
-    case :ets.lookup(tab, {section, key}) do
-      [{_, val}] -> val
-      [] -> default
-    end
-  end
-
-  @doc """
   Saves a global setting.
   """
   def put_setting(store \\ __MODULE__, section, key, value) do
     GenServer.call(store, {:put_setting, section, key, value})
-  end
-
-  @doc """
-  Saves a batch of global settings.
-  Expects a list of tuples: `[{section, key, value}, ...]`
-  """
-  def put_settings(store \\ __MODULE__, settings) when is_list(settings) do
-    GenServer.call(store, {:put_settings, settings})
   end
 
   # Helper to resolve table name from GenServer name/ref
@@ -190,16 +170,6 @@ defmodule Caudata.ConfigStore do
   @impl true
   def handle_call({:put_setting, section, key, value}, _from, state) do
     :ets.insert(state.table, {{section, key}, value})
-    new_state = save_async(state)
-    {:reply, :ok, new_state}
-  end
-
-  @impl true
-  def handle_call({:put_settings, settings}, _from, state) do
-    Enum.each(settings, fn {section, key, value} ->
-      :ets.insert(state.table, {{section, key}, value})
-    end)
-
     new_state = save_async(state)
     {:reply, :ok, new_state}
   end

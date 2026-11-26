@@ -21,7 +21,6 @@ defmodule Caudata.Application do
     # Load configuration
     {:ok, config} = Caudata.Config.load()
     capacity = Caudata.Config.global_capacity(config)
-    _ssh_settings = Caudata.Config.ssh_server_settings(config)
 
     # Setup file logging in ~/.caudata/caudata.log
     log_dir = Path.expand("~/.caudata")

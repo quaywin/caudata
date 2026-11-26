@@ -229,16 +229,6 @@ defmodule Caudata.LogStore do
   end
 
   @impl true
-  def handle_cast({:append_logs, source_id, lines}, state) do
-    handle_cast({:append_prepared_logs, source_id, sanitize_lines(lines)}, state)
-  end
-
-  @impl true
-  def handle_cast({:prepend_logs, source_id, lines}, state) do
-    handle_cast({:prepend_prepared_logs, source_id, sanitize_lines(lines)}, state)
-  end
-
-  @impl true
   def handle_cast({:append_prepared_logs, source_id, lines}, state) do
     source_state = get_or_init_source(state.sources, source_id)
     lines = dedup_leading_line(source_state.tail_item, lines)

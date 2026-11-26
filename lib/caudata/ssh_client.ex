@@ -446,10 +446,6 @@ defmodule Caudata.SSHClient.KeyCallback do
     end
   end
 
-  def invalidate_key_cache(identity_file) do
-    :persistent_term.erase({:caudata_key, identity_file})
-  end
-
   defp decode_private_key(identity_file) do
     case :persistent_term.get({:caudata_key, identity_file}, nil) do
       {:ok, key} ->

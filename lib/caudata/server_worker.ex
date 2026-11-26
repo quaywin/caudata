@@ -45,7 +45,6 @@ defmodule Caudata.ServerWorker do
     :metrics_channel_id,
     :enable_metrics,
     :metrics,
-    container_order: [],
     metrics_buffer: "",
     events_buffer: "",
     validation_channels: %{},
@@ -197,7 +196,6 @@ defmodule Caudata.ServerWorker do
       enable_metrics:
         Keyword.get(opts, :enable_metrics, Application.get_env(:caudata, :env) != :test),
       metrics: nil,
-      container_order: [],
       container_stats_channel_id: nil,
       container_stats_timer: nil,
       container_stats_buffer: "",

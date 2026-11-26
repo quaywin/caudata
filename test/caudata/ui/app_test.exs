@@ -1661,5 +1661,22 @@ defmodule Caudata.UI.AppTest do
     assert state_g.logs_fetch_limit == 10000
     assert length(state_g.logs) == 50
     assert state_g.loading_history == false
+
+    # Jumping back to bottom via 'G' resets expanded logs_fetch_limit back to 1000
+    event_big_g = %ExRatatui.Event.Key{code: "G", modifiers: []}
+    assert {:noreply, state_bottom} = App.handle_event(event_big_g, state_g)
+
+    assert state_bottom.logs_scroll_y == :bottom
+    assert state_bottom.logs_fetch_limit == 1000
+    assert state_bottom.logs_dirty == true
+  end
+
+  test "connect_profile_batch processes staggered connection batches with render?: false" do
+    {:ok, state} = App.mount([])
+
+    assert {:noreply, next_state, render?: false} =
+             App.handle_info({:connect_profile_batch, []}, state)
+
+    assert next_state == state
   end
 end

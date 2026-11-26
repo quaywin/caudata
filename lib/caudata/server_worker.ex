@@ -62,6 +62,8 @@ defmodule Caudata.ServerWorker do
     pool: nil,
     max_active_streams: nil,
     container_net_samples: %{},
+    container_monitors: %{},
+    share_primary_conn: true,
     discovery_timer: nil,
     conn_task_ref: nil,
     auth_failures: 0
@@ -144,6 +146,9 @@ defmodule Caudata.ServerWorker do
       Keyword.get(opts, :stats_debounce_delay) ||
         Application.get_env(:caudata, :stats_debounce_delay, 300)
 
+    share_primary_conn = Keyword.get(opts, :share_primary_conn, true)
+    default_max_ch = if share_primary_conn, do: 6, else: 8
+
     pool =
       cond do
         pid = Keyword.get(opts, :pool) ->
@@ -154,7 +159,7 @@ defmodule Caudata.ServerWorker do
             Caudata.SSH.ConnectionPool.start_link(
               profile: profile,
               ssh_client: ssh_client,
-              max_channels_per_conn: Keyword.get(opts, :max_channels_per_conn, 8)
+              max_channels_per_conn: Keyword.get(opts, :max_channels_per_conn, default_max_ch)
             )
 
           pool_pid
@@ -163,9 +168,7 @@ defmodule Caudata.ServerWorker do
           nil
       end
 
-    max_streams =
-      Keyword.get(opts, :max_active_streams) ||
-        if(is_nil(pool), do: @max_active_streams)
+    max_streams = Keyword.get(opts, :max_active_streams, @max_active_streams)
 
     state = %__MODULE__{
       profile: profile,
@@ -176,6 +179,7 @@ defmodule Caudata.ServerWorker do
       reconnect_timer: nil,
       ssh_client: ssh_client,
       pool: pool,
+      share_primary_conn: share_primary_conn,
       max_active_streams: max_streams,
       containers: [],
       container_pids: %{},
@@ -493,11 +497,27 @@ defmodule Caudata.ServerWorker do
 
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
-    if state.conn_monitor_ref && ref == state.conn_monitor_ref do
-      Logger.warning("SSH connection lost for #{state.profile.id}: #{inspect(reason)}")
-      handle_disconnect(state, "SSH connection lost: #{inspect(reason)}")
-    else
-      {:noreply, state}
+    cond do
+      state.conn_monitor_ref && ref == state.conn_monitor_ref ->
+        Logger.warning("SSH connection lost for #{state.profile.id}: #{inspect(reason)}")
+        handle_disconnect(state, "SSH connection lost: #{inspect(reason)}")
+
+      Map.has_key?(state.container_monitors, ref) ->
+        {container_id, remaining_monitors} = Map.pop(state.container_monitors, ref)
+
+        Logger.warning(
+          "ContainerWorker #{container_id} on #{state.profile.id} exited: #{inspect(reason)}"
+        )
+
+        {:noreply,
+         %{
+           state
+           | container_monitors: remaining_monitors,
+             container_pids: Map.delete(state.container_pids, container_id)
+         }}
+
+      true ->
+        {:noreply, state}
     end
   end
 
@@ -878,6 +898,10 @@ defmodule Caudata.ServerWorker do
 
     if is_pid(state.pool) and Process.alive?(state.pool) do
       Caudata.SSH.ConnectionPool.resume(state.pool)
+
+      if state.share_primary_conn do
+        Caudata.SSH.ConnectionPool.set_primary_conn(state.pool, conn_ref)
+      end
     end
 
     # Reset stale server-level monitoring channels so they re-subscribe on the new connection
@@ -1309,24 +1333,10 @@ defmodule Caudata.ServerWorker do
               ram_used=0
               ram_pct=0
               if [ -f /proc/meminfo ]; then
-                mem_total=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-                mem_avail=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
-                mem_total=${mem_total:-0}
-                mem_avail=${mem_avail:-0}
-                if [ "$mem_avail" -eq 0 ]; then
-                  mem_free=$(grep MemFree /proc/meminfo | awk '{print $2}')
-                  mem_cached=$(grep ^Cached /proc/meminfo | awk '{print $2}')
-                  mem_buffers=$(grep Buffers /proc/meminfo | awk '{print $2}')
-                  mem_free=${mem_free:-0}
-                  mem_cached=${mem_cached:-0}
-                  mem_buffers=${mem_buffers:-0}
-                  mem_avail=$((${mem_free:-0} + ${mem_cached:-0} + ${mem_buffers:-0}))
-                fi
-                if [ "${mem_total:-0}" -gt 0 ]; then
-                  ram_total=$mem_total
-                  ram_used=$((mem_total - mem_avail))
-                  ram_pct=$((ram_used * 100 / mem_total))
-                fi
+                set -- $(awk '/^MemTotal:/ { t=$2 } /^MemAvailable:/ { a=$2 } /^MemFree:/ { f=$2 } /^Cached:/ { c=$2 } /^Buffers:/ { b=$2 } END { if (a == 0) a = f + c + b; u = (t > a ? t - a : 0); p = (t > 0 ? int(u * 100 / t) : 0); printf "%d %d %d", t+0, u, p }' /proc/meminfo)
+                ram_total=${1:-0}
+                ram_used=${2:-0}
+                ram_pct=${3:-0}
               elif command -v free >/dev/null 2>&1; then
                 ram_info=$(free -k | awk '/Mem:/ {print $2" "$3}')
                 ram_total=$(echo "$ram_info" | awk '{print $1}')
@@ -1942,27 +1952,32 @@ defmodule Caudata.ServerWorker do
     new_ids = MapSet.new(Enum.map(sorted_containers, & &1.id))
 
     # Stop and remove workers for containers that no longer exist
-    {remaining_pids, _stopped_pids} =
-      Enum.reduce(state.container_pids, {%{}, []}, fn {id, pid}, {keep, stop} ->
+    {remaining_pids, remaining_monitors} =
+      Enum.reduce(state.container_pids, {%{}, state.container_monitors || %{}}, fn {id, pid},
+                                                                                   {keep, mons} ->
         if MapSet.member?(new_ids, id) do
-          {Map.put(keep, id, pid), stop}
+          {Map.put(keep, id, pid), mons}
         else
+          mons = demonitor_container(mons, id)
           _ = Caudata.ServerSupervisor.stop_container_worker(pid)
           source_id = "#{state.profile.id}/#{id}"
           _ = Caudata.LogStore.delete_stream(source_id)
-          {keep, [pid | stop]}
+          {keep, mons}
         end
       end)
 
     # Start or update workers for new/existing containers
-    updated_pids =
-      Enum.reduce(sorted_containers, remaining_pids, fn container, acc ->
+    {updated_pids, updated_monitors} =
+      Enum.reduce(sorted_containers, {remaining_pids, remaining_monitors}, fn container,
+                                                                              {acc, mons} ->
         case Map.fetch(acc, container.id) do
           {:ok, pid} ->
             if Process.alive?(pid) do
               Caudata.ContainerWorker.update_container_info(pid, container)
-              acc
+              {acc, mons}
             else
+              mons = demonitor_container(mons, container.id)
+
               {:ok, new_pid} =
                 Caudata.ServerSupervisor.start_container_worker(
                   state.profile.id,
@@ -1972,7 +1987,8 @@ defmodule Caudata.ServerWorker do
                   pool: state.pool
                 )
 
-              Map.put(acc, container.id, new_pid)
+              mref = Process.monitor(new_pid)
+              {Map.put(acc, container.id, new_pid), Map.put(mons, mref, container.id)}
             end
 
           :error ->
@@ -1985,7 +2001,8 @@ defmodule Caudata.ServerWorker do
                 pool: state.pool
               )
 
-            Map.put(acc, container.id, new_pid)
+            mref = Process.monitor(new_pid)
+            {Map.put(acc, container.id, new_pid), Map.put(mons, mref, container.id)}
         end
       end)
 
@@ -1994,8 +2011,20 @@ defmodule Caudata.ServerWorker do
     %{
       state
       | containers: sorted_containers,
-        container_pids: updated_pids
+        container_pids: updated_pids,
+        container_monitors: updated_monitors
     }
+  end
+
+  defp demonitor_container(monitors, container_id) do
+    case Enum.find(monitors, fn {_ref, cid} -> cid == container_id end) do
+      {ref, _cid} ->
+        Process.demonitor(ref, [:flush])
+        Map.delete(monitors, ref)
+
+      nil ->
+        monitors
+    end
   end
 
   defp container_category(container) do
@@ -2049,11 +2078,11 @@ defmodule Caudata.ServerWorker do
     else
       case Map.fetch(state.container_pids, state.active_container_id) do
         {:ok, pid} ->
-          # Check and close oldest stream if we are about to open a new channel in legacy single-connection mode.
-          # When ConnectionPool is active, additional SSH connections are dynamically spawned instead of closing existing streams.
+          # Enforce LRU max_active_streams even when ConnectionPool is active so browsing
+          # across many containers does not leave unbounded remote `docker logs -f` streams open.
           target_status = Caudata.ContainerWorker.get_streaming_status(pid)
 
-          if is_nil(state.pool) and not target_status.streaming? do
+          if state.max_active_streams && not target_status.streaming? do
             active_streams =
               state.container_pids
               |> Enum.filter(fn {_id, c_pid} -> Process.alive?(c_pid) end)
@@ -2068,12 +2097,14 @@ defmodule Caudata.ServerWorker do
               end)
               |> Enum.reject(&is_nil/1)
 
-            max_limit = state.max_active_streams || @max_active_streams
+            max_limit = state.max_active_streams
 
             if length(active_streams) >= max_limit do
-              case Enum.min_by(active_streams, fn {_id, _c_pid, opened_at} -> opened_at end, fn ->
-                     nil
-                   end) do
+              case Enum.min_by(
+                     active_streams,
+                     fn {_id, _c_pid, opened_at} -> opened_at end,
+                     fn -> nil end
+                   ) do
                 nil ->
                   :ok
 
@@ -2179,7 +2210,7 @@ defmodule Caudata.ServerWorker do
           quoted_id = Caudata.Shell.quote_arg(state.active_container_id)
 
           cmd =
-            "cid=#{quoted_id}; cpid=$(docker inspect -f \"{{.State.Pid}}\" \"$cid\" 2>/dev/null); host_net=$(docker inspect -f \"{{.HostConfig.NetworkMode}}\" \"$cid\" 2>/dev/null); docker stats --format \"{{.ID}} | {{.CPUPerc}} | {{.MemUsage}}\" \"$cid\" | while IFS= read -r line; do if [ -z \"$cpid\" ] || [ ! -d \"/proc/$cpid\" ]; then cpid=$(docker inspect -f \"{{.State.Pid}}\" \"$cid\" 2>/dev/null); host_net=$(docker inspect -f \"{{.HostConfig.NetworkMode}}\" \"$cid\" 2>/dev/null); fi; rx_tx=\"0 0\"; if [ \"$host_net\" != \"host\" ] && [ -n \"$cpid\" ] && [ \"$cpid\" -gt 0 ] 2>/dev/null && [ -f \"/proc/$cpid/net/dev\" ]; then c_ns=$(readlink /proc/$cpid/ns/net 2>/dev/null); h_ns=$(readlink /proc/1/ns/net 2>/dev/null || readlink /proc/$$/ns/net 2>/dev/null); if [ -z \"$c_ns\" ] || [ -z \"$h_ns\" ] || [ \"$c_ns\" != \"$h_ns\" ]; then rx_tx=$(awk \"/:/ && \\$1 !~ /^(lo|docker|veth|br-)/ { sub(/.*:/, \\\"\\\"); rx += \\$1; tx += \\$9 } END { printf \\\"%.0f %.0f\\\\n\\\", rx, tx }\" \"/proc/$cpid/net/dev\" 2>/dev/null); fi; fi; echo \"CONTAINER_METRICS: $line | $rx_tx\"; done"
+            "cid=#{quoted_id}; set -- $(docker inspect -f \"{{.State.Pid}} {{.HostConfig.NetworkMode}}\" \"$cid\" 2>/dev/null); cpid=$1; host_net=$2; h_ns=$(readlink /proc/1/ns/net 2>/dev/null || readlink /proc/$$/ns/net 2>/dev/null); prev_cpid=\"\"; diff_ns=0; docker stats --format \"{{.ID}} | {{.CPUPerc}} | {{.MemUsage}}\" \"$cid\" | while IFS= read -r line; do if [ -z \"$cpid\" ] || [ ! -d \"/proc/$cpid\" ]; then set -- $(docker inspect -f \"{{.State.Pid}} {{.HostConfig.NetworkMode}}\" \"$cid\" 2>/dev/null); cpid=$1; host_net=$2; fi; rx_tx=\"0 0\"; if [ \"$host_net\" != \"host\" ] && [ -n \"$cpid\" ] && [ \"$cpid\" -gt 0 ] 2>/dev/null && [ -f \"/proc/$cpid/net/dev\" ]; then if [ \"$cpid\" != \"$prev_cpid\" ]; then prev_cpid=\"$cpid\"; c_ns=$(readlink /proc/$cpid/ns/net 2>/dev/null); if [ -z \"$c_ns\" ] || [ -z \"$h_ns\" ] || [ \"$c_ns\" != \"$h_ns\" ]; then diff_ns=1; else diff_ns=0; fi; fi; if [ \"$diff_ns\" -eq 1 ]; then rx_tx=$(awk \"/:/ && \\$1 !~ /^(lo|docker|veth|br-)/ { sub(/.*:/, \\\"\\\"); rx += \\$1; tx += \\$9 } END { printf \\\"%.0f %.0f\\\\n\\\", rx, tx }\" \"/proc/$cpid/net/dev\" 2>/dev/null); fi; fi; echo \"CONTAINER_METRICS: $line | $rx_tx\"; done"
 
           wrapped_cmd = Caudata.Shell.wrap_sudo(cmd, state.profile.password)
 

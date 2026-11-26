@@ -250,4 +250,86 @@ defmodule Caudata.LogStoreTest do
     assert stats.size == 3
     assert stats.drop_count == 2
   end
+
+  test "get_snapshot_window returns monotonic seq metadata and supports append_prepared_logs" do
+    entries = [
+      %{timestamp: "2026-08-04T10:00:00Z", stream: :stdout, message: "first"},
+      %{timestamp: "2026-08-04T10:00:01Z", stream: :stdout, message: "second"},
+      %{timestamp: "2026-08-04T10:00:02Z", stream: :stdout, message: "third"}
+    ]
+
+    LogStore.append_prepared_logs(TestLogStore, "source_win", entries)
+    _ = LogStore.get_stats(TestLogStore, "source_win")
+
+    {tail_lines, meta} = LogStore.get_snapshot_window(TestLogStore, "source_win", 2)
+    assert Enum.map(tail_lines, & &1.message) == ["second", "third"]
+    assert meta.first_seq == 1
+    assert meta.last_seq == 2
+    assert meta.size == 3
+    assert is_integer(meta.gen)
+
+    # Overflowing capacity shifts first_seq forward monotonically within same gen
+    LogStore.append_prepared_logs(TestLogStore, "source_win", [
+      %{timestamp: "2026-08-04T10:00:03Z", stream: :stdout, message: "fourth"},
+      %{timestamp: "2026-08-04T10:00:04Z", stream: :stdout, message: "fifth"},
+      %{timestamp: "2026-08-04T10:00:05Z", stream: :stdout, message: "sixth"}
+    ])
+
+    _ = LogStore.get_stats(TestLogStore, "source_win")
+
+    {full_lines, meta2} = LogStore.get_snapshot_window(TestLogStore, "source_win", 5)
+    assert Enum.map(full_lines, & &1.message) == ["second", "third", "fourth", "fifth", "sixth"]
+    assert meta2.first_seq == 1
+    assert meta2.last_seq == 5
+    assert meta2.gen == meta.gen
+    assert meta2.drop_count == 1
+  end
+
+  test "out-of-order batch sorts affected tail and respects full capacity eviction" do
+    LogStore.append_logs(TestLogStore, "source_ooo", [
+      "2026-08-04T10:00:01Z line 1",
+      "2026-08-04T10:00:02Z line 2",
+      "2026-08-04T10:00:04Z line 4",
+      "2026-08-04T10:00:06Z line 6",
+      "2026-08-04T10:00:08Z line 8"
+    ])
+
+    # Out-of-order batch (T10:00:03 and T10:00:05) arriving when buffer is already at capacity 5
+    LogStore.append_logs(TestLogStore, "source_ooo", [
+      "2026-08-04T10:00:03Z line 3",
+      "2026-08-04T10:00:05Z line 5"
+    ])
+
+    _ = LogStore.get_stats(TestLogStore, "source_ooo")
+    snapshot = LogStore.get_snapshot(TestLogStore, "source_ooo")
+
+    assert Enum.map(snapshot, & &1.message) == [
+             "line 3",
+             "line 4",
+             "line 5",
+             "line 6",
+             "line 8"
+           ]
+
+    stats = LogStore.get_stats(TestLogStore, "source_ooo")
+    assert stats.size == 5
+    assert stats.drop_count == 2
+  end
+
+  test "out-of-order batch preserves chronological order when interleaved with nil timestamps" do
+    LogStore.append_prepared_logs(TestLogStore, "source_ooo_nil", [
+      %{timestamp: "2026-08-04T10:00:01Z", stream: :stdout, message: "t1"},
+      %{timestamp: nil, stream: :stdout, message: "plain"},
+      %{timestamp: "2026-08-04T10:00:05Z", stream: :stdout, message: "t5"}
+    ])
+
+    LogStore.append_prepared_logs(TestLogStore, "source_ooo_nil", [
+      %{timestamp: "2026-08-04T10:00:03Z", stream: :stdout, message: "t3"}
+    ])
+
+    _ = LogStore.get_stats(TestLogStore, "source_ooo_nil")
+    snapshot = LogStore.get_snapshot(TestLogStore, "source_ooo_nil")
+
+    assert Enum.map(snapshot, & &1.message) == ["t1", "plain", "t3", "t5"]
+  end
 end

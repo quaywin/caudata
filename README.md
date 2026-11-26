@@ -27,8 +27,6 @@ Tired of SSH-ing into 5 different servers just to tail Docker logs? Caudata brin
 - **⚡ Rust NIF Accelerated Engine**: High-throughput log ingest, parsing, and ANSI/escape sanitization powered by Rustler.
 - **⏱️ Zero-Latency ETS Direct Read**: ETS-backed log buffers for non-blocking snapshot reads.
 - **🖱️ Mouse & Visual Controls**: SGR mouse support for scroll wheeling, drag-to-copy, sidebar clicking, footer action bar, and modal backdrop closing.
-- **Development Web View**: Render the exact TUI inside a web browser via Phoenix LiveView.
-- **Tailscale VPN Integration**: Connect to Tailscale hosts without a system daemon.
 - **Single-Binary Packaging**: Self-contained Burrito executable (~13 MB binary, ~84 MB idle RAM).
 - **Self-Upgrades**: Stay up to date with `caudata upgrade`.
 
@@ -100,16 +98,6 @@ caudata --help        # or: caudata -h
 # Show current version
 caudata --version     # or: caudata -v
 
-# Run the web UI server on port 4000
-caudata web
-
-# Run the web UI server on a custom port and address
-caudata web --port 8080   # or: caudata web -p 8080
-CAUDATA_IP=0.0.0.0 caudata web
-
-# Run the web UI server with user-space Tailscale VPN tunneling
-caudata web --port 8080 --tailscale --authkey <your-tailscale-key> --tailscale_port 80
-
 # Automatically upgrade to the latest release binary
 caudata upgrade
 ```
@@ -179,9 +167,6 @@ Settings and connection profiles are stored in an ETS-backed database at `~/.cau
 | :--- | :--- | :--- |
 | `CAUDATA_CONFIG_PATH` | Directory or file path for the configuration database. | `~/.caudata/config.db` |
 | `CAUDATA_TUI` | Explicitly enable or disable the Terminal UI (`true`/`false`). | Auto-detected |
-| `CAUDATA_IP` | Bind address for the web server (e.g. `127.0.0.1` or `0.0.0.0`). | `127.0.0.1` |
-| `PORT` | Port to run the web server on when running `caudata web`. | `4000` |
-| `TAILSCALE_AUTHKEY` | Tailscale authorization key for VPN integration. | None |
 
 ---
 
@@ -191,7 +176,7 @@ If you are looking for other tools to monitor or view logs, here is how Caudata 
 
 | Project | Interface | Primary Focus | Multi-Server (SSH) | Docker Container Auto-Discovery | Peak Throughput / RAM |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Caudata** | TUI & Web | Agentless Multi-Server Log/Metrics | **Yes** (native SSH config) | **Yes** (remote/local) | **~270k lines/s ingest (`~84 MB` RAM)** |
+| **Caudata** | TUI | Agentless Multi-Server Log/Metrics | **Yes** (native SSH config) | **Yes** (remote/local) | **~270k lines/s ingest (`~84 MB` RAM)** |
 | **[MultiTail](https://github.com/folkertvanheusden/multitail)** | TUI | Aggregated file/command logs | Yes (manual pipes) | No | ~50k lines/s (~80 MB RAM) |
 | **[Dozzle](https://github.com/amir20/dozzle)** | Web | Docker container logs | Yes (requires agents) | Yes (needs setup) | ~50k lines/s (~70 MB RAM) |
 | **[lnav](https://github.com/tstack/lnav)** | TUI | Log parsing & SQL query | No (mainly local) | No | ~300k lines/s (~80 MB RAM) |

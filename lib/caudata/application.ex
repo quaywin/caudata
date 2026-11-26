@@ -14,28 +14,8 @@ defmodule Caudata.Application do
         System.argv()
       end
 
-    mode =
-      if @env != :test do
-        Caudata.CLI.handle_args(args)
-      else
-        :continue
-      end
-
-    if match?({:web, _}, mode) do
-      {:web, port} = mode
-      endpoint_config = Application.get_env(:caudata, Caudata.Web.Endpoint, [])
-      http_config = Keyword.get(endpoint_config, :http, [])
-      http_config = Keyword.put(http_config, :port, port)
-
-      endpoint_config =
-        endpoint_config
-        |> Keyword.put(:server, true)
-        |> Keyword.put(:http, http_config)
-
-      Application.put_env(:caudata, Caudata.Web.Endpoint, endpoint_config)
-
-      ip_str = System.get_env("CAUDATA_IP") || "127.0.0.1"
-      IO.puts("Caudata Web Server is starting on http://#{ip_str}:#{port}")
+    if @env != :test do
+      Caudata.CLI.handle_args(args)
     end
 
     # Load configuration
@@ -58,7 +38,7 @@ defmodule Caudata.Application do
     end
 
     # Disable console logging if starting TUI to prevent corrupting the terminal render
-    if start_tui?(mode) do
+    if start_tui?() do
       Logger.configure(backends: [])
       _ = :logger.remove_handler(:default)
       :logger.set_primary_config(:level, :info)
@@ -85,49 +65,17 @@ defmodule Caudata.Application do
       Caudata.ServerSupervisor
     ]
 
-    # Define children based on environment and TUI/Web startup decision
     children =
-      children
-      |> then(fn list ->
-        if start_web?(mode), do: list ++ [Caudata.Web.Endpoint], else: list
-      end)
-      |> then(fn list ->
-        if start_tui?(mode),
-          do: list ++ [{Caudata.UI.App, [terminal: true, mouse_capture: true]}],
-          else: list
-      end)
+      if start_tui?(),
+        do: children ++ [{Caudata.UI.App, [terminal: true, mouse_capture: true]}],
+        else: children
 
     opts = [strategy: :one_for_one, name: Caudata.Supervisor]
     Supervisor.start_link(children, opts)
   end
 
-  defp start_web?(mode) do
+  defp start_tui? do
     cond do
-      match?({:web, _}, mode) ->
-        true
-
-      System.get_env("CAUDATA_WEB") == "true" or System.get_env("PHX_SERVER") in ["true", "1"] ->
-        true
-
-      @env == :test ->
-        true
-
-      start_tui?(mode) ->
-        false
-
-      @env != :prod ->
-        true
-
-      true ->
-        false
-    end
-  end
-
-  defp start_tui?(mode) do
-    cond do
-      match?({:web, _}, mode) ->
-        false
-
       System.get_env("CAUDATA_TUI") == "false" ->
         false
 
@@ -135,9 +83,6 @@ defmodule Caudata.Application do
         true
 
       @env == :test ->
-        false
-
-      @env == :dev ->
         false
 
       Code.ensure_loaded?(IEx) && IEx.started?() ->

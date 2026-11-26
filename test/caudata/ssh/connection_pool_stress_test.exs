@@ -93,7 +93,11 @@ defmodule Caudata.SSH.ConnectionPoolStressTest do
       start_supervised(
         {ServerWorker,
          {profile,
-          ssh_client: Mock, use_pool: true, max_channels_per_conn: 4, max_active_streams: 20}}
+          ssh_client: Mock,
+          use_pool: true,
+          share_primary_conn: false,
+          max_channels_per_conn: 4,
+          max_active_streams: 20}}
       )
 
     # 1. Verify primary control connection established

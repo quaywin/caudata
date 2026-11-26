@@ -881,4 +881,34 @@ defmodule Caudata.ContainerWorkerTest do
     stop_supervised(ContainerWorker)
     GenServer.stop(pool)
   end
+
+  test "recovers gracefully when StreamChannel exits abnormally instead of crashing ContainerWorker" do
+    container = %{
+      id: "container_exit_recover",
+      name: "my-nginx",
+      image: "nginx:latest",
+      status: "Up 1 hour",
+      state: "running"
+    }
+
+    Mock
+    |> expect(:open_channel, fn :dummy_conn -> {:ok, :chan_1} end)
+    |> expect(:exec, fn :dummy_conn, :chan_1, _cmd -> :ok end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+
+    {:ok, pid} = start_supervised({ContainerWorker, {"my-server", container, [ssh_client: Mock]}})
+    assert :ok = ContainerWorker.start_streaming(pid, :dummy_conn)
+
+    stream_pid = ContainerWorker.get_stream_channel(pid)
+    assert is_pid(stream_pid)
+
+    Phoenix.PubSub.subscribe(Caudata.PubSub, "container_logs:my-server/container_exit_recover")
+    Process.exit(stream_pid, :boom)
+
+    assert_receive {:container_log_disconnected, "my-server", "container_exit_recover", _reason},
+                   1000
+
+    assert Process.alive?(pid)
+    stop_supervised(ContainerWorker)
+  end
 end

@@ -204,5 +204,76 @@ defmodule Caudata.UI.ViewHelperTest do
       assert ViewHelper.count_wrapped_lines(lines, 10) == 1 + 3 + 1
       assert ViewHelper.count_wrapped_lines([], 10) == 0
     end
+
+    test "chunked count_wrapped_lines matches unchunked across sliding and negative seq ranges" do
+      Process.delete(:cached_wrapped_lines_count)
+      Process.delete(:wrap_chunk_cache)
+
+      make_line = fn seq ->
+        msg =
+          if rem(abs(seq), 7) == 0,
+            do: "wrap-line-#{seq} " <> String.duplicate("x", 25),
+            else: "ok-#{seq}"
+
+        %{timestamp: nil, stream: :stdout, message: msg}
+      end
+
+      scope = {"srv1", "c1", 1}
+      width = 20
+
+      # 1. Contiguous 0..600 slice (crosses 0, 256, 512 chunk boundaries)
+      lines_a = Enum.map(0..600, make_line)
+      expected_a = ViewHelper.count_wrapped_lines(lines_a, width)
+
+      Process.delete(:cached_wrapped_lines_count)
+      tag_a = {0, 600, "", :all, scope}
+      assert ViewHelper.count_wrapped_lines(lines_a, width, 601, tag_a) == expected_a
+
+      # 2. Sliding append window 5..615 (reuses block 1: 256..511 from cache)
+      lines_b = Enum.map(5..615, make_line)
+      expected_b = ViewHelper.count_wrapped_lines(lines_b, width)
+      tag_b = {5, 615, "", :all, scope}
+      assert ViewHelper.count_wrapped_lines(lines_b, width, 611, tag_b) == expected_b
+
+      # 3. Prepended negative seq window -300..615 (covers -256..-1 negative chunk boundary)
+      lines_c = Enum.map(-300..615, make_line)
+      expected_c = ViewHelper.count_wrapped_lines(lines_c, width)
+      tag_c = {-300, 615, "", :all, scope}
+      assert ViewHelper.count_wrapped_lines(lines_c, width, 916, tag_c) == expected_c
+
+      # 4. Different gen invalidates chunk cache even for identical seq/width
+      alt_lines =
+        Enum.map(0..600, fn _ -> %{timestamp: nil, stream: :stdout, message: "short"} end)
+
+      tag_gen2 = {0, 600, "", :all, {"srv1", "c1", 2}}
+      assert ViewHelper.count_wrapped_lines(alt_lines, width, 601, tag_gen2) == 601
+    end
+
+    test "find_wrapped_line_offset chunked matches linear scan across boundaries" do
+      Process.delete(:cached_wrapped_lines_count)
+      Process.delete(:wrap_chunk_cache)
+
+      lines =
+        Enum.map(-50..600, fn seq ->
+          msg =
+            if rem(abs(seq), 5) == 0,
+              do: "line-#{seq} " <> String.duplicate("x", 35),
+              else: "short-#{seq}"
+
+          %{timestamp: nil, stream: :stdout, message: msg}
+        end)
+
+      width = 20
+      tag = {-50, 600, "", :all, {"srv1", "c1", 1}}
+      total_wrapped = ViewHelper.count_wrapped_lines(lines, width, 651, tag)
+
+      for target <- [0, 1, 15, 250, 420, total_wrapped - 1, total_wrapped + 5] do
+        linear = ViewHelper.find_wrapped_line_offset(lines, target, width)
+        chunked = ViewHelper.find_wrapped_line_offset(lines, target, width, 651, tag)
+        assert chunked == linear
+      end
+
+      assert ViewHelper.find_wrapped_line_offset([], 10, width) == {0, 0}
+    end
   end
 end

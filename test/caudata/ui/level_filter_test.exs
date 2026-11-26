@@ -140,4 +140,14 @@ defmodule Caudata.UI.LevelFilterTest do
     {s_home, []} = KeyRegistry.handle_level_filter_modal_key(:char, %{char: "g"}, s_down_stop)
     assert s_home.level_filter_modal_selected_index == 0
   end
+
+  test "LogFormatter.line_severity_meta caches severity tuple without thrashing full span cache" do
+    error_line = ~s({"level":"error","msg":"boom"})
+    info_line = ~s({"level":"info","msg":"ok"})
+
+    assert {true, sev_err} = Caudata.UI.LogFormatter.line_severity_meta(error_line)
+    assert sev_err >= 4
+    assert {false, 2} = Caudata.UI.LogFormatter.line_severity_meta(info_line)
+    assert {false, 0} = Caudata.UI.LogFormatter.line_severity_meta(nil)
+  end
 end

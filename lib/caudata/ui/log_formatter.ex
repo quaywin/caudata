@@ -28,6 +28,19 @@ defmodule Caudata.UI.LogFormatter do
   end
 
   @doc """
+  Returns `{is_error, severity_num}` for a log line using a dedicated 10,000-entry
+  2-gen cache so level filtering across full buffers never thrashes the span cache.
+  """
+  def line_severity_meta(line) when is_binary(line) do
+    Cache.fetch(:fmt_severity_meta, line, 10_000, fn ->
+      {_spans, is_err, sev} = format_line_with_meta(line)
+      {is_err, sev}
+    end)
+  end
+
+  def line_severity_meta(_), do: {false, 0}
+
+  @doc """
   Sub-highlights a line of text using native token parsing.
   """
   def sub_highlight(text) when is_binary(text) do

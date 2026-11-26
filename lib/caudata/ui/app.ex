@@ -40,10 +40,24 @@ defmodule Caudata.UI.App do
 
     profiles = Caudata.ConfigManager.list_profiles()
 
-    # Auto-connect at startup
-    Enum.each(profiles, fn profile ->
-      ViewHelper.start_worker_if_needed(profile)
-    end)
+    # Auto-connect enabled servers at startup (first immediately, stagger remaining in batches)
+    enabled_profiles = Enum.filter(profiles, &Map.get(&1, :enabled, true))
+
+    case enabled_profiles do
+      [first | rest] ->
+        ViewHelper.start_worker_if_needed(first)
+
+        if rest != [] do
+          if @env == :test do
+            Enum.each(rest, &ViewHelper.start_worker_if_needed/1)
+          else
+            Process.send_after(self(), {:connect_profile_batch, rest}, 150)
+          end
+        end
+
+      [] ->
+        :ok
+    end
 
     selected_id =
       case profiles do
@@ -64,6 +78,10 @@ defmodule Caudata.UI.App do
       containers: %{},
       metrics: %{},
       logs: [],
+      logs_first_seq: nil,
+      logs_last_seq: nil,
+      logs_stream_gen: nil,
+      logs_count: 0,
       logs_scroll_y: :bottom,
       logs_fetch_limit: 100,
       show_timestamps: false,
@@ -219,16 +237,30 @@ defmodule Caudata.UI.App do
         target_scroll = if tuple_size(command) >= 3, do: elem(command, 2), else: nil
         source_id = current_source_id(new_state)
 
-        {logs, scroll_y, visual_cursor, visual_anchor} =
+        {logs, logs_first_seq, logs_last_seq, logs_stream_gen, logs_count, scroll_y,
+         visual_cursor, visual_anchor} =
           if source_id && Process.whereis(Caudata.LogStore) do
-            new_logs = Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, new_limit)
-            m = length(new_logs) - new_state.logs_len_before_history_load
+            {new_logs, win_meta} =
+              Caudata.LogStore.get_snapshot_window(Caudata.LogStore, source_id, new_limit)
+
+            new_count = window_count(win_meta)
+            m = new_count - new_state.logs_len_before_history_load
 
             if m > 0 do
               displayed_before =
                 if new_state.logs == [], do: [], else: ViewHelper.get_displayed_logs(new_state)
 
-              displayed_after = ViewHelper.get_displayed_logs(%{new_state | logs: new_logs})
+              after_state = %{
+                new_state
+                | logs: new_logs,
+                  logs_first_seq: win_meta.first_seq,
+                  logs_last_seq: win_meta.last_seq,
+                  logs_stream_gen: win_meta.gen,
+                  logs_count: new_count
+              }
+
+              displayed_after = ViewHelper.get_displayed_logs(after_state)
+
               m_displayed = length(displayed_after) - length(displayed_before)
 
               inner_width = ViewHelper.get_logs_inner_width(new_state)
@@ -236,7 +268,15 @@ defmodule Caudata.UI.App do
               prepended_wrapped = ViewHelper.count_wrapped_lines(prepended_displayed, inner_width)
 
               logs_height = ViewHelper.get_logs_pane_height(new_state)
-              wrapped_after_count = ViewHelper.count_wrapped_lines(displayed_after, inner_width)
+
+              wrapped_after_count =
+                ViewHelper.count_wrapped_lines(
+                  displayed_after,
+                  inner_width,
+                  nil,
+                  ViewHelper.wrap_cache_tag(after_state)
+                )
+
               new_max_scroll = max(0, wrapped_after_count - logs_height)
 
               new_scroll =
@@ -261,23 +301,34 @@ defmodule Caudata.UI.App do
                   do: new_state.visual_anchor + m_displayed,
                   else: new_state.visual_anchor
 
-              {new_logs, new_scroll, vc, va}
+              {new_logs, win_meta.first_seq, win_meta.last_seq, win_meta.gen, new_count,
+               new_scroll, vc, va}
             else
               default_scroll =
                 if not is_nil(target_scroll), do: target_scroll, else: new_state.logs_scroll_y
 
-              {new_state.logs, default_scroll, new_state.visual_cursor, new_state.visual_anchor}
+              {new_state.logs, Map.get(new_state, :logs_first_seq),
+               Map.get(new_state, :logs_last_seq), Map.get(new_state, :logs_stream_gen),
+               Map.get(new_state, :logs_count, 0), default_scroll, new_state.visual_cursor,
+               new_state.visual_anchor}
             end
           else
             default_scroll =
               if not is_nil(target_scroll), do: target_scroll, else: new_state.logs_scroll_y
 
-            {new_state.logs, default_scroll, new_state.visual_cursor, new_state.visual_anchor}
+            {new_state.logs, Map.get(new_state, :logs_first_seq),
+             Map.get(new_state, :logs_last_seq), Map.get(new_state, :logs_stream_gen),
+             Map.get(new_state, :logs_count, 0), default_scroll, new_state.visual_cursor,
+             new_state.visual_anchor}
           end
 
         final_state = %{
           new_state
           | logs: logs,
+            logs_first_seq: logs_first_seq,
+            logs_last_seq: logs_last_seq,
+            logs_stream_gen: logs_stream_gen,
+            logs_count: logs_count,
             logs_scroll_y: scroll_y,
             visual_cursor: visual_cursor,
             visual_anchor: visual_anchor,
@@ -294,6 +345,19 @@ defmodule Caudata.UI.App do
   @impl true
   def handle_info(message, state) do
     case message do
+      {:connect_profile_batch, batch} ->
+        {now, rest} = Enum.split(batch, 3)
+
+        Enum.each(now, fn profile ->
+          ViewHelper.start_worker_if_needed(profile)
+        end)
+
+        if rest != [] do
+          Process.send_after(self(), {:connect_profile_batch, rest}, 150)
+        end
+
+        {:noreply, state, render?: false}
+
       :bootstrap ->
         profiles = state.profiles
 
@@ -362,7 +426,11 @@ defmodule Caudata.UI.App do
                   {:ok, pid} ->
                     Task.start(fn ->
                       try do
-                        GenServer.call(pid, {:stream_container_logs, first_container.id}, 10_000)
+                        GenServer.call(
+                          pid,
+                          {:stream_container_logs, first_container.id},
+                          10_000
+                        )
                       catch
                         :exit, _ -> :ok
                       end
@@ -384,7 +452,7 @@ defmodule Caudata.UI.App do
           end
 
         # If logs are dirty or we are loading history, fetch latest snapshot from LogStore
-        {new_logs, logs_dirty} =
+        {new_logs, new_first_seq, new_last_seq, new_stream_gen, new_count, logs_dirty} =
           if state.selected_profile_id && not state.freeze &&
                (state.logs_dirty or state.loading_history) do
             source_id =
@@ -395,31 +463,46 @@ defmodule Caudata.UI.App do
               end
 
             if Process.whereis(Caudata.LogStore) do
-              {Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, state.logs_fetch_limit),
-               false}
+              {fetched_logs, win_meta} =
+                Caudata.LogStore.get_snapshot_window(
+                  Caudata.LogStore,
+                  source_id,
+                  state.logs_fetch_limit
+                )
+
+              {fetched_logs, win_meta.first_seq, win_meta.last_seq, win_meta.gen,
+               window_count(win_meta), false}
             else
-              {state.logs, false}
+              {state.logs, Map.get(state, :logs_first_seq), Map.get(state, :logs_last_seq),
+               Map.get(state, :logs_stream_gen), Map.get(state, :logs_count, 0), false}
             end
           else
-            {state.logs, state.logs_dirty}
+            {state.logs, Map.get(state, :logs_first_seq), Map.get(state, :logs_last_seq),
+             Map.get(state, :logs_stream_gen), Map.get(state, :logs_count, 0), state.logs_dirty}
           end
 
         # Handle loading_history state machine transitions to avoid flashing/jumping:
         loading_ticks = if state.loading_history, do: state.loading_history_ticks + 1, else: 0
 
-        {logs, loading_history, scroll_y, visual_cursor, visual_anchor} =
+        {logs, final_first_seq, final_last_seq, final_stream_gen, final_count, loading_history,
+         scroll_y, visual_cursor, visual_anchor} =
           if state.loading_history do
             cond do
-              length(new_logs) > state.logs_len_before_history_load ->
+              new_count > state.logs_len_before_history_load ->
                 displayed_before =
                   if state.logs == [], do: [], else: ViewHelper.get_displayed_logs(state)
 
-                displayed_after =
-                  ViewHelper.get_displayed_logs(%{
-                    state
-                    | logs: new_logs,
-                      selected_container_id: selected_container_id
-                  })
+                after_state = %{
+                  state
+                  | logs: new_logs,
+                    logs_first_seq: new_first_seq,
+                    logs_last_seq: new_last_seq,
+                    logs_stream_gen: new_stream_gen,
+                    logs_count: new_count,
+                    selected_container_id: selected_container_id
+                }
+
+                displayed_after = ViewHelper.get_displayed_logs(after_state)
 
                 m_displayed = length(displayed_after) - length(displayed_before)
 
@@ -430,7 +513,15 @@ defmodule Caudata.UI.App do
                   ViewHelper.count_wrapped_lines(prepended_displayed, inner_width)
 
                 logs_height = ViewHelper.get_logs_pane_height(state)
-                wrapped_after_count = ViewHelper.count_wrapped_lines(displayed_after, inner_width)
+
+                wrapped_after_count =
+                  ViewHelper.count_wrapped_lines(
+                    displayed_after,
+                    inner_width,
+                    nil,
+                    ViewHelper.wrap_cache_tag(after_state)
+                  )
+
                 new_max_scroll = max(0, wrapped_after_count - logs_height)
 
                 new_scroll =
@@ -450,15 +541,20 @@ defmodule Caudata.UI.App do
                     do: state.visual_anchor + m_displayed,
                     else: state.visual_anchor
 
-                {new_logs, false, new_scroll, vc, va}
+                {new_logs, new_first_seq, new_last_seq, new_stream_gen, new_count, false,
+                 new_scroll, vc, va}
 
               loading_ticks >= 8 ->
                 # Timeout: fallback to currently displayed logs
-                {state.logs, false, logs_scroll_y, state.visual_cursor, state.visual_anchor}
+                {state.logs, Map.get(state, :logs_first_seq), Map.get(state, :logs_last_seq),
+                 Map.get(state, :logs_stream_gen), Map.get(state, :logs_count, 0), false,
+                 logs_scroll_y, state.visual_cursor, state.visual_anchor}
 
               true ->
                 # Still loading: keep showing old logs to prevent flashing
-                {state.logs, true, logs_scroll_y, state.visual_cursor, state.visual_anchor}
+                {state.logs, Map.get(state, :logs_first_seq), Map.get(state, :logs_last_seq),
+                 Map.get(state, :logs_stream_gen), Map.get(state, :logs_count, 0), true,
+                 logs_scroll_y, state.visual_cursor, state.visual_anchor}
             end
           else
             needs_shift? = is_integer(logs_scroll_y) or not is_nil(state.visual_cursor)
@@ -466,16 +562,24 @@ defmodule Caudata.UI.App do
             {new_scroll, new_cursor, new_anchor} =
               if needs_shift? do
                 inner_width = ViewHelper.get_logs_inner_width(state)
-                raw_shift = ViewHelper.find_overlap_index(state.logs, new_logs) || 0
+
+                raw_shift =
+                  case {Map.get(state, :logs_stream_gen), new_stream_gen,
+                        Map.get(state, :logs_first_seq), new_first_seq} do
+                    {gen, gen, old_seq, cur_seq}
+                    when not is_nil(gen) and is_integer(old_seq) and is_integer(cur_seq) and
+                           cur_seq >= old_seq ->
+                      min(cur_seq - old_seq, Map.get(state, :logs_count) || length(state.logs))
+
+                    _ ->
+                      ViewHelper.find_overlap_index(state.logs, new_logs) || 0
+                  end
 
                 scroll =
                   case logs_scroll_y do
                     :bottom ->
                       if state.mode == :selecting do
-                        inner_width = ViewHelper.get_logs_inner_width(state)
-                        logs_height = ViewHelper.get_logs_pane_height(state)
-                        wrapped_count = ViewHelper.count_wrapped_lines(state.logs, inner_width)
-                        max(0, wrapped_count - logs_height)
+                        ViewHelper.get_max_scroll(state, state.logs)
                       else
                         :bottom
                       end
@@ -500,7 +604,8 @@ defmodule Caudata.UI.App do
                 {:bottom, nil, nil}
               end
 
-            {new_logs, false, new_scroll, new_cursor, new_anchor}
+            {new_logs, new_first_seq, new_last_seq, new_stream_gen, new_count, false, new_scroll,
+             new_cursor, new_anchor}
           end
 
         # Decrement notification tick if active
@@ -515,6 +620,10 @@ defmodule Caudata.UI.App do
           | selected_container_id: selected_container_id,
             selected_container_name: selected_container_name,
             logs: logs,
+            logs_first_seq: final_first_seq,
+            logs_last_seq: final_last_seq,
+            logs_stream_gen: final_stream_gen,
+            logs_count: final_count,
             logs_scroll_y: scroll_y,
             loading_history: loading_history,
             loading_history_ticks: loading_ticks,
@@ -547,13 +656,18 @@ defmodule Caudata.UI.App do
             state.metrics
           end
 
-        {:noreply,
-         %{
-           state
-           | statuses: Map.put(state.statuses, server_id, status),
-             containers: new_containers,
-             metrics: new_metrics
-         }}
+        new_state = %{
+          state
+          | statuses: Map.put(state.statuses, server_id, status),
+            containers: new_containers,
+            metrics: new_metrics
+        }
+
+        if Map.get(state, :logs_full_screen, false) do
+          {:noreply, new_state, render?: false}
+        else
+          {:noreply, new_state}
+        end
 
       {:metrics_updated, server_id, metrics} ->
         {:noreply, %{state | metrics: Map.put(state.metrics, server_id, metrics)}, render?: false}
@@ -561,7 +675,12 @@ defmodule Caudata.UI.App do
       {:containers_updated, server_id, containers} ->
         new_state = %{state | containers: Map.put(state.containers, server_id, containers)}
         new_state = maybe_auto_select_container(new_state)
-        {:noreply, new_state}
+
+        if server_id != state.selected_profile_id or Map.get(state, :logs_full_screen, false) do
+          {:noreply, new_state, render?: false}
+        else
+          {:noreply, new_state}
+        end
 
       {:container_rebuilt, server_id, name, old_id, new_id} ->
         new_state =
@@ -570,18 +689,26 @@ defmodule Caudata.UI.App do
                   (state.selected_container_name == name && name != nil)) do
             source_id = "#{server_id}/#{new_id}"
 
-            initial_logs =
+            {initial_logs, win_meta} =
               if Process.whereis(Caudata.LogStore) do
-                Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, state.logs_fetch_limit)
+                Caudata.LogStore.get_snapshot_window(
+                  Caudata.LogStore,
+                  source_id,
+                  state.logs_fetch_limit
+                )
               else
-                []
+                {[], %{first_seq: nil, last_seq: nil, gen: nil, size: 0, drop_count: 0}}
               end
 
             new_state = %{
               state
               | selected_container_id: new_id,
                 selected_container_name: name,
-                logs: initial_logs
+                logs: initial_logs,
+                logs_first_seq: win_meta.first_seq,
+                logs_last_seq: win_meta.last_seq,
+                logs_stream_gen: win_meta.gen,
+                logs_count: window_count(win_meta)
             }
 
             adjust_log_subscription(state, new_state)
@@ -644,6 +771,10 @@ defmodule Caudata.UI.App do
             %{
               state
               | logs: [],
+                logs_first_seq: nil,
+                logs_last_seq: nil,
+                logs_stream_gen: nil,
+                logs_count: 0,
                 buffer_sizes: Map.delete(state.buffer_sizes, source_id),
                 drop_counts: Map.delete(state.drop_counts, source_id),
                 logs_scroll_y: :bottom,
@@ -789,8 +920,16 @@ defmodule Caudata.UI.App do
   defp update_freeze_state(state) do
     case state.logs_scroll_y do
       :bottom ->
-        if state.freeze do
-          state = %{state | freeze: false, logs_dirty: true}
+        excess_limit? = Map.get(state, :logs_fetch_limit, 1000) > 1000
+        needs_unfreeze? = state.freeze
+
+        if excess_limit? or needs_unfreeze? do
+          state = %{
+            state
+            | freeze: false,
+              logs_dirty: true,
+              logs_fetch_limit: min(Map.get(state, :logs_fetch_limit, 1000), 1000)
+          }
 
           if not Map.get(state, :tick_scheduled, false) do
             Process.send_after(self(), :tick, 100)
@@ -903,4 +1042,11 @@ defmodule Caudata.UI.App do
   def render(state, frame) do
     Renderer.render(state, frame)
   end
+
+  defp window_count(%{first_seq: first_seq, last_seq: last_seq})
+       when is_integer(first_seq) and is_integer(last_seq) and last_seq >= first_seq do
+    last_seq - first_seq + 1
+  end
+
+  defp window_count(_), do: 0
 end

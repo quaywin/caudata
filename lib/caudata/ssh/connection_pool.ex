@@ -126,6 +126,14 @@ defmodule Caudata.SSH.ConnectionPool do
     GenServer.call(pool, :resume)
   end
 
+  @doc """
+  Registers an already-established primary SSH connection in the pool so data channels
+  reuse it before opening secondary connections.
+  """
+  def set_primary_conn(pool, conn_ref) do
+    GenServer.call(pool, {:set_primary_conn, conn_ref})
+  end
+
   # Server Callbacks
 
   @impl true
@@ -288,6 +296,11 @@ defmodule Caudata.SSH.ConnectionPool do
   end
 
   @impl true
+  def handle_call({:set_primary_conn, conn_ref}, _from, state) do
+    {:reply, :ok, do_add_primary(state, conn_ref)}
+  end
+
+  @impl true
   def handle_info(:health_check, state) do
     if not state.suspended and map_size(state.connections) > 0 do
       pool_pid = self()
@@ -422,8 +435,17 @@ defmodule Caudata.SSH.ConnectionPool do
   # Private Helpers
 
   defp do_add_primary(state, conn_ref) do
-    if Map.has_key?(state.connections, conn_ref) do
-      state
+    demoted_connections =
+      Map.new(state.connections, fn {ref, info} ->
+        {ref, %{info | is_primary: ref == conn_ref}}
+      end)
+
+    if Map.has_key?(demoted_connections, conn_ref) do
+      %{
+        state
+        | connections: demoted_connections,
+          conn_order: [conn_ref | List.delete(state.conn_order, conn_ref)]
+      }
     else
       mref = if is_pid(conn_ref), do: Process.monitor(conn_ref), else: nil
 
@@ -436,8 +458,8 @@ defmodule Caudata.SSH.ConnectionPool do
 
       %{
         state
-        | connections: Map.put(state.connections, conn_ref, conn_info),
-          conn_order: [conn_ref | state.conn_order] |> Enum.reverse()
+        | connections: Map.put(demoted_connections, conn_ref, conn_info),
+          conn_order: [conn_ref | state.conn_order]
       }
     end
   end

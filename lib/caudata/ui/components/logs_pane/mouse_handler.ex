@@ -704,10 +704,7 @@ defmodule Caudata.UI.Components.LogsPane.MouseHandler do
   end
 
   defp get_max_scroll(state, displayed_logs) do
-    inner_width = ViewHelper.get_logs_inner_width(state)
-    logs_height = ViewHelper.get_logs_pane_height(state)
-    wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
-    max(0, wrapped_lines_count - logs_height)
+    ViewHelper.get_max_scroll(state, displayed_logs)
   end
 
   defp clamp(val, min_val, max_val) do

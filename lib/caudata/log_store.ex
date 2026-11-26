@@ -3,7 +3,7 @@ defmodule Caudata.LogStore do
   require Logger
   alias Caudata.LogSanitizer
 
-  @default_capacity 10000
+  @default_capacity 10_000
 
   # Client API
 
@@ -14,81 +14,61 @@ defmodule Caudata.LogStore do
 
   @doc """
   Appends a list of raw log lines to a source's buffer.
-  Each line is sanitized before insertion.
+  Each line is parsed and sanitized in the caller's process before enqueueing to the store.
   """
   def append_logs(server \\ __MODULE__, source_id, lines) when is_list(lines) do
-    GenServer.cast(server, {:append_logs, source_id, lines})
+    prepared = sanitize_lines(lines)
+    GenServer.cast(server, {:append_prepared_logs, source_id, prepared})
+  end
+
+  @doc """
+  Appends a list of already-parsed and sanitized log entries (`%{timestamp, stream, message}`)
+  to a source's buffer. Used by `ContainerWorker` to keep sanitization off the store GenServer.
+  """
+  def append_prepared_logs(server \\ __MODULE__, source_id, entries) when is_list(entries) do
+    GenServer.cast(server, {:append_prepared_logs, source_id, entries})
   end
 
   @doc """
   Prepends a list of historical raw log lines to a source's buffer.
-  Used for Phase 2 background log backfill. Each line is sanitized before insertion.
+  Used for Phase 2 background log backfill. Each line is parsed and sanitized before insertion.
   """
   def prepend_logs(server \\ __MODULE__, source_id, lines) when is_list(lines) do
-    GenServer.cast(server, {:prepend_logs, source_id, lines})
+    prepared = sanitize_lines(lines)
+    GenServer.cast(server, {:prepend_prepared_logs, source_id, prepared})
   end
 
   @doc """
-  Gets a list of all lines for a source in chronological order.
-  Reads directly from ETS table for zero-latency non-blocking access.
+  Prepends a list of already-parsed and sanitized historical log entries to a source's buffer.
+  """
+  def prepend_prepared_logs(server \\ __MODULE__, source_id, entries) when is_list(entries) do
+    GenServer.cast(server, {:prepend_prepared_logs, source_id, entries})
+  end
+
+  @doc """
+  Gets a list of up to `limit` lines for a source in chronological order.
+  Reads directly from the `:ordered_set` ETS table for zero-latency non-blocking access.
   """
   def get_snapshot(server \\ __MODULE__, source_id, limit \\ @default_capacity) do
-    tab = get_table_name(server)
-
-    cond do
-      limit <= 500 ->
-        case try_ets_lookup(tab, {:snapshot_tail, source_id}) do
-          {:ok, lines} -> Enum.take(lines, -limit)
-          :error -> GenServer.call(server, {:get_snapshot, source_id, limit})
-        end
-
-      limit <= 1500 ->
-        case try_ets_lookup(tab, {:snapshot_medium, source_id}) do
-          {:ok, lines} -> Enum.take(lines, -limit)
-          :error -> GenServer.call(server, {:get_snapshot, source_id, limit})
-        end
-
-      true ->
-        case try_ets_lookup(tab, {:snapshot, source_id}) do
-          {:ok, lines} -> Enum.take(lines, -limit)
-          :error -> GenServer.call(server, {:get_snapshot, source_id, limit})
-        end
-    end
+    {lines, _meta} = get_snapshot_window(server, source_id, limit)
+    lines
   end
-
-  defp try_ets_lookup(tab, key) when is_atom(tab) do
-    case :ets.info(tab) do
-      :undefined ->
-        :error
-
-      _ ->
-        case :ets.lookup(tab, key) do
-          [{^key, val}] -> {:ok, val}
-          [] -> {:ok, []}
-        end
-    end
-  end
-
-  defp try_ets_lookup(tab, key) when is_pid(tab) do
-    case GenServer.call(tab, :get_table_name) do
-      table_name when is_atom(table_name) or is_reference(table_name) ->
-        case :ets.lookup(table_name, key) do
-          [{^key, val}] -> {:ok, val}
-          [] -> {:ok, []}
-        end
-
-      _ ->
-        :error
-    end
-  rescue
-    _ -> :error
-  end
-
-  defp get_table_name(server) when is_atom(server), do: server
-  defp get_table_name(server) when is_pid(server), do: server
 
   @doc """
-  Gets buffer statistics (size and drop count) for a source.
+  Gets `{lines, meta}` for up to `limit` trailing lines of `source_id` directly from ETS.
+  `meta` includes `:first_seq`, `:last_seq`, `:size`, and `:drop_count` for O(1) UI diffing.
+  """
+  def get_snapshot_window(server \\ __MODULE__, source_id, limit \\ @default_capacity) do
+    tab = resolve_ets_table(server)
+
+    case try_ets_window(tab, source_id, limit) do
+      {:ok, lines, meta} -> {lines, meta}
+      :error -> GenServer.call(server, {:get_snapshot_window, source_id, limit})
+    end
+  end
+
+  @doc """
+  Gets buffer statistics (size, drop_count, first_ts, last_ts) for a source.
   """
   def get_stats(server \\ __MODULE__, source_id) do
     GenServer.call(server, {:get_stats, source_id})
@@ -115,6 +95,120 @@ defmodule Caudata.LogStore do
     GenServer.cast(server, {:delete_stream, source_id})
   end
 
+  # ETS Direct Read Helpers
+
+  defp resolve_ets_table(server) when is_atom(server), do: server
+
+  defp resolve_ets_table(server) when is_pid(server) do
+    case Process.info(server, :registered_name) do
+      {:registered_name, name} when is_atom(name) -> name
+      _ -> server
+    end
+  end
+
+  defp try_ets_window(tab, source_id, limit) when is_atom(tab) do
+    case :ets.info(tab) do
+      :undefined ->
+        :error
+
+      _ ->
+        read_ets_window(tab, source_id, limit)
+    end
+  end
+
+  defp try_ets_window(tab, source_id, limit) when is_pid(tab) do
+    case GenServer.call(tab, :get_table_name) do
+      table_name when is_atom(table_name) or is_reference(table_name) ->
+        read_ets_window(table_name, source_id, limit)
+
+      _ ->
+        :error
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp read_ets_window(tab, source_id, limit) do
+    case :ets.lookup(tab, {:meta, source_id}) do
+      [] ->
+        {:ok, [], %{first_seq: nil, last_seq: nil, gen: nil, size: 0, drop_count: 0}}
+
+      [{_, %{size: 0} = meta}] ->
+        {:ok, [],
+         %{
+           first_seq: nil,
+           last_seq: nil,
+           gen: Map.get(meta, :gen),
+           size: 0,
+           drop_count: meta.drop_count
+         }}
+
+      [{_, meta}] when limit <= 0 ->
+        {:ok, [],
+         %{
+           first_seq: nil,
+           last_seq: nil,
+           gen: Map.get(meta, :gen),
+           size: meta.size,
+           drop_count: meta.drop_count
+         }}
+
+      [{_, meta}] ->
+        count = min(limit, meta.size)
+        end_seq = meta.max_seq
+        start_seq = max(meta.min_seq, end_seq - count + 1)
+        lines = read_ets_range(tab, source_id, start_seq, end_seq, meta.size)
+
+        window_meta = %{
+          first_seq: if(lines == [], do: nil, else: start_seq),
+          last_seq: if(lines == [], do: nil, else: end_seq),
+          gen: Map.get(meta, :gen),
+          size: meta.size,
+          drop_count: meta.drop_count
+        }
+
+        {:ok, lines, window_meta}
+    end
+  end
+
+  defp read_ets_range(_tab, _source_id, start_seq, end_seq, _total_size)
+       when start_seq > end_seq do
+    []
+  end
+
+  defp read_ets_range(tab, source_id, start_seq, end_seq, total_size) do
+    count = end_seq - start_seq + 1
+
+    # When reading more than half the stream, a single C-level select scan is faster than
+    # N separate BIF lookups; for small tail slices (100-1000 out of 10k), direct key lookup
+    # touches strictly `count` entries without scanning older rows.
+    if count > div(total_size, 2) do
+      match_spec = [
+        {
+          {{{:entry, source_id}, :"$1"}, :"$2"},
+          [{:andalso, {:>=, :"$1", start_seq}, {:"=<", :"$1", end_seq}}],
+          [:"$2"]
+        }
+      ]
+
+      :ets.select(tab, match_spec)
+    else
+      collect_range_reverse(tab, source_id, end_seq, start_seq, [])
+    end
+  end
+
+  defp collect_range_reverse(_tab, _source_id, seq, start_seq, acc) when seq < start_seq, do: acc
+
+  defp collect_range_reverse(tab, source_id, seq, start_seq, acc) do
+    next_acc =
+      case :ets.lookup(tab, {{:entry, source_id}, seq}) do
+        [{_, entry}] -> [entry | acc]
+        [] -> acc
+      end
+
+    collect_range_reverse(tab, source_id, seq - 1, start_seq, next_acc)
+  end
+
   # GenServer Callbacks
 
   @impl true
@@ -125,7 +219,7 @@ defmodule Caudata.LogStore do
     tab =
       case :ets.info(name) do
         :undefined ->
-          :ets.new(name, [:named_table, :public, :set, {:read_concurrency, true}])
+          :ets.new(name, [:named_table, :public, :ordered_set, {:read_concurrency, true}])
 
         _ ->
           name
@@ -136,124 +230,78 @@ defmodule Caudata.LogStore do
 
   @impl true
   def handle_cast({:append_logs, source_id, lines}, state) do
-    sanitized_lines = sanitize_lines(lines)
+    handle_cast({:append_prepared_logs, source_id, sanitize_lines(lines)}, state)
+  end
 
-    # Retrieve or initialize the source buffer state
-    source_state =
-      Map.get(state.sources, source_id, %{
-        queue: :queue.new(),
-        size: 0,
-        drop_count: 0,
-        next_seq: 0,
-        last_ts: nil,
-        first_ts: nil
-      })
+  @impl true
+  def handle_cast({:prepend_logs, source_id, lines}, state) do
+    handle_cast({:prepend_prepared_logs, source_id, sanitize_lines(lines)}, state)
+  end
 
-    # Drop leading duplicate line if it matches the tail of the existing queue
-    last_item_in_queue =
-      case :queue.peek_r(source_state.queue) do
-        {:value, item} -> item
-        :empty -> nil
-      end
+  @impl true
+  def handle_cast({:append_prepared_logs, source_id, lines}, state) do
+    source_state = get_or_init_source(state.sources, source_id)
+    lines = dedup_leading_line(source_state.tail_item, lines)
 
-    sanitized_lines =
-      case {last_item_in_queue, sanitized_lines} do
-        {%{timestamp: ts1, stream: st1, message: msg1},
-         [%{timestamp: ts2, stream: st2, message: msg2} | rest]}
-        when not is_nil(ts1) and ts1 != "" and ts1 == ts2 and st1 == st2 and msg1 == msg2 ->
-          rest
+    {final_last_ts, ordered?, min_batch_ts} = check_batch_order(lines, source_state.last_ts)
 
-        _ ->
-          sanitized_lines
-      end
-
-    last_ts = Map.get(source_state, :last_ts, nil)
-
-    # Check if incoming batch maintains chronological timestamp ordering.
-    {final_last_ts, ordered?} =
-      Enum.reduce(sanitized_lines, {last_ts, true}, fn line, {cur_last_ts, ordered?} ->
-        line_ts = Map.get(line, :timestamp)
-        effective_ts = if is_binary(line_ts) and line_ts != "", do: line_ts, else: cur_last_ts
-        sort_ts = effective_ts || ""
-
-        still_ordered? =
-          ordered? and
-            (cur_last_ts in [nil, ""] or sort_ts in ["", nil] or sort_ts >= cur_last_ts)
-
-        {effective_ts, still_ordered?}
-      end)
-
-    # Add each line to the queue
-    {new_queue, new_size, new_drops} =
-      Enum.reduce(
-        sanitized_lines,
-        {source_state.queue, source_state.size, source_state.drop_count},
-        fn line, {q, sz, dr} ->
-          trim_queue_to_capacity(:queue.in(line, q), sz + 1, dr, state.capacity)
+    new_source_state =
+      if lines == [] do
+        source_state
+      else
+        if ordered? do
+          append_ordered_batch(
+            state.table,
+            source_id,
+            source_state,
+            lines,
+            final_last_ts,
+            state.capacity
+          )
+        else
+          append_out_of_order_batch(
+            state.table,
+            source_id,
+            source_state,
+            lines,
+            min_batch_ts,
+            state.capacity
+          )
         end
-      )
-
-    final_first_ts =
-      case :queue.peek(new_queue) do
-        {:value, %{timestamp: ts}} when is_binary(ts) and ts != "" -> ts
-        _ -> Map.get(source_state, :first_ts, nil)
       end
-
-    new_source_state = %{
-      queue: new_queue,
-      size: new_size,
-      drop_count: new_drops,
-      last_ts: final_last_ts,
-      first_ts: final_first_ts
-    }
 
     new_sources = Map.put(state.sources, source_id, new_source_state)
 
-    # Update ETS snapshot table for zero-latency direct reads.
-    # The queue is FIFO, so when this batch arrived in order the list
-    # is already chronologically sorted and we skip the expensive re-sort.
-    # Only out-of-order batches (ordered? == false) pay the sort.
-    snapshot_lines =
-      if ordered? do
-        :queue.to_list(new_queue)
-      else
-        new_queue
-        |> :queue.to_list()
-        |> Enum.sort_by(fn line -> Map.get(line, :timestamp) || "" end)
-      end
-
-    write_ets_snapshots(state, source_id, snapshot_lines)
-
-    # Broadcast notification to PubSub
     Phoenix.PubSub.broadcast(
       Caudata.PubSub,
       "logs:#{source_id}",
-      {:logs_updated, source_id, %{size: new_size, drop_count: new_drops}}
+      {:logs_updated, source_id,
+       %{size: new_source_state.size, drop_count: new_source_state.drop_count}}
     )
 
     {:noreply, %{state | sources: new_sources}}
   end
 
   @impl true
-  def handle_cast({:prepend_logs, source_id, lines}, state) do
-    sanitized_lines = sanitize_lines(lines)
-
-    source_state =
-      Map.get(state.sources, source_id, %{
-        queue: :queue.new(),
-        size: 0,
-        drop_count: 0,
-        next_seq: 0,
-        last_ts: nil,
-        first_ts: nil
-      })
+  def handle_cast({:prepend_prepared_logs, source_id, lines}, state) do
+    source_state = get_or_init_source(state.sources, source_id)
 
     existing_head_sample =
-      source_state.queue
-      |> :queue.to_list()
-      |> Enum.take(min(source_state.size, 100))
+      if source_state.size > 0 do
+        sample_end = min(source_state.max_seq, source_state.min_seq + 99)
 
-    deduped_backfill = strip_boundary_overlap(sanitized_lines, existing_head_sample)
+        read_ets_range(
+          state.table,
+          source_id,
+          source_state.min_seq,
+          sample_end,
+          source_state.size
+        )
+      else
+        []
+      end
+
+    deduped_backfill = strip_boundary_overlap(lines, existing_head_sample)
 
     available = max(0, state.capacity - source_state.size)
     backfill_count = length(deduped_backfill)
@@ -271,32 +319,69 @@ defmodule Caudata.LogStore do
           {deduped_backfill, source_state.drop_count}
       end
 
-    combined_lines = kept_backfill ++ :queue.to_list(source_state.queue)
-    new_queue = :queue.from_list(combined_lines)
-    new_size = length(combined_lines)
+    kept_count = length(kept_backfill)
 
-    new_first_ts =
-      case :queue.peek(new_queue) do
-        {:value, %{timestamp: ts}} when is_binary(ts) and ts != "" -> ts
-        _ -> Map.get(source_state, :first_ts, nil)
+    new_source_state =
+      if kept_count > 0 do
+        base_min = if source_state.size == 0, do: 0, else: source_state.min_seq
+        new_min_seq = base_min - kept_count
+        new_max_seq = if source_state.size == 0, do: -1, else: source_state.max_seq
+
+        entries =
+          kept_backfill
+          |> Enum.with_index(new_min_seq)
+          |> Enum.map(fn {entry, seq} -> {{{:entry, source_id}, seq}, entry} end)
+
+        :ets.insert(state.table, entries)
+
+        new_size = source_state.size + kept_count
+
+        new_first_ts =
+          case hd(kept_backfill) do
+            %{timestamp: ts} when is_binary(ts) and ts != "" -> ts
+            _ -> source_state.first_ts
+          end
+
+        new_last_ts =
+          if source_state.size == 0 do
+            last_non_empty_ts(kept_backfill, nil)
+          else
+            source_state.last_ts
+          end
+
+        new_tail_item =
+          if source_state.size == 0 do
+            List.last(kept_backfill)
+          else
+            source_state.tail_item
+          end
+
+        updated = %{
+          gen: source_state.gen,
+          min_seq: new_min_seq,
+          max_seq: new_max_seq,
+          size: new_size,
+          drop_count: new_drop_count,
+          first_ts: new_first_ts,
+          last_ts: new_last_ts,
+          tail_item: new_tail_item
+        }
+
+        write_ets_meta(state.table, source_id, updated)
+        updated
+      else
+        updated = %{source_state | drop_count: new_drop_count}
+        write_ets_meta(state.table, source_id, updated)
+        updated
       end
 
-    new_source_state = %{
-      queue: new_queue,
-      size: new_size,
-      drop_count: new_drop_count,
-      last_ts: Map.get(source_state, :last_ts, nil),
-      first_ts: new_first_ts
-    }
-
     new_sources = Map.put(state.sources, source_id, new_source_state)
-
-    write_ets_snapshots(state, source_id, combined_lines)
 
     Phoenix.PubSub.broadcast(
       Caudata.PubSub,
       "logs:#{source_id}",
-      {:logs_updated, source_id, %{size: new_size, drop_count: new_drop_count}}
+      {:logs_updated, source_id,
+       %{size: new_source_state.size, drop_count: new_source_state.drop_count}}
     )
 
     {:noreply, %{state | sources: new_sources}}
@@ -310,23 +395,19 @@ defmodule Caudata.LogStore do
 
   @impl true
   def handle_call(:get_table_name, _from, state) do
-    {:reply, Map.get(state, :table, state), state}
+    {:reply, state.table, state}
   end
 
   @impl true
   def handle_call({:get_snapshot, source_id, limit}, _from, state) do
-    case Map.get(state.sources, source_id) do
-      nil ->
-        {:reply, [], state}
+    {:ok, lines, _meta} = read_ets_window(state.table, source_id, limit)
+    {:reply, lines, state}
+  end
 
-      source_state ->
-        lines = :queue.to_list(source_state.queue)
-
-        sorted_lines = Enum.sort_by(lines, fn line -> Map.get(line, :timestamp) || "" end)
-        tail_lines = Enum.take(sorted_lines, -limit)
-
-        {:reply, tail_lines, state}
-    end
+  @impl true
+  def handle_call({:get_snapshot_window, source_id, limit}, _from, state) do
+    {:ok, lines, meta} = read_ets_window(state.table, source_id, limit)
+    {:reply, {lines, meta}, state}
   end
 
   @impl true
@@ -341,7 +422,7 @@ defmodule Caudata.LogStore do
             size: source_state.size,
             drop_count: source_state.drop_count,
             last_ts: source_state.last_ts,
-            first_ts: Map.get(source_state, :first_ts, nil)
+            first_ts: source_state.first_ts
           }
       end
 
@@ -355,32 +436,24 @@ defmodule Caudata.LogStore do
     new_sources =
       if effective_capacity < state.capacity do
         Map.new(state.sources, fn {source_id, source_state} ->
-          {trimmed_q, trimmed_size, trimmed_drops} =
-            trim_queue_to_capacity(
-              source_state.queue,
-              source_state.size,
-              source_state.drop_count,
-              effective_capacity
-            )
+          if source_state.size > effective_capacity do
+            excess = source_state.size - effective_capacity
+            new_min_seq = source_state.min_seq + excess
 
-          if trimmed_size != source_state.size do
-            snapshot_lines = :queue.to_list(trimmed_q)
-            write_ets_snapshots(state, source_id, snapshot_lines)
+            new_first_ts =
+              read_entry_ts(state.table, source_id, new_min_seq) || source_state.first_ts
 
-            first_ts =
-              case :queue.peek(trimmed_q) do
-                {:value, %{timestamp: ts}} when is_binary(ts) and ts != "" -> ts
-                _ -> nil
-              end
+            updated = %{
+              source_state
+              | min_seq: new_min_seq,
+                size: effective_capacity,
+                drop_count: source_state.drop_count + excess,
+                first_ts: new_first_ts
+            }
 
-            {source_id,
-             %{
-               source_state
-               | queue: trimmed_q,
-                 size: trimmed_size,
-                 drop_count: trimmed_drops,
-                 first_ts: first_ts
-             }}
+            write_ets_meta(state.table, source_id, updated)
+            delete_ets_range(state.table, source_id, source_state.min_seq, new_min_seq - 1)
+            {source_id, updated}
           else
             {source_id, source_state}
           end
@@ -398,13 +471,293 @@ defmodule Caudata.LogStore do
     {:reply, :ok, new_state}
   end
 
+  # Append & Eviction Helpers
+
+  defp get_or_init_source(sources, source_id) do
+    Map.get(sources, source_id, %{
+      gen: System.unique_integer([:monotonic, :positive]),
+      min_seq: 0,
+      max_seq: -1,
+      size: 0,
+      drop_count: 0,
+      last_ts: nil,
+      first_ts: nil,
+      tail_item: nil
+    })
+  end
+
+  defp dedup_leading_line(
+         %{timestamp: ts1, stream: st1, message: msg1},
+         [%{timestamp: ts2, stream: st2, message: msg2} | rest]
+       )
+       when not is_nil(ts1) and ts1 != "" and ts1 == ts2 and st1 == st2 and msg1 == msg2 do
+    rest
+  end
+
+  defp dedup_leading_line(_tail_item, lines), do: lines
+
+  defp check_batch_order(lines, last_ts) do
+    Enum.reduce(lines, {last_ts, true, nil}, fn line, {cur_last_ts, ordered?, min_ts} ->
+      line_ts = Map.get(line, :timestamp)
+      has_ts? = is_binary(line_ts) and line_ts != ""
+      effective_ts = if has_ts?, do: line_ts, else: cur_last_ts
+      sort_ts = effective_ts || ""
+
+      still_ordered? =
+        ordered? and
+          (cur_last_ts in [nil, ""] or sort_ts in ["", nil] or sort_ts >= cur_last_ts)
+
+      new_min_ts =
+        if has_ts? and (is_nil(min_ts) or line_ts < min_ts), do: line_ts, else: min_ts
+
+      {effective_ts, still_ordered?, new_min_ts}
+    end)
+  end
+
+  defp append_ordered_batch(tab, source_id, source_state, lines, final_last_ts, capacity) do
+    batch_len = length(lines)
+    old_size = source_state.size
+    excess = max(0, old_size + batch_len - capacity)
+    evict_old = min(old_size, excess)
+    drop_new = excess - evict_old
+
+    kept_lines = if drop_new > 0, do: Enum.drop(lines, drop_new), else: lines
+    kept_len = batch_len - drop_new
+
+    start_seq =
+      if old_size == 0 do
+        0
+      else
+        source_state.max_seq + 1
+      end
+
+    if kept_len > 0 do
+      entries =
+        kept_lines
+        |> Enum.with_index(start_seq)
+        |> Enum.map(fn {entry, seq} -> {{{:entry, source_id}, seq}, entry} end)
+
+      :ets.insert(tab, entries)
+    end
+
+    new_min_seq =
+      cond do
+        old_size == 0 -> 0
+        evict_old >= old_size -> start_seq
+        true -> source_state.min_seq + evict_old
+      end
+
+    new_max_seq = start_seq + kept_len - 1
+    new_size = old_size - evict_old + kept_len
+    new_drops = source_state.drop_count + excess
+
+    new_first_ts =
+      if new_size > 0 do
+        read_entry_ts(tab, source_id, new_min_seq) || source_state.first_ts
+      else
+        nil
+      end
+
+    new_tail_item = List.last(kept_lines) || source_state.tail_item
+
+    updated = %{
+      source_state
+      | min_seq: new_min_seq,
+        max_seq: new_max_seq,
+        size: new_size,
+        drop_count: new_drops,
+        first_ts: new_first_ts,
+        last_ts: final_last_ts,
+        tail_item: new_tail_item
+    }
+
+    # Write meta BEFORE deleting evicted entries so concurrent readers never observe
+    # min_seq pointing at already-deleted slots.
+    write_ets_meta(tab, source_id, updated)
+
+    if evict_old > 0 do
+      delete_ets_range(tab, source_id, source_state.min_seq, source_state.min_seq + evict_old - 1)
+    end
+
+    updated
+  end
+
+  defp append_out_of_order_batch(tab, source_id, source_state, lines, min_batch_ts, capacity) do
+    # Only scan back across the tail affected by the out-of-order timestamp
+    {anchor_seq, suffix_entries} =
+      if source_state.size == 0 do
+        {-1, []}
+      else
+        collect_affected_suffix(
+          tab,
+          source_id,
+          source_state.max_seq,
+          source_state.min_seq,
+          min_batch_ts,
+          []
+        )
+      end
+
+    sorted_suffix =
+      (suffix_entries ++ lines)
+      |> Enum.sort_by(fn line -> Map.get(line, :timestamp) || "" end)
+
+    prefix_count =
+      if source_state.size == 0, do: 0, else: max(0, anchor_seq - source_state.min_seq + 1)
+
+    total_size = prefix_count + length(sorted_suffix)
+    excess = max(0, total_size - capacity)
+
+    {new_min_seq, kept_suffix, evict_prefix_count} =
+      if excess > 0 do
+        evict_prefix = min(prefix_count, excess)
+        drop_from_suffix = excess - evict_prefix
+
+        kept_suf =
+          if drop_from_suffix > 0,
+            do: Enum.drop(sorted_suffix, drop_from_suffix),
+            else: sorted_suffix
+
+        new_min =
+          if evict_prefix < prefix_count do
+            source_state.min_seq + evict_prefix
+          else
+            anchor_seq + 1 + drop_from_suffix
+          end
+
+        {new_min, kept_suf, evict_prefix}
+      else
+        new_min = if source_state.size == 0, do: 0, else: source_state.min_seq
+        {new_min, sorted_suffix, 0}
+      end
+
+    write_start_seq =
+      cond do
+        source_state.size == 0 -> 0
+        evict_prefix_count >= prefix_count -> new_min_seq
+        true -> anchor_seq + 1
+      end
+
+    kept_len = length(kept_suffix)
+
+    if kept_len > 0 do
+      entries =
+        kept_suffix
+        |> Enum.with_index(write_start_seq)
+        |> Enum.map(fn {entry, seq} -> {{{:entry, source_id}, seq}, entry} end)
+
+      :ets.insert(tab, entries)
+    end
+
+    new_max_seq = write_start_seq + kept_len - 1
+    new_size = total_size - excess
+    new_drops = source_state.drop_count + excess
+
+    new_first_ts =
+      if new_size > 0 do
+        read_entry_ts(tab, source_id, new_min_seq) || source_state.first_ts
+      else
+        nil
+      end
+
+    new_last_ts = last_non_empty_ts(kept_suffix, source_state.last_ts)
+    new_tail_item = List.last(kept_suffix) || source_state.tail_item
+
+    new_gen =
+      if source_state.size > 0 and anchor_seq < source_state.max_seq do
+        System.unique_integer([:monotonic, :positive])
+      else
+        source_state.gen
+      end
+
+    updated = %{
+      source_state
+      | gen: new_gen,
+        min_seq: new_min_seq,
+        max_seq: new_max_seq,
+        size: new_size,
+        drop_count: new_drops,
+        first_ts: new_first_ts,
+        last_ts: new_last_ts,
+        tail_item: new_tail_item
+    }
+
+    write_ets_meta(tab, source_id, updated)
+
+    if excess > 0 and source_state.size > 0 do
+      delete_end = min(source_state.max_seq, new_min_seq - 1)
+
+      if delete_end >= source_state.min_seq do
+        delete_ets_range(tab, source_id, source_state.min_seq, delete_end)
+      end
+    end
+
+    updated
+  end
+
+  defp collect_affected_suffix(_tab, _source_id, seq, min_seq, _min_ts, acc) when seq < min_seq do
+    {min_seq - 1, acc}
+  end
+
+  defp collect_affected_suffix(tab, source_id, seq, min_seq, min_ts, acc) do
+    case :ets.lookup(tab, {{:entry, source_id}, seq}) do
+      [{_, entry}] ->
+        entry_ts = Map.get(entry, :timestamp)
+
+        if is_binary(min_ts) and is_binary(entry_ts) and entry_ts != "" and entry_ts <= min_ts do
+          {seq, acc}
+        else
+          collect_affected_suffix(tab, source_id, seq - 1, min_seq, min_ts, [entry | acc])
+        end
+
+      [] ->
+        collect_affected_suffix(tab, source_id, seq - 1, min_seq, min_ts, acc)
+    end
+  end
+
+  defp write_ets_meta(tab, source_id, source_state) do
+    meta = %{
+      gen: source_state.gen,
+      min_seq: source_state.min_seq,
+      max_seq: source_state.max_seq,
+      size: source_state.size,
+      drop_count: source_state.drop_count
+    }
+
+    :ets.insert(tab, {{:meta, source_id}, meta})
+  end
+
+  defp read_entry_ts(tab, source_id, seq) do
+    case :ets.lookup(tab, {{:entry, source_id}, seq}) do
+      [{_, %{timestamp: ts}}] when is_binary(ts) and ts != "" -> ts
+      _ -> nil
+    end
+  end
+
+  defp delete_ets_range(_tab, _source_id, from_seq, to_seq) when from_seq > to_seq, do: :ok
+
+  defp delete_ets_range(tab, source_id, from_seq, to_seq) do
+    Enum.each(from_seq..to_seq, fn seq ->
+      :ets.delete(tab, {{:entry, source_id}, seq})
+    end)
+  end
+
+  defp last_non_empty_ts(lines, fallback) do
+    lines
+    |> Enum.reverse()
+    |> Enum.find_value(fallback, fn
+      %{timestamp: ts} when is_binary(ts) and ts != "" -> ts
+      _ -> nil
+    end)
+  end
+
   defp do_delete_stream(state, source_id) do
     new_sources = Map.delete(state.sources, source_id)
 
     if Map.has_key?(state, :table) do
-      :ets.delete(state.table, {:snapshot, source_id})
-      :ets.delete(state.table, {:snapshot_medium, source_id})
-      :ets.delete(state.table, {:snapshot_tail, source_id})
+      # Delete meta first so concurrent readers see an empty stream immediately
+      :ets.delete(state.table, {:meta, source_id})
+      :ets.match_delete(state.table, {{{:entry, source_id}, :_}, :_})
     end
 
     Phoenix.PubSub.broadcast(
@@ -431,31 +784,6 @@ defmodule Caudata.LogStore do
     end)
   end
 
-  defp trim_queue_to_capacity(q, sz, dr, capacity) when sz > capacity do
-    case :queue.out(q) do
-      {{:value, _}, remaining_q} ->
-        trim_queue_to_capacity(remaining_q, sz - 1, dr + 1, capacity)
-
-      {:empty, empty_q} ->
-        {empty_q, 0, dr}
-    end
-  end
-
-  defp trim_queue_to_capacity(q, sz, dr, _capacity), do: {q, sz, dr}
-
-  defp write_ets_snapshots(state, source_id, snapshot_lines) do
-    if Map.has_key?(state, :table) do
-      tail_lines = Enum.take(snapshot_lines, -500)
-      medium_lines = Enum.take(snapshot_lines, -1500)
-
-      :ets.insert(state.table, [
-        {{:snapshot, source_id}, snapshot_lines},
-        {{:snapshot_medium, source_id}, medium_lines},
-        {{:snapshot_tail, source_id}, tail_lines}
-      ])
-    end
-  end
-
   defp parse_docker_log(line) do
     Caudata.Native.parse_docker_log(line)
   end
@@ -464,8 +792,6 @@ defmodule Caudata.LogStore do
   defp strip_boundary_overlap(backfill, []), do: backfill
 
   defp strip_boundary_overlap(backfill, existing_head) do
-    # Optimization: existing_head is at most 100 items. Slicing backfill once
-    # prevents repeatedly scanning large backfill lists (up to 9,000 items) on every k step.
     sample_size = min(100, length(existing_head))
     backfill_tail_sample = Enum.take(backfill, -sample_size)
     max_k = min(length(backfill_tail_sample), length(existing_head))

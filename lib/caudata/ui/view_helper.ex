@@ -272,14 +272,22 @@ defmodule Caudata.UI.ViewHelper do
   Returns the logs list, optionally filtered by regex, or a fallback message if empty.
   """
   def get_displayed_logs(model) do
-    logs_len = if is_list(model.logs), do: length(model.logs), else: 0
+    {logs_len, hd_log} =
+      case {Map.get(model, :logs_first_seq), Map.get(model, :logs_last_seq), model.logs} do
+        {first_seq, last_seq, _} when is_integer(first_seq) and is_integer(last_seq) ->
+          {max(0, last_seq - first_seq + 1), {first_seq, last_seq}}
 
-    hd_log =
-      case model.logs do
-        [%{seq: seq} | _] -> seq
-        [first | _] when is_map(first) -> Map.get(first, :timestamp) || Map.get(first, :message)
-        [first | _] -> first
-        _ -> nil
+        {_, _, [%{seq: seq} | _]} ->
+          {length(model.logs), seq}
+
+        {_, _, [first | _]} when is_map(first) ->
+          {length(model.logs), Map.get(first, :timestamp) || Map.get(first, :message)}
+
+        {_, _, [first | _]} ->
+          {length(model.logs), first}
+
+        _ ->
+          {if(is_list(model.logs), do: length(model.logs), else: 0), nil}
       end
 
     cache_key =
@@ -422,31 +430,248 @@ defmodule Caudata.UI.ViewHelper do
   def status_color(:disabled), do: :dark_gray
   def status_color(_), do: :white
 
+  @wrap_chunk_size 256
+
+  @doc """
+  Builds the wrap chunk cache tag for the current UI state, or `nil` if sequence
+  bounds are unavailable.
+  """
+  def wrap_cache_tag(state) do
+    case {Map.get(state, :logs_first_seq), Map.get(state, :logs_last_seq)} do
+      {first_seq, last_seq} when is_integer(first_seq) and is_integer(last_seq) ->
+        source_scope = {
+          Map.get(state, :selected_profile_id),
+          Map.get(state, :selected_container_id),
+          Map.get(state, :logs_stream_gen)
+        }
+
+        {first_seq, last_seq, Map.get(state, :filter_regex, ""),
+         Map.get(state, :log_level_filter, :all), source_scope}
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc """
+  Computes the maximum vertical scroll offset for `displayed_logs` within `state`.
+  """
+  def get_max_scroll(state, displayed_logs) do
+    inner_width = get_logs_inner_width(state)
+    logs_height = get_logs_pane_height(state)
+
+    wrapped_lines_count =
+      count_wrapped_lines(displayed_logs, inner_width, nil, wrap_cache_tag(state))
+
+    max(0, wrapped_lines_count - logs_height)
+  end
+
+  @doc """
+  Finds `{raw_index, line_offset}` corresponding to `target_line` in `lines`,
+  skipping cached 256-line chunks when `cache_tag` describes a contiguous seq window.
+  """
+  def find_wrapped_line_offset(lines, target_line, width, lines_len \\ nil, cache_tag \\ nil)
+  def find_wrapped_line_offset([], _target_line, _width, _lines_len, _cache_tag), do: {0, 0}
+
+  def find_wrapped_line_offset(_lines, target_line, _width, _lines_len, _cache_tag)
+      when target_line <= 0 do
+    {0, 0}
+  end
+
+  def find_wrapped_line_offset(lines, target_line, width, lines_len, cache_tag) do
+    w = max(1, width)
+    len = lines_len || if is_list(lines), do: length(lines), else: 0
+
+    case chunked_seq_bounds(cache_tag, len) do
+      {first_seq, last_seq, scope} ->
+        find_offset_chunked(lines, 0, 0, first_seq, last_seq, scope, target_line, w)
+
+      :none ->
+        find_offset_linear(lines, 0, 0, target_line, w)
+    end
+  end
+
   @doc """
   Counts the total number of lines when wrapping lines of a given width.
   """
-  def count_wrapped_lines(lines, width, lines_len \\ nil)
-  def count_wrapped_lines([], _width, _lines_len), do: 0
+  def count_wrapped_lines(lines, width, lines_len \\ nil, cache_tag \\ nil)
+  def count_wrapped_lines([], _width, _lines_len, _cache_tag), do: 0
 
-  def count_wrapped_lines(lines, width, lines_len) do
+  def count_wrapped_lines(lines, width, lines_len, cache_tag) do
     w = max(1, width)
     len = lines_len || if is_list(lines), do: length(lines), else: 0
 
     hd_line =
-      case lines do
-        [%{seq: seq} | _] -> seq
-        [%{message: msg} | _] -> msg
-        [first | _] -> first
-        _ -> nil
+      if cache_tag != nil do
+        cache_tag
+      else
+        case lines do
+          [%{seq: seq} | _] -> seq
+          [%{message: msg} | _] -> msg
+          [first | _] -> first
+          _ -> nil
+        end
       end
 
     cache_key = {:cached_wrapped_lines_count, len, hd_line, w}
 
     Cache.fetch_latest(:cached_wrapped_lines_count, cache_key, fn ->
-      Enum.reduce(lines, 0, fn line, acc ->
-        acc + visual_line_count(line, w)
-      end)
+      case chunked_seq_bounds(cache_tag, len) do
+        {first_seq, last_seq, scope} ->
+          sum_wrapped_chunked(lines, first_seq, last_seq, scope, w, 0)
+
+        :none ->
+          Enum.reduce(lines, 0, fn line, acc ->
+            acc + visual_line_count(line, w)
+          end)
+      end
     end)
+  end
+
+  defp chunked_seq_bounds({first_seq, last_seq, "", :all, scope}, len)
+       when is_integer(first_seq) and is_integer(last_seq) and len >= @wrap_chunk_size do
+    if last_seq - first_seq + 1 == len do
+      {first_seq, last_seq, scope}
+    else
+      :none
+    end
+  end
+
+  defp chunked_seq_bounds(_tag, _len), do: :none
+
+  defp sum_wrapped_chunked([], _cur_seq, _last_seq, _scope, _w, acc), do: acc
+
+  defp sum_wrapped_chunked([line | rest] = list, cur_seq, last_seq, scope, w, acc) do
+    if Integer.mod(cur_seq, @wrap_chunk_size) == 0 and
+         cur_seq + @wrap_chunk_size - 1 <= last_seq do
+      block_id = Integer.floor_div(cur_seq, @wrap_chunk_size)
+      chunk_key = {scope, block_id, w}
+      {chunk_sum, after_chunk} = fetch_or_compute_wrap_chunk(list, chunk_key, w)
+
+      sum_wrapped_chunked(
+        after_chunk,
+        cur_seq + @wrap_chunk_size,
+        last_seq,
+        scope,
+        w,
+        acc + chunk_sum
+      )
+    else
+      sum_wrapped_chunked(
+        rest,
+        cur_seq + 1,
+        last_seq,
+        scope,
+        w,
+        acc + visual_line_count(line, w)
+      )
+    end
+  end
+
+  defp fetch_or_compute_wrap_chunk(list, chunk_key, w) do
+    {curr_gen, old_gen} = Process.get(:wrap_chunk_cache, {%{}, %{}})
+
+    case Map.fetch(curr_gen, chunk_key) do
+      {:ok, chunk_sum} ->
+        {chunk_sum, drop_chunk(list, @wrap_chunk_size)}
+
+      :error ->
+        case Map.fetch(old_gen, chunk_key) do
+          {:ok, chunk_sum} ->
+            Process.put(:wrap_chunk_cache, {Map.put(curr_gen, chunk_key, chunk_sum), old_gen})
+            {chunk_sum, drop_chunk(list, @wrap_chunk_size)}
+
+          :error ->
+            {chunk_sum, after_chunk} = take_and_sum_chunk(list, @wrap_chunk_size, w, 0)
+
+            next_cache =
+              if map_size(curr_gen) >= 512 do
+                {Map.put(%{}, chunk_key, chunk_sum), curr_gen}
+              else
+                {Map.put(curr_gen, chunk_key, chunk_sum), old_gen}
+              end
+
+            Process.put(:wrap_chunk_cache, next_cache)
+            {chunk_sum, after_chunk}
+        end
+    end
+  end
+
+  defp take_and_sum_chunk(rest, 0, _w, acc), do: {acc, rest}
+  defp take_and_sum_chunk([], _n, _w, acc), do: {acc, []}
+
+  defp take_and_sum_chunk([line | rest], n, w, acc) do
+    take_and_sum_chunk(rest, n - 1, w, acc + visual_line_count(line, w))
+  end
+
+  defp drop_chunk(rest, 0), do: rest
+  defp drop_chunk([], _n), do: []
+  defp drop_chunk([_ | rest], n), do: drop_chunk(rest, n - 1)
+
+  defp find_offset_chunked([], idx, _accum, _cur_seq, _last_seq, _scope, _target_line, _w) do
+    {max(0, idx - 1), 0}
+  end
+
+  defp find_offset_chunked(
+         [line | rest] = list,
+         idx,
+         accum,
+         cur_seq,
+         last_seq,
+         scope,
+         target_line,
+         w
+       ) do
+    if Integer.mod(cur_seq, @wrap_chunk_size) == 0 and
+         cur_seq + @wrap_chunk_size - 1 <= last_seq do
+      block_id = Integer.floor_div(cur_seq, @wrap_chunk_size)
+      chunk_key = {scope, block_id, w}
+      {chunk_sum, after_chunk} = fetch_or_compute_wrap_chunk(list, chunk_key, w)
+
+      if accum + chunk_sum > target_line do
+        find_offset_linear(list, idx, accum, target_line, w)
+      else
+        find_offset_chunked(
+          after_chunk,
+          idx + @wrap_chunk_size,
+          accum + chunk_sum,
+          cur_seq + @wrap_chunk_size,
+          last_seq,
+          scope,
+          target_line,
+          w
+        )
+      end
+    else
+      item_lines = visual_line_count(line, w)
+
+      if accum + item_lines > target_line do
+        {idx, max(0, target_line - accum)}
+      else
+        find_offset_chunked(
+          rest,
+          idx + 1,
+          accum + item_lines,
+          cur_seq + 1,
+          last_seq,
+          scope,
+          target_line,
+          w
+        )
+      end
+    end
+  end
+
+  defp find_offset_linear([], idx, _accum, _target_line, _w), do: {max(0, idx - 1), 0}
+
+  defp find_offset_linear([line | rest], idx, accum, target_line, w) do
+    item_lines = visual_line_count(line, w)
+
+    if accum + item_lines > target_line do
+      {idx, max(0, target_line - accum)}
+    else
+      find_offset_linear(rest, idx + 1, accum + item_lines, target_line, w)
+    end
   end
 
   @doc """
@@ -758,11 +983,11 @@ defmodule Caudata.UI.ViewHelper do
         pred.(is_err, sev)
 
       %{message: msg} ->
-        {_spans, is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(msg)
+        {is_err, sev} = Caudata.UI.LogFormatter.line_severity_meta(msg)
         pred.(is_err, sev)
 
       line when is_binary(line) ->
-        {_spans, is_err, sev} = Caudata.UI.LogFormatter.format_line_with_meta(line)
+        {is_err, sev} = Caudata.UI.LogFormatter.line_severity_meta(line)
         pred.(is_err, sev)
 
       _ ->

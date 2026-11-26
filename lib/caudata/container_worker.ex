@@ -171,7 +171,7 @@ defmodule Caudata.ContainerWorker do
           ((is_pid(state.pool) and Process.alive?(state.pool)) or state.conn_ref == conn_ref)
 
       if already_streaming? do
-        {:reply, :ok, state}
+        {:reply, :ok, %{state | channel_opened_at: System.monotonic_time()}}
       else
         state = close_log_channel(state)
         state = %{state | should_stream: true}
@@ -413,12 +413,20 @@ defmodule Caudata.ContainerWorker do
 
   @impl true
   def handle_info({:EXIT, from, reason}, state) do
-    if from == state.backfill_channel do
-      Logger.warning("Backfill channel process exited: #{inspect(reason)}")
-      state = cancel_backfill(state)
-      {:noreply, state}
-    else
-      {:stop, reason, state}
+    cond do
+      from == state.backfill_channel ->
+        Logger.warning("Backfill channel process exited: #{inspect(reason)}")
+        state = cancel_backfill(state)
+        {:noreply, state}
+
+      from == state.stream_channel ->
+        Logger.warning("Stream channel process exited unexpectedly: #{inspect(reason)}")
+
+        {:noreply,
+         handle_disconnect(%{state | stream_channel: nil}, "Channel exited: #{inspect(reason)}")}
+
+      true ->
+        {:stop, reason, state}
     end
   end
 
@@ -667,7 +675,7 @@ defmodule Caudata.ContainerWorker do
   # Flush logs helper that writes all pending logs to LogStore
   defp flush_pending_logs(state) do
     if state.pending_logs != [] do
-      logs_to_send = Enum.reverse(state.pending_logs)
+      logs_to_send = state.pending_logs |> Enum.reverse() |> prepare_log_entries()
 
       state =
         if state.reconnecting_stream do
@@ -686,7 +694,7 @@ defmodule Caudata.ContainerWorker do
           state
         end
 
-      LogStore.append_logs(state.source_id, logs_to_send)
+      LogStore.append_prepared_logs(state.source_id, logs_to_send)
       state = %{state | pending_logs: []}
 
       maybe_trigger_backfill(state, logs_to_send)
@@ -761,12 +769,27 @@ defmodule Caudata.ContainerWorker do
     end
 
     if state.backfill_status != :failed and state.backfill_logs != [] do
-      ordered_logs = Enum.reverse(state.backfill_logs)
-      Caudata.LogStore.prepend_logs(state.source_id, ordered_logs)
+      ordered_logs = state.backfill_logs |> Enum.reverse() |> prepare_log_entries()
+      Caudata.LogStore.prepend_prepared_logs(state.source_id, ordered_logs)
     end
 
     final_status = if state.backfill_status == :failed, do: :failed, else: :done
     %{state | backfill_channel: nil, backfill_logs: [], backfill_status: final_status}
+  end
+
+  defp prepare_log_entries(lines) do
+    Enum.map(lines, fn
+      %{timestamp: ts, stream: stream, message: msg} ->
+        %{timestamp: ts, stream: stream, message: Caudata.LogSanitizer.sanitize(msg)}
+
+      {stream, line} when is_binary(line) ->
+        {ts, msg} = Caudata.Native.parse_docker_log(line)
+        %{timestamp: ts, stream: stream, message: Caudata.LogSanitizer.sanitize(msg)}
+
+      line when is_binary(line) ->
+        {ts, msg} = Caudata.Native.parse_docker_log(line)
+        %{timestamp: ts, stream: :stdout, message: Caudata.LogSanitizer.sanitize(msg)}
+    end)
   end
 
   defp cancel_backfill(state) do

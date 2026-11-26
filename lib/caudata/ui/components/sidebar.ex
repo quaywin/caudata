@@ -262,20 +262,23 @@ defmodule Caudata.UI.Components.Sidebar do
             %{size: 0, drop_count: 0}
           end
 
-        {%{
-           model
-           | selected_profile_id: server_id,
-             selected_container_id: nil,
-             selected_container_name: nil,
-             logs: [],
-             logs_scroll_y: :bottom,
-             logs_fetch_limit: 100,
-             loading_history: false,
-             loading_history_ticks: 0,
-             logs_len_before_history_load: 0,
-             buffer_sizes: Map.put(model.buffer_sizes, source_id, stats.size),
-             drop_counts: Map.put(model.drop_counts, source_id, stats.drop_count)
-         }, []}
+        {Map.merge(model, %{
+           selected_profile_id: server_id,
+           selected_container_id: nil,
+           selected_container_name: nil,
+           logs: [],
+           logs_first_seq: nil,
+           logs_last_seq: nil,
+           logs_stream_gen: nil,
+           logs_count: 0,
+           logs_scroll_y: :bottom,
+           logs_fetch_limit: 100,
+           loading_history: false,
+           loading_history_ticks: 0,
+           logs_len_before_history_load: 0,
+           buffer_sizes: Map.put(model.buffer_sizes, source_id, stats.size),
+           drop_counts: Map.put(model.drop_counts, source_id, stats.drop_count)
+         }), []}
     end
   end
 
@@ -353,29 +356,41 @@ defmodule Caudata.UI.Components.Sidebar do
     end
 
     source_id = "#{server_id}/#{container_id}"
-    logs = Caudata.LogStore.get_snapshot(Caudata.LogStore, source_id, 1000)
 
-    stats =
+    {logs, win_meta} =
       if Process.whereis(Caudata.LogStore) do
-        Caudata.LogStore.get_stats(source_id)
+        Caudata.LogStore.get_snapshot_window(Caudata.LogStore, source_id, 1000)
       else
-        %{size: 0, drop_count: 0}
+        {[], %{first_seq: nil, last_seq: nil, gen: nil, size: 0, drop_count: 0}}
       end
 
-    {%{
-       model
-       | selected_profile_id: server_id,
-         selected_container_id: container_id,
-         selected_container_name: container_name,
-         logs: logs,
-         logs_scroll_y: :bottom,
-         logs_fetch_limit: 1000,
-         loading_history: false,
-         loading_history_ticks: 0,
-         logs_len_before_history_load: 0,
-         buffer_sizes: Map.put(model.buffer_sizes, source_id, stats.size),
-         drop_counts: Map.put(model.drop_counts, source_id, stats.drop_count)
-     }, []}
+    logs_count =
+      case {win_meta.first_seq, win_meta.last_seq} do
+        {first_seq, last_seq}
+        when is_integer(first_seq) and is_integer(last_seq) and last_seq >= first_seq ->
+          last_seq - first_seq + 1
+
+        _ ->
+          0
+      end
+
+    {Map.merge(model, %{
+       selected_profile_id: server_id,
+       selected_container_id: container_id,
+       selected_container_name: container_name,
+       logs: logs,
+       logs_first_seq: win_meta.first_seq,
+       logs_last_seq: win_meta.last_seq,
+       logs_stream_gen: win_meta.gen,
+       logs_count: logs_count,
+       logs_scroll_y: :bottom,
+       logs_fetch_limit: 1000,
+       loading_history: false,
+       loading_history_ticks: 0,
+       logs_len_before_history_load: 0,
+       buffer_sizes: Map.put(model.buffer_sizes, source_id, win_meta.size),
+       drop_counts: Map.put(model.drop_counts, source_id, win_meta.drop_count)
+     }), []}
   end
 
   # Helper functions

@@ -34,36 +34,13 @@ defmodule Caudata.CLITest do
 
     test "print_help outputs help instructions" do
       io = capture_io(fn -> CLI.print_help() end)
-      assert io =~ "Caudata - A collaborative, zero-config"
+      assert io =~ "Caudata - A zero-config"
       assert io =~ "Usage:"
       assert io =~ "upgrade"
     end
 
     test "handle_args returns :continue for empty args list" do
       assert CLI.handle_args([]) == :continue
-    end
-
-    test "handle_args parses web options correctly" do
-      assert CLI.handle_args(["web"]) == {:web, 4000}
-      assert CLI.handle_args(["web", "--port", "8080"]) == {:web, 8080}
-      assert CLI.handle_args(["web", "-p", "9000"]) == {:web, 9000}
-
-      System.put_env("PORT", "5000")
-
-      try do
-        assert CLI.handle_args(["web"]) == {:web, 5000}
-      after
-        System.delete_env("PORT")
-      end
-    end
-
-    test "handle_args sets TAILSCALE_WEB_PORT when --tailscale is used with env TAILSCALE_AUTHKEY" do
-      try do
-        assert CLI.handle_args(["web", "--tailscale", "--tailscale_port", "8443"]) == {:web, 4000}
-        assert System.get_env("TAILSCALE_WEB_PORT") == "8443"
-      after
-        System.delete_env("TAILSCALE_WEB_PORT")
-      end
     end
   end
 end

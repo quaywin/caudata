@@ -12,13 +12,12 @@ defmodule Caudata.MixProject do
       elixir: "~> 1.18 or ~> 1.19",
       start_permanent: Mix.env() == :prod,
       description:
-        "A collaborative, zero-config multi-server log streamer built with Elixir/OTP, Ratatui (TUI), and Phoenix LiveView.",
+        "A zero-config multi-server log streamer built with Elixir/OTP and Ratatui (TUI).",
       package: package(),
       homepage_url: "https://github.com/quaywin/caudata",
       source_url: "https://github.com/quaywin/caudata",
       deps: deps(),
-      releases: releases(),
-      listeners: [Phoenix.CodeReloader]
+      releases: releases()
     ]
   end
 
@@ -92,8 +91,7 @@ defmodule Caudata.MixProject do
         exclude_apps: [:wx, :observer, :debugger, :et, :reltool, :megaco, :eunit, :sasl, :mnesia],
         steps: [:assemble, &verify_burrito_nif/1, &Burrito.wrap/1],
         burrito: [
-          targets: targets,
-          plugin: "rel/burrito_plugin.zig"
+          targets: targets
         ]
       ]
     ]
@@ -181,19 +179,10 @@ defmodule Caudata.MixProject do
     [
       {:burrito, "~> 1.0"},
       {:ex_ratatui, "~> 0.16"},
-      {:phoenix_ex_ratatui, "~> 0.3"},
-      {:phoenix, "~> 1.7"},
-      {:phoenix_live_view, "~> 0.20 or ~> 1.0"},
       {:phoenix_pubsub, "~> 2.1"},
-      {:bandit, "~> 1.5"},
       {:jason, "~> 1.4"},
-      {:telemetry_metrics, "~> 1.0"},
-      {:telemetry_poller, "~> 1.1"},
-      {:phoenix_live_reload, "~> 1.5", only: :dev},
       {:mox, "~> 1.1", only: :test},
       {:stream_data, "~> 1.1", only: :test},
-      {:floki, ">= 0.30.0", only: :test},
-      {:lazy_html, ">= 0.1.0", only: :test},
       {:benchee, "~> 1.3", only: [:dev, :test]},
       {:ex_log_formatter, git: "https://github.com/quaywin/ex_log_formatter.git", branch: "main"}
     ]

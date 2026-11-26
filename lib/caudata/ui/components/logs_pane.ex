@@ -137,7 +137,10 @@ defmodule Caudata.UI.Components.LogsPane do
     wrap_width = max(1, inner_width - prefix_width)
     show_timestamps = Map.get(state, :show_timestamps, false)
 
-    total_wrapped_lines = ViewHelper.count_wrapped_lines(displayed_logs, wrap_width, total_count)
+    wrap_cache_tag = ViewHelper.wrap_cache_tag(state)
+
+    total_wrapped_lines =
+      ViewHelper.count_wrapped_lines(displayed_logs, wrap_width, total_count, wrap_cache_tag)
 
     # Calculate Virtual Windowing slice parameters using exact wrapped line mapping
     visible_buffer = 10
@@ -158,7 +161,9 @@ defmodule Caudata.UI.Components.LogsPane do
             target_line,
             wrap_width,
             viewport_height,
-            visible_buffer
+            visible_buffer,
+            total_count,
+            wrap_cache_tag
           )
       end
 
@@ -371,30 +376,18 @@ defmodule Caudata.UI.Components.LogsPane do
          target_line,
          wrap_width,
          viewport_height,
-         visible_buffer
+         visible_buffer,
+         total_count,
+         wrap_cache_tag
        ) do
-    total_count = length(displayed_logs)
-
     {start_idx, line_offset} =
-      if target_line <= 0 do
-        {0, 0}
-      else
-        displayed_logs
-        |> Enum.reduce_while({0, 0}, fn item, {idx, accum_lines} ->
-          item_lines = ViewHelper.visual_line_count(item, wrap_width)
-
-          if accum_lines + item_lines > target_line do
-            offset = max(0, target_line - accum_lines)
-            {:halt, {idx, offset}}
-          else
-            {:cont, {idx + 1, accum_lines + item_lines}}
-          end
-        end)
-        |> case do
-          {:cont, {final_idx, _}} -> {max(0, final_idx - 1), 0}
-          res -> res
-        end
-      end
+      ViewHelper.find_wrapped_line_offset(
+        displayed_logs,
+        target_line,
+        wrap_width,
+        total_count,
+        wrap_cache_tag
+      )
 
     start_idx = min(start_idx, max(0, total_count - 1))
     take_count = viewport_height + visible_buffer

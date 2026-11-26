@@ -364,4 +364,46 @@ defmodule Caudata.SSH.ConnectionPoolTest do
 
     GenServer.stop(pool)
   end
+
+  test "set_primary_conn places new primary at head without reversing existing connections", %{
+    profile: profile
+  } do
+    counter = :counters.new(1, [])
+
+    Mock
+    |> expect(:connect, 2, fn _, _, _ ->
+      :counters.add(counter, 1, 1)
+      n = :counters.get(counter, 1)
+      {:ok, :"sec_#{n}"}
+    end)
+    |> expect(:open_channel, 2, fn
+      :sec_1 -> {:ok, :ch_1}
+      :sec_2 -> {:ok, :ch_2}
+    end)
+    |> expect(:close_channel, 2, fn _, _ -> :ok end)
+    |> expect(:close, 3, fn _ -> :ok end)
+
+    {:ok, pool} =
+      ConnectionPool.start_link(
+        profile: profile,
+        ssh_client: Mock,
+        max_channels_per_conn: 1
+      )
+
+    {:ok, :sec_1, :ch_1} = ConnectionPool.acquire_channel(pool)
+    {:ok, :sec_2, :ch_2} = ConnectionPool.acquire_channel(pool)
+
+    # Now set a new primary conn while sec_1 and sec_2 exist in order [sec_1, sec_2]
+    assert :ok = ConnectionPool.set_primary_conn(pool, :new_primary)
+
+    status = ConnectionPool.get_status(pool)
+
+    assert Enum.map(status.connections, &{&1.conn_ref, &1.is_primary}) == [
+             {:new_primary, true},
+             {:sec_1, false},
+             {:sec_2, false}
+           ]
+
+    GenServer.stop(pool)
+  end
 end

@@ -550,6 +550,86 @@ defmodule Caudata.ServerWorkerTest do
     stop_supervised(ServerWorker)
   end
 
+  test "enforces default max_active_streams LRU eviction even when ConnectionPool is enabled" do
+    profile =
+      Profile.new(%{
+        host_pattern: "pool-lru-server",
+        host_name: "10.0.0.19",
+        user: "root",
+        port: 22
+      })
+
+    test_pid = self()
+
+    Mock
+    |> expect(:connect, 1, fn "10.0.0.19", 22, _ -> {:ok, :control_conn} end)
+    |> expect(:open_channel, fn :control_conn ->
+      send(test_pid, :opened_list_channel)
+      {:ok, :list_chan}
+    end)
+    |> expect(:exec, fn :control_conn, :list_chan, _cmd -> :ok end)
+
+    Enum.each(1..6, fn i ->
+      ch_id = :"pool_log_chan_#{i}"
+
+      Mock
+      |> expect(:open_channel, fn :control_conn -> {:ok, ch_id} end)
+      |> expect(:exec, fn :control_conn, ^ch_id, _cmd -> :ok end)
+    end)
+
+    Mock
+    |> expect(:close_channel, fn :control_conn, :pool_log_chan_2 ->
+      send(test_pid, :closed_lru_container_2)
+      :ok
+    end)
+    |> stub(:close_channel, fn _conn, _chan -> :ok end)
+    |> stub(:close, fn _conn -> :ok end)
+
+    {:ok, worker_pid} =
+      start_supervised(
+        {ServerWorker, {profile, ssh_client: Mock, use_pool: true, max_channels_per_conn: 8}}
+      )
+
+    assert_receive :opened_list_channel, 1000
+
+    containers_json =
+      1..6
+      |> Enum.map(fn i ->
+        "{\"ID\":\"container#{i}\",\"Names\":\"pool-c-#{i}\",\"Image\":\"nginx\",\"Status\":\"Up\"}"
+      end)
+      |> Enum.join("\n")
+      |> Kernel.<>("\n")
+
+    send(worker_pid, {:ssh_cm, :control_conn, {:data, :list_chan, 0, containers_json}})
+    send(worker_pid, {:ssh_cm, :control_conn, {:closed, :list_chan}})
+    Process.sleep(100)
+
+    Enum.each(1..5, fn i ->
+      assert :ok = GenServer.call(worker_pid, {:stream_container_logs, "container#{i}"})
+      Process.sleep(10)
+    end)
+
+    # Touch container1 so container2 becomes the least-recently-used stream
+    assert :ok = GenServer.call(worker_pid, {:stream_container_logs, "container1"})
+    Process.sleep(10)
+
+    # Streaming container6 should evict container2 (LRU), not container1
+    assert :ok = GenServer.call(worker_pid, {:stream_container_logs, "container6"})
+
+    assert_receive :closed_lru_container_2, 1000
+
+    {:ok, pid1} =
+      Caudata.ServerSupervisor.lookup_container_worker("pool-lru-server", "container1")
+
+    {:ok, pid2} =
+      Caudata.ServerSupervisor.lookup_container_worker("pool-lru-server", "container2")
+
+    assert %{streaming?: true} = Caudata.ContainerWorker.get_streaming_status(pid1)
+    assert %{streaming?: false} = Caudata.ContainerWorker.get_streaming_status(pid2)
+
+    stop_supervised(ServerWorker)
+  end
+
   test "auto-reconnects logs stream when container is rebuilt (docker events)" do
     profile =
       Profile.new(%{

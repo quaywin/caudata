@@ -396,10 +396,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
   # ── Helpers ─────────────────────────────────────────────────────────
 
   defp get_max_scroll(model, displayed_logs) do
-    inner_width = ViewHelper.get_logs_inner_width(model)
-    logs_height = ViewHelper.get_logs_pane_height(model)
-    wrapped_lines_count = ViewHelper.count_wrapped_lines(displayed_logs, inner_width)
-    max(0, wrapped_lines_count - logs_height)
+    ViewHelper.get_max_scroll(model, displayed_logs)
   end
 
   defp maybe_trigger_history_fetch(model, return_model, current_scroll, max_scroll, fallback_fn) do
@@ -422,19 +419,7 @@ defmodule Caudata.UI.Components.LogsPane.EventHandler do
   end
 
   def get_raw_index_at_scroll(displayed_logs, scroll_y, inner_width) do
-    displayed_logs
-    |> Enum.reduce_while({0, 0}, fn line, {acc, idx} ->
-      line_len = ViewHelper.visual_line_count(line, inner_width)
-
-      if acc + line_len > scroll_y do
-        {:halt, idx}
-      else
-        {:cont, {acc + line_len, idx + 1}}
-      end
-    end)
-    |> case do
-      {_acc, last_idx} -> max(0, last_idx - 1)
-      idx -> idx
-    end
+    {idx, _offset} = ViewHelper.find_wrapped_line_offset(displayed_logs, scroll_y, inner_width)
+    idx
   end
 end
